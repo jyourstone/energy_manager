@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 2 planned — ready for execution
+**Current focus:** Phase 2 in progress — battery scheduling algorithm complete
 
 ## Current Position
 
 Phase: 2 of 6 (Home Battery Schedule)
-Plan: 0 of 3 in current phase
-Status: Phase 2 Planned — Ready for execution
-Last activity: 2026-02-15 -- Phase 2 planned: 3 plans in 3 waves, verification passed
+Plan: 1 of 3 in current phase
+Status: Phase 2 In Progress — Plan 01 complete (battery scheduler module)
+Last activity: 2026-02-15 -- Plan 02-01 complete: battery scheduling algorithm with TDD
 
-Progress: [##........] 17%
+Progress: [###.......] 25%
 
 ## Performance Metrics
 
@@ -32,10 +32,11 @@ Progress: [##........] 17%
 | Phase 01 P03 | 2min | 2 tasks | 2 files |
 | Phase 01 P04 | 2min | 2 tasks | 5 files |
 | Phase 01 P05 | 1min | 1 task | 1 file |
+| Phase 02 P01 | 11min | 2 tasks | 5 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 2min, 2min, 1min
-- Trend: stable
+- Last 5 plans: 2min, 2min, 2min, 1min, 11min
+- Trend: stable (02-01 longer due to TDD + test infra setup)
 
 *Updated after each plan completion*
 
@@ -61,6 +62,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Platform.SENSOR unconditionally included (core price sensor not gated by module toggles)
 - [Phase 01]: Entity attributes for UI metadata only; bulk price data accessed via coordinator directly
 - [Phase 01]: state_class=None for monetary spot prices (MEASUREMENT incompatible with MONETARY device class)
+- [Phase 02]: Pure Python battery_scheduler.py with zero HA imports for independent testability
+- [Phase 02]: Virtual energy tracking per-peak with cheapest charge slot selection and most expensive discharge prioritization
+- [Phase 02]: Solar forecast simplified to 05:00-17:00 UTC daylight with even distribution
+- [Phase 02]: Test infrastructure uses importlib MetaPathFinder for Python 3.14-compatible HA stubs
 
 ### Pending Todos
 
@@ -75,5 +80,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 01-05-PLAN.md (Gap Closure: Price Sensor Warnings) -- Phase 01 fully complete with all UAT gaps closed
+Stopped at: Completed 02-01-PLAN.md (Battery Scheduler Algorithm) -- TDD pure module with 11 tests
 Resume file: None
