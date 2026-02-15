@@ -102,6 +102,10 @@
     }
   },
   "entity": {
-    "sensor": {}
+    "sensor": {
+      "electricity_price": {
+        "name": "Electricity Price"
+      }
+    }
   }
 }
