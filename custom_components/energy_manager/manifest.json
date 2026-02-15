@@ -1,0 +1,14 @@
+{
+  "domain": "energy_manager",
+  "name": "Energy Manager",
+  "codeowners": ["@jyourstone"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/jyourstone/energy_manager",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/jyourstone/energy_manager/issues",
+  "requirements": [],
+  "version": "0.1.0",
+  "min_version": "2024.12.0"
+}
