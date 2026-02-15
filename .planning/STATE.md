@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 2 in progress — battery scheduling algorithm complete
+**Current focus:** Phase 2 in progress — coordinator and number entities complete
 
 ## Current Position
 
 Phase: 2 of 6 (Home Battery Schedule)
-Plan: 1 of 3 in current phase
-Status: Phase 2 In Progress — Plan 01 complete (battery scheduler module)
-Last activity: 2026-02-15 -- Plan 02-01 complete: battery scheduling algorithm with TDD
+Plan: 2 of 3 in current phase
+Status: Phase 2 In Progress — Plan 02 complete (battery coordinator + number entities)
+Last activity: 2026-02-15 -- Plan 02-02 complete: BatteryScheduleCoordinator with chaining and RestoreNumber entities
 
-Progress: [###.......] 25%
+Progress: [####......] 33%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
-- Average duration: 2min
-- Total execution time: 0.15 hours
+- Total plans completed: 7
+- Average duration: 3min
+- Total execution time: 0.42 hours
 
 **By Phase:**
 
@@ -33,10 +33,11 @@ Progress: [###.......] 25%
 | Phase 01 P04 | 2min | 2 tasks | 5 files |
 | Phase 01 P05 | 1min | 1 task | 1 file |
 | Phase 02 P01 | 11min | 2 tasks | 5 files |
+| Phase 02 P02 | 3min | 2 tasks | 4 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 2min, 1min, 11min
-- Trend: stable (02-01 longer due to TDD + test infra setup)
+- Last 5 plans: 2min, 2min, 1min, 11min, 3min
+- Trend: stable (02-01 was TDD + test infra, 02-02 back to normal)
 
 *Updated after each plan completion*
 
@@ -66,6 +67,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Virtual energy tracking per-peak with cheapest charge slot selection and most expensive discharge prioritization
 - [Phase 02]: Solar forecast simplified to 05:00-17:00 UTC daylight with even distribution
 - [Phase 02]: Test infrastructure uses importlib MetaPathFinder for Python 3.14-compatible HA stubs
+- [Phase 02]: BatteryScheduleCoordinator chains to PriceCoordinator via async_add_listener
+- [Phase 02]: RestoreNumber entities for threshold persistence across HA restarts
+- [Phase 02]: Solar forecast auto-detects kWh vs Wh via unit_of_measurement attribute
+- [Phase 02]: NumberMode.BOX for precise threshold input; EntityCategory.CONFIG for settings classification
 
 ### Pending Todos
 
@@ -80,5 +85,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 02-01-PLAN.md (Battery Scheduler Algorithm) -- TDD pure module with 11 tests
+Stopped at: Completed 02-02-PLAN.md (Battery Coordinator + Number Entities)
 Resume file: None
