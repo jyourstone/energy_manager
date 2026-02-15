@@ -13,7 +13,7 @@ This roadmap delivers a modular HACS integration that unifies home battery sched
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Core Infrastructure + Price Foundation** - Integration skeleton with config flow, Nordpool adapter, and module architecture
-- [ ] **Phase 2: Home Battery Schedule** - Multi-cycle charge/discharge scheduling based on electricity prices and solar production
+- [x] **Phase 2: Home Battery Schedule** - Multi-cycle charge/discharge scheduling based on electricity prices and solar production
 - [ ] **Phase 3: EMS Controller** - Real-time battery mode execution with fuse protection and safety guards
 - [ ] **Phase 4: Car Charging** - Per-car price-optimized charging schedules with departure constraints
 - [ ] **Phase 5: Easee Charger Control** - Physical charger control with state machine, solar charging, and fuse limiting
@@ -53,9 +53,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md -- TDD: Pure battery scheduling algorithm (peak grouping, virtual energy tracking)
-- [ ] 02-02-PLAN.md -- BatteryScheduleCoordinator, number entities, integration plumbing
-- [ ] 02-03-PLAN.md -- Battery schedule sensors, config flow Forecast.Solar step, translations
+- [x] 02-01-PLAN.md -- TDD: Pure battery scheduling algorithm (peak grouping, virtual energy tracking)
+- [x] 02-02-PLAN.md -- BatteryScheduleCoordinator, number entities, integration plumbing
+- [x] 02-03-PLAN.md -- Battery schedule sensors, config flow Forecast.Solar step, translations
 
 ### Phase 3: EMS Controller
 **Goal**: The integration actively controls the battery EMS mode in real time based on the schedule, with fuse protection ensuring safe operation across all connected devices
@@ -129,7 +129,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Infrastructure + Price Foundation | 5/5 | ✓ Complete | 2026-02-15 |
-| 2. Home Battery Schedule | 0/3 | Planned | - |
+| 2. Home Battery Schedule | 3/3 | ✓ Complete | 2026-02-15 |
 | 3. EMS Controller | 0/0 | Not started | - |
 | 4. Car Charging | 0/0 | Not started | - |
 | 5. Easee Charger Control | 0/0 | Not started | - |
@@ -137,4 +137,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-15 (Phase 2 planned)*
+*Last updated: 2026-02-15 (Phase 2 complete)*
