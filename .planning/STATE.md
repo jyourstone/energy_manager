@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 1 of 6 (Core Infrastructure + Price Foundation)
-Plan: 3 of 3 in current phase
+Plan: 4 of 4 in current phase
 Status: Phase Complete
-Last activity: 2026-02-15 -- Completed 01-03 (Integration Core and Price Coordinator)
+Last activity: 2026-02-15 -- Completed 01-04 (Price Sensor Entity)
 
-Progress: [##........] 17%
+Progress: [##........] 22%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: 2min
-- Total execution time: 0.10 hours
+- Total execution time: 0.13 hours
 
 **By Phase:**
 
@@ -30,9 +30,10 @@ Progress: [##........] 17%
 | Phase 01 P01 | 2min | 2 tasks | 6 files |
 | Phase 01 P02 | 2min | 2 tasks | 3 files |
 | Phase 01 P03 | 2min | 2 tasks | 2 files |
+| Phase 01 P04 | 2min | 2 tasks | 5 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 2min
+- Last 5 plans: 2min, 2min, 2min, 2min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -55,6 +56,8 @@ Recent decisions affecting current work:
 - [Phase 01]: Car subentry gated by CONF_EV_ENABLED in async_get_supported_subentry_types
 - [Phase 01]: Module-level type alias for EnergyManagerConfigEntry (broader tooling compatibility)
 - [Phase 01]: always_update=False on PriceCoordinator to avoid unnecessary listener notifications
+- [Phase 01]: SEK/kWh as native unit for price sensor (pass-through from Nordpool)
+- [Phase 01]: Platform.SENSOR unconditionally included (core price sensor not gated by module toggles)
 
 ### Pending Todos
 
@@ -69,5 +72,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 01-03-PLAN.md (Integration Core and Price Coordinator)
+Stopped at: Completed 01-04-PLAN.md (Price Sensor Entity) -- Phase 01 fully complete
 Resume file: None
