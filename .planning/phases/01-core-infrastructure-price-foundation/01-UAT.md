@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 01-core-infrastructure-price-foundation
 source: 01-01-SUMMARY.md, 01-02-SUMMARY.md, 01-03-SUMMARY.md, 01-04-SUMMARY.md
 started: 2026-02-15T19:30:00Z
@@ -61,7 +61,11 @@ skipped: 0
   reason: "User reported: Two warnings: 1) Price sensor attributes exceed 16384 bytes (recorder won't store them). 2) State class 'measurement' incompatible with device class 'monetary' (expected None or 'total')."
   severity: major
   test: 5
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+  root_cause: "Two bugs in sensor.py: 1) extra_state_attributes serializes 48 hourly price slots exceeding HA's 16KB recorder limit. 2) _attr_state_class = SensorStateClass.MEASUREMENT is incompatible with SensorDeviceClass.MONETARY (must be None or TOTAL)."
+  artifacts:
+    - path: "custom_components/energy_manager/sensor.py"
+      issue: "Lines 85-106: serializes full price slot lists into attributes exceeding 16KB. Line 52: wrong state_class for monetary device class."
+  missing:
+    - "Remove prices_today/prices_tomorrow from extra_state_attributes (downstream modules use coordinator directly)"
+    - "Delete _attr_state_class = SensorStateClass.MEASUREMENT (None is correct for spot prices)"
+  debug_session: ".planning/debug/price-sensor-warnings.md"
