@@ -1,8 +1,8 @@
 """Sensor platform for the Energy Manager integration.
 
 Provides a price sensor entity that exposes current electricity price
-as state and today's/tomorrow's hourly price slots as attributes.
-Data is sourced from the PriceCoordinator.
+as state. Downstream modules access full price slot data directly from
+the PriceCoordinator via entry.runtime_data.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from typing import Any
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorStateClass,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -40,16 +39,14 @@ async def async_setup_entry(
 
 
 class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
-    """Sensor showing current electricity price with hourly price attributes.
+    """Sensor showing current electricity price.
 
-    State is the current electricity price in SEK/kWh. Extra attributes
-    contain today's and tomorrow's hourly price slots for use by automations,
-    dashboards, and downstream scheduling modules.
+    State is the current electricity price in SEK/kWh. Full hourly price
+    slot data is available to downstream modules via the PriceCoordinator.
     """
 
     _attr_translation_key = "electricity_price"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
@@ -77,31 +74,15 @@ class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return today's and tomorrow's hourly price slots as attributes."""
+        """Return lightweight metadata attributes.
+
+        Full hourly price slot data is accessed by downstream modules
+        directly via the PriceCoordinator (entry.runtime_data).
+        """
         data: PriceData | None = self.coordinator.data
         if data is None:
-            return {"today": [], "tomorrow": [], "last_updated": None}
-
-        today = [
-            {
-                "start": slot.start.isoformat(),
-                "end": slot.end.isoformat(),
-                "price": slot.price,
-            }
-            for slot in data.today
-        ]
-
-        tomorrow = [
-            {
-                "start": slot.start.isoformat(),
-                "end": slot.end.isoformat(),
-                "price": slot.price,
-            }
-            for slot in data.tomorrow
-        ]
+            return {"last_updated": None}
 
         return {
-            "today": today,
-            "tomorrow": tomorrow,
             "last_updated": data.last_updated.isoformat() if data.last_updated else None,
         }
