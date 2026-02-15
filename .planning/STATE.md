@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 1 of 6 (Core Infrastructure + Price Foundation)
-Plan: 4 of 4 in current phase
+Plan: 5 of 5 in current phase
 Status: Phase Complete
-Last activity: 2026-02-15 -- Completed 01-04 (Price Sensor Entity)
+Last activity: 2026-02-15 -- Completed 01-05 (Gap Closure: Price Sensor Warnings)
 
 Progress: [##........] 22%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 2min
-- Total execution time: 0.13 hours
+- Total execution time: 0.15 hours
 
 **By Phase:**
 
@@ -31,9 +31,10 @@ Progress: [##........] 22%
 | Phase 01 P02 | 2min | 2 tasks | 3 files |
 | Phase 01 P03 | 2min | 2 tasks | 2 files |
 | Phase 01 P04 | 2min | 2 tasks | 5 files |
+| Phase 01 P05 | 1min | 1 task | 1 file |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 2min, 2min
+- Last 5 plans: 2min, 2min, 2min, 2min, 1min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -58,6 +59,8 @@ Recent decisions affecting current work:
 - [Phase 01]: always_update=False on PriceCoordinator to avoid unnecessary listener notifications
 - [Phase 01]: SEK/kWh as native unit for price sensor (pass-through from Nordpool)
 - [Phase 01]: Platform.SENSOR unconditionally included (core price sensor not gated by module toggles)
+- [Phase 01]: Entity attributes for UI metadata only; bulk price data accessed via coordinator directly
+- [Phase 01]: state_class=None for monetary spot prices (MEASUREMENT incompatible with MONETARY device class)
 
 ### Pending Todos
 
@@ -72,5 +75,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 01-04-PLAN.md (Price Sensor Entity) -- Phase 01 fully complete
+Stopped at: Completed 01-05-PLAN.md (Gap Closure: Price Sensor Warnings) -- Phase 01 fully complete with all UAT gaps closed
 Resume file: None
