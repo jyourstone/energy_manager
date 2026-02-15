@@ -31,12 +31,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can enable/disable Home Battery and EV Charging modules independently during setup
   4. Integration survives HA restart -- setup, unload, and reload work without errors or ghost entities
   5. Price sensor shows current electricity price with today's and tomorrow's hourly prices in attributes
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [ ] 01-01-PLAN.md -- Foundation scaffold, Nordpool adapter, auto-detection module
 - [ ] 01-02-PLAN.md -- Multi-step config flow wizard, car subentry flow, translations
 - [ ] 01-03-PLAN.md -- PriceCoordinator, integration lifecycle (__init__.py), hub device
+- [ ] 01-04-PLAN.md -- Gap closure: Price sensor entity exposing coordinator data to users
 
 ### Phase 2: Home Battery Schedule
 **Goal**: Users can view an automatically generated multi-cycle battery charge/discharge schedule that optimizes for electricity price, with adjustable thresholds and solar awareness
