@@ -12,7 +12,7 @@ This roadmap delivers a modular HACS integration that unifies home battery sched
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Core Infrastructure + Price Foundation** - Integration skeleton with config flow, Nordpool adapter, and module architecture
+- [x] **Phase 1: Core Infrastructure + Price Foundation** - Integration skeleton with config flow, Nordpool adapter, and module architecture
 - [ ] **Phase 2: Home Battery Schedule** - Multi-cycle charge/discharge scheduling based on electricity prices and solar production
 - [ ] **Phase 3: EMS Controller** - Real-time battery mode execution with fuse protection and safety guards
 - [ ] **Phase 4: Car Charging** - Per-car price-optimized charging schedules with departure constraints
@@ -127,7 +127,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
-| 1. Core Infrastructure + Price Foundation | 4/5 | UAT gap closure | - |
+| 1. Core Infrastructure + Price Foundation | 5/5 | ✓ Complete | 2026-02-15 |
 | 2. Home Battery Schedule | 0/0 | Not started | - |
 | 3. EMS Controller | 0/0 | Not started | - |
 | 4. Car Charging | 0/0 | Not started | - |
@@ -136,4 +136,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-15 (Phase 1 UAT gap closure planned)*
+*Last updated: 2026-02-15 (Phase 1 complete)*

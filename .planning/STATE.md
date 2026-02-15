@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 1 - Core Infrastructure + Price Foundation
+**Current focus:** Phase 1 complete — ready for Phase 2
 
 ## Current Position
 
 Phase: 1 of 6 (Core Infrastructure + Price Foundation)
 Plan: 5 of 5 in current phase
-Status: Phase Complete
-Last activity: 2026-02-15 -- Completed 01-05 (Gap Closure: Price Sensor Warnings)
+Status: Phase 1 Complete — Verified ✓
+Last activity: 2026-02-15 -- Phase 1 verified and marked complete
 
-Progress: [##........] 22%
+Progress: [##........] 17%
 
 ## Performance Metrics
 
