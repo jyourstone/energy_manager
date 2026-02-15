@@ -1,8 +1,9 @@
 """The Energy Manager integration.
 
 Manages the full setup/unload/reload lifecycle, hub device registration,
-and typed runtime data. Creates the PriceCoordinator that provides the
-price data foundation for all downstream scheduling modules.
+and typed runtime data. Creates the PriceCoordinator for price data and
+conditionally creates the BatteryScheduleCoordinator when the battery
+module is enabled.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from .const import (
     MODULE_EV,
 )
 from .coordinator import (
+    BatteryScheduleCoordinator,
     EnergyManagerConfigEntry,
     EnergyManagerData,
     PriceCoordinator,
@@ -54,9 +56,18 @@ async def async_setup_entry(
     price_coordinator = PriceCoordinator(hass, entry)
     await price_coordinator.async_config_entry_first_refresh()
 
+    # Phase 2: Battery schedule coordinator (if battery module enabled)
+    battery_coordinator = None
+    if entry.options.get(CONF_BATTERY_ENABLED):
+        battery_coordinator = BatteryScheduleCoordinator(
+            hass, entry, price_coordinator
+        )
+        await battery_coordinator.async_config_entry_first_refresh()
+
     # Store typed runtime data on the config entry
     entry.runtime_data = EnergyManagerData(
         price_coordinator=price_coordinator,
+        battery_coordinator=battery_coordinator,
         modules_enabled={
             MODULE_BATTERY: entry.options.get(CONF_BATTERY_ENABLED, False),
             MODULE_EV: entry.options.get(CONF_EV_ENABLED, False),
@@ -98,7 +109,7 @@ def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
     platforms: list[Platform] = [Platform.SENSOR]
 
     if entry.options.get(CONF_BATTERY_ENABLED):
-        pass  # Future: platforms.extend([Platform.SWITCH, ...])
+        platforms.append(Platform.NUMBER)
 
     if entry.options.get(CONF_EV_ENABLED):
         pass  # Future: platforms.extend([Platform.SWITCH, ...])
