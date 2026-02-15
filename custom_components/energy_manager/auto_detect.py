@@ -18,6 +18,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
+    CONF_FORECAST_SOLAR_ENTITY,
     CONF_SOC_ENTITY,
 )
 from .nordpool_adapter import auto_detect_nordpool as _nordpool_auto_detect
@@ -245,3 +246,53 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
         _LOGGER.debug("No car integrations found (Skoda/VW)")
 
     return cars
+
+
+def find_forecast_solar_entities(hass: HomeAssistant) -> dict[str, str]:
+    """Scan for Forecast.Solar integration entities.
+
+    Looks for config entries with domain "forecast_solar" and finds
+    the energy production today sensor.
+
+    Returns:
+        Dict with CONF_FORECAST_SOLAR_ENTITY key if found, empty dict otherwise.
+    """
+    registry = er.async_get(hass)
+    result: dict[str, str] = {}
+
+    # Find Forecast.Solar config entries
+    solar_entries = hass.config_entries.async_entries("forecast_solar")
+
+    if not solar_entries:
+        _LOGGER.debug("No Forecast.Solar integration found")
+        return result
+
+    for config_entry in solar_entries:
+        entity_entries = er.async_entries_for_config_entry(
+            registry, config_entry.entry_id
+        )
+
+        for entity_entry in entity_entries:
+            if entity_entry.domain != "sensor":
+                continue
+
+            entity_id_lower = entity_entry.entity_id.lower()
+            unique_id_lower = (entity_entry.unique_id or "").lower()
+
+            # Look for energy production today sensor
+            if (
+                "energy_production_today" in entity_id_lower
+                or "energy_production_today" in unique_id_lower
+            ):
+                result[CONF_FORECAST_SOLAR_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found Forecast.Solar entity: %s", entity_entry.entity_id
+                )
+                return result
+
+    if not result:
+        _LOGGER.debug(
+            "Forecast.Solar integration found but no matching entities"
+        )
+
+    return result
