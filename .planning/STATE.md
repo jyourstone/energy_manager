@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 1 complete — ready for Phase 2
+**Current focus:** Phase 2 planned — ready for execution
 
 ## Current Position
 
-Phase: 1 of 6 (Core Infrastructure + Price Foundation)
-Plan: 5 of 5 in current phase
-Status: Phase 1 Complete — Verified ✓
-Last activity: 2026-02-15 -- Phase 1 verified and marked complete
+Phase: 2 of 6 (Home Battery Schedule)
+Plan: 0 of 3 in current phase
+Status: Phase 2 Planned — Ready for execution
+Last activity: 2026-02-15 -- Phase 2 planned: 3 plans in 3 waves, verification passed
 
 Progress: [##........] 17%
 
