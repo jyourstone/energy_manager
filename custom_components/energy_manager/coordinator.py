@@ -2,10 +2,8 @@
 
 The PriceCoordinator fetches Nordpool prices on a 5-minute interval and
 immediately on Nordpool state changes. Price data (today + tomorrow hourly
-slots) is available to downstream modules via entry.runtime_data.
-
-No user-visible entities are created -- price data is consumed internally
-by scheduling modules.
+slots) is available via entry.runtime_data -- both to the user-visible
+price sensor entity and to downstream scheduling modules.
 """
 
 from __future__ import annotations
