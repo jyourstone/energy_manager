@@ -12,7 +12,7 @@ This roadmap delivers a modular HACS integration that unifies home battery sched
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [x] **Phase 1: Core Infrastructure + Price Foundation** - Integration skeleton with config flow, Nordpool adapter, and module architecture
+- [ ] **Phase 1: Core Infrastructure + Price Foundation** - Integration skeleton with config flow, Nordpool adapter, and module architecture
 - [ ] **Phase 2: Home Battery Schedule** - Multi-cycle charge/discharge scheduling based on electricity prices and solar production
 - [ ] **Phase 3: EMS Controller** - Real-time battery mode execution with fuse protection and safety guards
 - [ ] **Phase 4: Car Charging** - Per-car price-optimized charging schedules with departure constraints
@@ -31,13 +31,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can enable/disable Home Battery and EV Charging modules independently during setup
   4. Integration survives HA restart -- setup, unload, and reload work without errors or ghost entities
   5. Price sensor shows current electricity price with today's and tomorrow's hourly prices in attributes
-**Plans**: 4 plans
+**Plans**: 5 plans
 
 Plans:
 - [x] 01-01-PLAN.md -- Foundation scaffold, Nordpool adapter, auto-detection module
 - [x] 01-02-PLAN.md -- Multi-step config flow wizard, car subentry flow, translations
 - [x] 01-03-PLAN.md -- PriceCoordinator, integration lifecycle (__init__.py), hub device
 - [x] 01-04-PLAN.md -- Gap closure: Price sensor entity exposing coordinator data to users
+- [ ] 01-05-PLAN.md -- UAT fix: Remove oversized attributes and wrong state class from price sensor
 
 ### Phase 2: Home Battery Schedule
 **Goal**: Users can view an automatically generated multi-cycle battery charge/discharge schedule that optimizes for electricity price, with adjustable thresholds and solar awareness
@@ -126,7 +127,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
-| 1. Core Infrastructure + Price Foundation | 4/4 | ✓ Complete | 2026-02-15 |
+| 1. Core Infrastructure + Price Foundation | 4/5 | UAT gap closure | - |
 | 2. Home Battery Schedule | 0/0 | Not started | - |
 | 3. EMS Controller | 0/0 | Not started | - |
 | 4. Car Charging | 0/0 | Not started | - |
@@ -135,4 +136,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-15 (Phase 1 complete)*
+*Last updated: 2026-02-15 (Phase 1 UAT gap closure planned)*
