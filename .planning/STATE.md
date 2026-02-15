@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 2 in progress — coordinator and number entities complete
+**Current focus:** Phase 2 complete — ready for Phase 3 (EMS Controller)
 
 ## Current Position
 
-Phase: 2 of 6 (Home Battery Schedule)
-Plan: 2 of 3 in current phase
-Status: Phase 2 In Progress — Plan 02 complete (battery coordinator + number entities)
-Last activity: 2026-02-15 -- Plan 02-02 complete: BatteryScheduleCoordinator with chaining and RestoreNumber entities
+Phase: 2 of 6 (Home Battery Schedule) -- COMPLETE
+Plan: 3 of 3 in current phase
+Status: Phase 2 Complete — all 3 plans executed (scheduler, coordinator, sensors)
+Last activity: 2026-02-15 -- Plan 02-03 complete: Battery schedule sensors, Forecast.Solar config flow, translations
 
-Progress: [####......] 33%
+Progress: [####......] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: 3min
-- Total execution time: 0.42 hours
+- Total execution time: 0.47 hours
 
 **By Phase:**
 
@@ -34,10 +34,11 @@ Progress: [####......] 33%
 | Phase 01 P05 | 1min | 1 task | 1 file |
 | Phase 02 P01 | 11min | 2 tasks | 5 files |
 | Phase 02 P02 | 3min | 2 tasks | 4 files |
+| Phase 02 P03 | 3min | 2 tasks | 5 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 1min, 11min, 3min
-- Trend: stable (02-01 was TDD + test infra, 02-02 back to normal)
+- Last 5 plans: 2min, 1min, 11min, 3min, 3min
+- Trend: stable
 
 *Updated after each plan completion*
 
@@ -71,6 +72,10 @@ Recent decisions affecting current work:
 - [Phase 02]: RestoreNumber entities for threshold persistence across HA restarts
 - [Phase 02]: Solar forecast auto-detects kWh vs Wh via unit_of_measurement attribute
 - [Phase 02]: NumberMode.BOX for precise threshold input; EntityCategory.CONFIG for settings classification
+- [Phase 02]: Battery sensors conditionally created based on battery_coordinator existence (not config toggle)
+- [Phase 02]: Schedule attributes capped at 48 slots to keep state compact per Phase 1 lesson
+- [Phase 02]: NextCharge/NextDischarge use SensorDeviceClass.TIMESTAMP for native datetime display
+- [Phase 02]: Config flow merges SigenStor and Forecast.Solar auto-detection into single suggested values dict
 
 ### Pending Todos
 
@@ -85,5 +90,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 02-02-PLAN.md (Battery Coordinator + Number Entities)
+Stopped at: Completed 02-03-PLAN.md (Battery Schedule Sensors + Config Flow + Translations) -- Phase 2 COMPLETE
 Resume file: None
