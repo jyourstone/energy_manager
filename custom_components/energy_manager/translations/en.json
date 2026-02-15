@@ -28,11 +28,15 @@
         "description": "Configure your home battery system. Entities are auto-detected from SigenStor.",
         "data": {
           "soc_entity": "Battery SOC sensor",
-          "battery_power_entity": "Battery power sensor"
+          "battery_power_entity": "Battery power sensor",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "forecast_solar_entity": "Solar forecast sensor"
         },
         "data_description": {
           "soc_entity": "Sensor showing battery state of charge (%).",
-          "battery_power_entity": "Sensor showing battery power (W)."
+          "battery_power_entity": "Sensor showing battery power (W).",
+          "battery_capacity_kwh": "Total usable battery capacity in kWh.",
+          "forecast_solar_entity": "Optional Forecast.Solar sensor for solar-aware scheduling. Leave empty if not available."
         }
       },
       "ev": {
@@ -105,6 +109,26 @@
     "sensor": {
       "electricity_price": {
         "name": "Electricity Price"
+      },
+      "battery_schedule": {
+        "name": "Battery Schedule"
+      },
+      "next_charging_slot": {
+        "name": "Next Charging Slot"
+      },
+      "next_discharging_slot": {
+        "name": "Next Discharging Slot"
+      }
+    },
+    "number": {
+      "charge_price_threshold": {
+        "name": "Charge Price Threshold"
+      },
+      "discharge_price_threshold": {
+        "name": "Discharge Price Threshold"
+      },
+      "max_charge_power": {
+        "name": "Max Charging Power"
       }
     }
   }

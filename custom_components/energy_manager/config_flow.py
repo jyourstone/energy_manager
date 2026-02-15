@@ -50,10 +50,12 @@ from homeassistant.helpers.selector import (
 from .auto_detect import (
     find_car_integrations,
     find_easee_entities,
+    find_forecast_solar_entities,
     find_sigenstor_entities,
 )
 from .const import (
     CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
@@ -61,6 +63,7 @@ from .const import (
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_EV_ENABLED,
+    CONF_FORECAST_SOLAR_ENTITY,
     CONF_HOME_PLUGGED_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
@@ -223,13 +226,21 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_BATTERY_POWER_ENTITY] = user_input.get(
                 CONF_BATTERY_POWER_ENTITY, ""
             )
+            self._data[CONF_BATTERY_CAPACITY_KWH] = user_input.get(
+                CONF_BATTERY_CAPACITY_KWH, 10.0
+            )
+            self._data[CONF_FORECAST_SOLAR_ENTITY] = user_input.get(
+                CONF_FORECAST_SOLAR_ENTITY, ""
+            )
 
             if self._data.get(CONF_EV_ENABLED):
                 return await self.async_step_ev()
             return self._create_entry()
 
-        # Auto-detect SigenStor entities
+        # Auto-detect SigenStor entities and Forecast.Solar
         detected = find_sigenstor_entities(self.hass)
+        solar_detected = find_forecast_solar_entities(self.hass)
+        detected.update(solar_detected)
 
         schema = vol.Schema(
             {
@@ -237,6 +248,14 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                     EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Optional(CONF_BATTERY_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_BATTERY_CAPACITY_KWH): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1, max=100, step=0.1, unit_of_measurement="kWh"
+                    )
+                ),
+                vol.Optional(CONF_FORECAST_SOLAR_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
             }
@@ -303,6 +322,12 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_SOC_ENTITY: self._data.get(CONF_SOC_ENTITY, ""),
             CONF_BATTERY_POWER_ENTITY: self._data.get(
                 CONF_BATTERY_POWER_ENTITY, ""
+            ),
+            CONF_BATTERY_CAPACITY_KWH: self._data.get(
+                CONF_BATTERY_CAPACITY_KWH, 10.0
+            ),
+            CONF_FORECAST_SOLAR_ENTITY: self._data.get(
+                CONF_FORECAST_SOLAR_ENTITY, ""
             ),
             CONF_CHARGER_STATUS_ENTITY: self._data.get(
                 CONF_CHARGER_STATUS_ENTITY, ""
