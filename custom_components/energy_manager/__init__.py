@@ -85,8 +85,8 @@ async def async_setup_entry(
 def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
     """Build list of platforms to set up based on enabled modules.
 
-    Phase 1 returns an empty list (no entity platforms yet).
-    Future phases extend this as modules add entities.
+    Platform.SENSOR is always included for the core price sensor entity.
+    Module-specific platforms are added conditionally as modules are enabled.
 
     Args:
         entry: The config entry to check for enabled modules.
@@ -94,13 +94,14 @@ def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
     Returns:
         List of Platform enums to forward.
     """
-    platforms: list[Platform] = []
+    # Core price sensor is always present regardless of enabled modules
+    platforms: list[Platform] = [Platform.SENSOR]
 
     if entry.options.get(CONF_BATTERY_ENABLED):
-        pass  # Future: platforms.extend([Platform.SENSOR, Platform.SWITCH, ...])
+        pass  # Future: platforms.extend([Platform.SWITCH, ...])
 
     if entry.options.get(CONF_EV_ENABLED):
-        pass  # Future: platforms.extend([Platform.SENSOR, Platform.SWITCH, ...])
+        pass  # Future: platforms.extend([Platform.SWITCH, ...])
 
     return platforms
 
