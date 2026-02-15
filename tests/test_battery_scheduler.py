@@ -66,7 +66,11 @@ class TestBasicChargeDischargeSchedule:
     """Test that slots are correctly classified as charge/discharge/idle."""
 
     def test_basic_charge_discharge_schedule(self):
-        """Given 24h prices with cheap/mid/expensive hours, verify correct actions."""
+        """Given 24h prices with cheap/mid/expensive hours, verify correct actions.
+
+        Uses a 20 kWh battery at 10% SOC with 3 kW charge rate so multiple
+        cheap hours are needed to fill the battery for the discharge peak.
+        """
         # Hours 0-5: cheap (0.30) -> should charge
         # Hours 6-11: mid (0.80) -> should idle
         # Hours 12-17: expensive (2.50) -> should discharge
@@ -79,20 +83,23 @@ class TestBasicChargeDischargeSchedule:
         )
         slots = _make_24h_slots(prices)
 
+        # 20 kWh battery at 10% SOC, 3 kW charge rate
+        # Available capacity: (95-10)% * 20 = 17 kWh to fill
+        # At 3 kW, needs ~6 hours to fill -> all cheap hours should charge
         result = build_battery_schedule(
             price_slots=slots,
             charge_threshold=DEFAULT_CHARGE_THRESHOLD,
             discharge_threshold=DEFAULT_DISCHARGE_THRESHOLD,
-            max_charge_power_w=DEFAULT_POWER,
-            battery_capacity_kwh=DEFAULT_CAPACITY,
-            current_soc_pct=DEFAULT_SOC,
+            max_charge_power_w=3000.0,
+            battery_capacity_kwh=20.0,
+            current_soc_pct=10.0,
             now=datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC),
         )
 
         assert isinstance(result, BatteryScheduleResult)
         assert len(result.schedule) == 24
 
-        # Check that cheap hours are charge
+        # Check that cheap hours are charge (all needed to fill big battery)
         for slot in result.schedule:
             if slot.price <= DEFAULT_CHARGE_THRESHOLD:
                 assert slot.action in ("charge", "solar_charge"), (
@@ -402,19 +409,22 @@ class TestCurrentAction:
     """Test that current_action and target_ems_mode reflect the slot at 'now'."""
 
     def test_current_action_based_on_now(self):
-        """Given a specific 'now', current_action should match that slot's action."""
-        # Hour 12 is expensive -> should be discharging
+        """Given a specific 'now', current_action should match that slot's action.
+
+        Uses a 20 kWh battery at 10% SOC with 3 kW charge to ensure hour 2
+        is still in the charging window (needs ~6 hours to fill).
+        """
         prices = [0.30] * 6 + [0.80] * 6 + [2.50] * 6 + [0.70] * 6
         slots = _make_24h_slots(prices)
 
-        # now = hour 2 (cheap period)
+        # now = hour 2 (cheap period) -- with big battery, still charging
         result_charging = build_battery_schedule(
             price_slots=slots,
             charge_threshold=DEFAULT_CHARGE_THRESHOLD,
             discharge_threshold=DEFAULT_DISCHARGE_THRESHOLD,
-            max_charge_power_w=DEFAULT_POWER,
-            battery_capacity_kwh=DEFAULT_CAPACITY,
-            current_soc_pct=DEFAULT_SOC,
+            max_charge_power_w=3000.0,
+            battery_capacity_kwh=20.0,
+            current_soc_pct=10.0,
             now=datetime(2026, 2, 15, 2, 30, 0, tzinfo=UTC),
         )
 
@@ -423,9 +433,9 @@ class TestCurrentAction:
             price_slots=slots,
             charge_threshold=DEFAULT_CHARGE_THRESHOLD,
             discharge_threshold=DEFAULT_DISCHARGE_THRESHOLD,
-            max_charge_power_w=DEFAULT_POWER,
-            battery_capacity_kwh=DEFAULT_CAPACITY,
-            current_soc_pct=DEFAULT_SOC,
+            max_charge_power_w=3000.0,
+            battery_capacity_kwh=20.0,
+            current_soc_pct=10.0,
             now=datetime(2026, 2, 15, 14, 30, 0, tzinfo=UTC),
         )
 
