@@ -47,3 +47,36 @@ CONF_CAR_NAME = "car_name"
 CONF_BATTERY_CAPACITY = "battery_capacity"
 CONF_BATTERY_LEVEL_ENTITY = "battery_level_entity"
 CONF_HOME_PLUGGED_ENTITY = "home_plugged_entity"
+
+# --- Battery schedule configuration ---
+
+# Config keys for battery schedule
+CONF_FORECAST_SOLAR_ENTITY = "forecast_solar_entity"
+CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
+
+# Battery schedule update interval (minutes) -- fallback polling
+BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES = 5
+
+# Number entity defaults
+DEFAULT_CHARGE_THRESHOLD = 0.50  # SEK/kWh
+DEFAULT_DISCHARGE_THRESHOLD = 1.50  # SEK/kWh
+DEFAULT_MAX_CHARGE_POWER_W = 5000.0  # watts
+
+# Number entity limits
+MIN_PRICE_THRESHOLD = 0.0
+MAX_PRICE_THRESHOLD = 10.0
+PRICE_THRESHOLD_STEP = 0.01
+
+MIN_CHARGE_POWER_W = 0.0
+MAX_CHARGE_POWER_W = 15000.0
+CHARGE_POWER_STEP = 100.0
+
+# Peak grouping
+DEFAULT_PEAK_GAP_HOURS = 2.0
+
+# SOC constraints
+DEFAULT_MIN_SOC_PCT = 10.0
+DEFAULT_MAX_SOC_PCT = 95.0
+
+# Default battery capacity if not configured
+DEFAULT_BATTERY_CAPACITY_KWH = 10.0
