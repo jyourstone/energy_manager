@@ -50,13 +50,14 @@ Plans:
   3. User can adjust charge price threshold, discharge price threshold, and max charging power via number entities in the UI
   4. Schedule automatically recalculates when Nordpool prices update or when Forecast.Solar data changes
   5. Schedule correctly identifies multiple profitable discharge windows separated by charging periods (multi-cycle with peak grouping)
-**Plans**: 4 plans
+**Plans**: 5 plans
 
 Plans:
 - [x] 02-01-PLAN.md -- TDD: Pure battery scheduling algorithm (peak grouping, virtual energy tracking)
 - [x] 02-02-PLAN.md -- BatteryScheduleCoordinator, number entities, integration plumbing
 - [x] 02-03-PLAN.md -- Battery schedule sensors, config flow Forecast.Solar step, translations
 - [x] 02-04-PLAN.md -- UAT gap closure: float precision, sensor availability, defaults, kW unit
+- [ ] 02-05-PLAN.md -- UAT gap closure: filter schedule attributes to show current/future slots
 
 ### Phase 3: EMS Controller
 **Goal**: The integration actively controls the battery EMS mode in real time based on the schedule, with fuse protection ensuring safe operation across all connected devices
@@ -130,7 +131,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Infrastructure + Price Foundation | 5/5 | Complete | 2026-02-15 |
-| 2. Home Battery Schedule | 4/4 | Complete | 2026-02-16 |
+| 2. Home Battery Schedule | 4/5 | UAT gap closure | - |
 | 3. EMS Controller | 0/0 | Not started | - |
 | 4. Car Charging | 0/0 | Not started | - |
 | 5. Easee Charger Control | 0/0 | Not started | - |
@@ -138,4 +139,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-16 (Phase 2 complete)*
+*Last updated: 2026-02-16 (Phase 2 UAT gap closure plan added)*
