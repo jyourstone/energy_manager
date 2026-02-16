@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 2 complete (including UAT gap closure) — ready for Phase 3 (EMS Controller)
+**Current focus:** Phase 2 complete (all 5 plans including schedule attribute filtering) — ready for Phase 3 (EMS Controller)
 
 ## Current Position
 
 Phase: 2 of 6 (Home Battery Schedule) -- COMPLETE
-Plan: 4 of 4 in current phase
-Status: Phase 2 Complete — all 4 plans executed (scheduler, coordinator, sensors, UAT gap closure)
-Last activity: 2026-02-16 -- Plan 02-04 complete: UAT gap closure (defaults, precision, availability, kW)
+Plan: 5 of 5 in current phase
+Status: Phase 2 Complete — all 5 plans executed (scheduler, coordinator, sensors, UAT gap closures)
+Last activity: 2026-02-16 -- Plan 02-05 complete: UAT gap closure (schedule attribute time filtering)
 
 Progress: [####......] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: 3min
-- Total execution time: 0.50 hours
+- Total execution time: 0.53 hours
 
 **By Phase:**
 
@@ -36,9 +36,10 @@ Progress: [####......] 40%
 | Phase 02 P02 | 3min | 2 tasks | 4 files |
 | Phase 02 P03 | 3min | 2 tasks | 5 files |
 | Phase 02 P04 | 2min | 2 tasks | 4 files |
+| Phase 02 P05 | 2min | 2 tasks | 2 files |
 
 **Recent Trend:**
-- Last 5 plans: 1min, 11min, 3min, 3min, 2min
+- Last 5 plans: 11min, 3min, 3min, 2min, 2min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -79,6 +80,7 @@ Recent decisions affecting current work:
 - [Phase 02]: Config flow merges SigenStor and Forecast.Solar auto-detection into single suggested values dict
 - [Phase 02]: kW-to-W conversion at entity-coordinator boundary; coordinator stays in watts for scheduler
 - [Phase 02]: available() property on NextCharge/NextDischarge returns coordinator.data is not None (green when data exists, red on error)
+- [Phase 02]: Schedule attributes filter by slot.end > now before 48-slot cap (keeps in-progress slots, excludes fully past ones)
 
 ### Pending Todos
 
@@ -93,5 +95,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 02-04-PLAN.md (UAT Gap Closure) -- Phase 2 COMPLETE (all 4 plans)
+Stopped at: Completed 02-05-PLAN.md (UAT Gap Closure: schedule attribute filtering) -- Phase 2 COMPLETE (all 5 plans)
 Resume file: None
