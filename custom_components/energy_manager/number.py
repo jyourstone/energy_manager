@@ -3,7 +3,7 @@
 Provides user-adjustable threshold entities for battery scheduling:
 - Charge price threshold (SEK/kWh)
 - Discharge price threshold (SEK/kWh)
-- Max charging power (W)
+- Max charging power (kW)
 
 Values persist across restarts via RestoreNumber. Each entity updates
 its corresponding attribute on the BatteryScheduleCoordinator and
@@ -19,13 +19,13 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    CHARGE_POWER_STEP,
+    CHARGE_POWER_STEP_KW,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
-    DEFAULT_MAX_CHARGE_POWER_W,
-    MAX_CHARGE_POWER_W,
+    DEFAULT_MAX_CHARGE_POWER_KW,
+    MAX_CHARGE_POWER_KW,
     MAX_PRICE_THRESHOLD,
-    MIN_CHARGE_POWER_W,
+    MIN_CHARGE_POWER_KW,
     MIN_PRICE_THRESHOLD,
     PRICE_THRESHOLD_STEP,
 )
@@ -168,12 +168,12 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
     _attr_translation_key = "max_charge_power"
-    _attr_native_min_value = MIN_CHARGE_POWER_W
-    _attr_native_max_value = MAX_CHARGE_POWER_W
-    _attr_native_step = CHARGE_POWER_STEP
-    _attr_native_unit_of_measurement = "W"
+    _attr_native_min_value = MIN_CHARGE_POWER_KW
+    _attr_native_max_value = MAX_CHARGE_POWER_KW
+    _attr_native_step = CHARGE_POWER_STEP_KW
+    _attr_native_unit_of_measurement = "kW"
 
-    _default_value = DEFAULT_MAX_CHARGE_POWER_W
+    _default_value = DEFAULT_MAX_CHARGE_POWER_KW
 
     def __init__(
         self,
@@ -192,15 +192,15 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
             self._attr_native_value = last_data.native_value
         else:
             self._attr_native_value = self._default_value
-        self.coordinator.max_charge_power_w = self._attr_native_value
+        self.coordinator.max_charge_power_w = self._attr_native_value * 1000
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the max charge power and trigger schedule recalculation.
 
         Args:
-            value: New maximum charging power in watts.
+            value: New maximum charging power in kW.
         """
         self._attr_native_value = value
         self.async_write_ha_state()
-        self.coordinator.max_charge_power_w = value
+        self.coordinator.max_charge_power_w = value * 1000
         await self.coordinator.async_request_refresh()

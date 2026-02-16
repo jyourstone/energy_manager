@@ -37,7 +37,7 @@ from .const import (
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
-    DEFAULT_MAX_CHARGE_POWER_W,
+    DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_SOC_PCT,
     DEFAULT_MIN_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
@@ -281,7 +281,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # Mutable thresholds -- updated by NumberEntity instances after setup
         self.charge_threshold: float = DEFAULT_CHARGE_THRESHOLD
         self.discharge_threshold: float = DEFAULT_DISCHARGE_THRESHOLD
-        self.max_charge_power_w: float = DEFAULT_MAX_CHARGE_POWER_W
+        self.max_charge_power_w: float = DEFAULT_MAX_CHARGE_POWER_KW * 1000
 
     async def _async_setup(self) -> None:
         """Register listeners for coordinator chaining and entity state changes.
