@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 02-home-battery-schedule
 source: [02-01-SUMMARY.md, 02-02-SUMMARY.md, 02-03-SUMMARY.md, 02-04-SUMMARY.md]
 started: 2026-02-16T20:00:00Z
@@ -59,7 +59,10 @@ skipped: 2
   reason: "User reported: All 48 visible slots show action: idle even though Discharging slots count is 13 and Next Discharging Slot shows Feb 17 07:45. The 48-slot cap shows only the beginning of the schedule window, cutting off before the discharge slots."
   severity: major
   test: 7
-  root_cause: ""
-  artifacts: []
-  missing: []
+  root_cause: "BatteryScheduleSensor.extra_state_attributes in sensor.py line 163 slices data.schedule[:48] from index 0. With today+tomorrow prices, the first 48 slots cover overnight/morning idle periods. Discharge slots at afternoon/next-day peaks fall beyond index 48 and are invisible."
+  artifacts:
+    - path: "custom_components/energy_manager/sensor.py"
+      issue: "extra_state_attributes uses data.schedule[:48] from index 0, cutting off late-schedule charge/discharge slots"
+  missing:
+    - "Filter schedule to show non-idle slots (or start from now) so charge/discharge actions are always visible within the 48-slot cap"
   debug_session: ""
