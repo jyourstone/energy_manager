@@ -157,7 +157,7 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
             schedule_list.append({
                 "start": slot.start.isoformat(),
                 "end": slot.end.isoformat(),
-                "price": slot.price,
+                "price": round(slot.price, 4),
                 "action": slot.action,
             })
 
@@ -195,6 +195,11 @@ class NextChargeSensor(EnergyManagerEntity, SensorEntity):
         """
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_next_charging_slot"
+
+    @property
+    def available(self) -> bool:
+        """Return True when coordinator has data (distinguishes no-slots from error)."""
+        return self.coordinator.data is not None
 
     @property
     def native_value(self) -> datetime | None:
@@ -244,6 +249,11 @@ class NextDischargeSensor(EnergyManagerEntity, SensorEntity):
         """
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_next_discharging_slot"
+
+    @property
+    def available(self) -> bool:
+        """Return True when coordinator has data (distinguishes no-slots from error)."""
+        return self.coordinator.data is not None
 
     @property
     def native_value(self) -> datetime | None:

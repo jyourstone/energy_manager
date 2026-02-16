@@ -457,7 +457,7 @@ def _serialize_slot(slot) -> dict | None:
     return {
         "start": slot.start.isoformat(),
         "end": slot.end.isoformat(),
-        "price": slot.price,
+        "price": round(slot.price, 4),
         "action": slot.action,
     }
 
