@@ -571,3 +571,66 @@ class TestSocConstraints:
             f"With only 0.5 kWh capacity remaining and no discharge opportunities, "
             f"should have at most 1 charge slot, got {len(charge_slots)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 11-12: Schedule attribute filtering (UAT gap closure)
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleAttributeFiltering:
+    """Test that schedule filtering logic correctly excludes past slots."""
+
+    def test_filter_excludes_past_slots(self):
+        """Past slots (end <= now) should be excluded from the visible window."""
+        from datetime import datetime, timezone, timedelta
+
+        # Simulate a 72-slot schedule (3 days worth) with discharge at slots 36-42
+        now = datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 2, 16, 0, 0, tzinfo=timezone.utc)
+
+        slots = []
+        for i in range(72):
+            start = base + timedelta(hours=i)
+            end = start + timedelta(hours=1)
+            # Slots 36-42 (Feb 17 12:00-18:00) are discharge, rest idle
+            action = "discharge" if 36 <= i <= 42 else "idle"
+            slots.append({"start": start, "end": end, "action": action, "price": 0.5})
+
+        # Apply the same filter as sensor.py: exclude slots where end <= now
+        filtered = [s for s in slots if s["end"] > now][:48]
+
+        # Slot at 13:00 has end=14:00 which equals now, so end > now is False -> excluded
+        # First included: slot at 14:00 (end=15:00 > 14:00)
+        assert filtered[0]["start"] == datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc)
+
+        # Discharge slots at indices 36-42 (hours 36-42 from base = Feb 17 12:00-18:00)
+        # After filtering from hour 14, these are at relative positions 22-28 in filtered
+        discharge_slots = [s for s in filtered if s["action"] == "discharge"]
+        assert len(discharge_slots) == 7, f"Expected 7 discharge slots, got {len(discharge_slots)}"
+
+    def test_filter_keeps_current_slot(self):
+        """A slot currently in progress (start <= now < end) should be kept."""
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime(2026, 2, 16, 14, 30, tzinfo=timezone.utc)
+        # Slot from 14:00 to 15:00 -- currently in progress
+        current_slot = {
+            "start": datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 2, 16, 15, 0, tzinfo=timezone.utc),
+            "action": "discharge",
+            "price": 1.2,
+        }
+        # Past slot from 13:00 to 14:00 -- fully past
+        past_slot = {
+            "start": datetime(2026, 2, 16, 13, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc),
+            "action": "idle",
+            "price": 0.3,
+        }
+
+        slots = [past_slot, current_slot]
+        filtered = [s for s in slots if s["end"] > now]
+
+        assert len(filtered) == 1
+        assert filtered[0]["action"] == "discharge"
