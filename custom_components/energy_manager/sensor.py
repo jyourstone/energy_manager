@@ -18,6 +18,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .coordinator import BatteryScheduleData, EnergyManagerConfigEntry, PriceData
 from .entity import EnergyManagerEntity
@@ -151,9 +152,14 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
         if data is None:
             return {}
 
-        # Serialize schedule slots (max 48)
+        # Filter out past slots, then cap at 48 for compact state.
+        # This ensures the visible window starts from now, so charge/discharge
+        # slots later in the schedule are not cut off by early idle slots.
+        now = dt_util.utcnow()
+        filtered = [s for s in data.schedule if s.end > now][:48]
+
         schedule_list = []
-        for slot in data.schedule[:48]:
+        for slot in filtered:
             schedule_list.append({
                 "start": slot.start.isoformat(),
                 "end": slot.end.isoformat(),
