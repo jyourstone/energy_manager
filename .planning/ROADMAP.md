@@ -56,7 +56,7 @@ Plans:
 - [x] 02-01-PLAN.md -- TDD: Pure battery scheduling algorithm (peak grouping, virtual energy tracking)
 - [x] 02-02-PLAN.md -- BatteryScheduleCoordinator, number entities, integration plumbing
 - [x] 02-03-PLAN.md -- Battery schedule sensors, config flow Forecast.Solar step, translations
-- [ ] 02-04-PLAN.md -- UAT gap closure: float precision, sensor availability, defaults, kW unit
+- [x] 02-04-PLAN.md -- UAT gap closure: float precision, sensor availability, defaults, kW unit
 
 ### Phase 3: EMS Controller
 **Goal**: The integration actively controls the battery EMS mode in real time based on the schedule, with fuse protection ensuring safe operation across all connected devices
@@ -130,7 +130,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Infrastructure + Price Foundation | 5/5 | Complete | 2026-02-15 |
-| 2. Home Battery Schedule | 3/4 | UAT gap closure | - |
+| 2. Home Battery Schedule | 4/4 | Complete | 2026-02-16 |
 | 3. EMS Controller | 0/0 | Not started | - |
 | 4. Car Charging | 0/0 | Not started | - |
 | 5. Easee Charger Control | 0/0 | Not started | - |
@@ -138,4 +138,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-16 (Phase 2 UAT gap closure planned)*
+*Last updated: 2026-02-16 (Phase 2 complete)*
