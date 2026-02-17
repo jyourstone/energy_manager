@@ -69,11 +69,12 @@ Plans:
   3. Fuse protection dynamically limits battery charging power when phase load approaches the configured fuse rating -- calculated amp values are always clamped to safe range
   4. When a car is scheduled to charge and plugged in, battery charging pauses automatically to free fuse capacity
   5. After sending a mode-change command, the integration reads back actual device state to verify the command took effect
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- TDD: Pure EMS controller calculations (mode selection, fuse math, amp clamping, car priority, PV hysteresis)
+- [ ] 03-02-PLAN.md -- EMSCoordinator, config flow EMS step, auto-detection, command sending and verification
+- [ ] 03-03-PLAN.md -- EMS status sensor, __init__.py wiring, translations
 
 ### Phase 4: Car Charging
 **Goal**: Users can configure per-car charging schedules with departure times and target SOC, and the integration selects the cheapest charging slots automatically
