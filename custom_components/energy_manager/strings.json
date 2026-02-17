@@ -39,6 +39,26 @@
           "forecast_solar_entity": "Optional Forecast.Solar sensor for solar-aware scheduling. Leave empty if not available."
         }
       },
+      "ems": {
+        "title": "EMS Control",
+        "description": "Configure fuse protection and battery control entities. Control entities are auto-detected from SigenStor.",
+        "data": {
+          "fuse_rating": "Fuse rating (A)",
+          "ems_select_entity": "EMS mode select entity",
+          "charge_limit_entity": "Max charging limit entity",
+          "discharge_limit_entity": "Max discharging limit entity",
+          "l_current_entity": "L-current sensor",
+          "pv_power_entity": "PV power sensor"
+        },
+        "data_description": {
+          "fuse_rating": "Your main fuse rating in amps. Used to calculate safe charging limits.",
+          "ems_select_entity": "Select entity controlling the SigenStor EMS mode.",
+          "charge_limit_entity": "Number entity for max battery charging limit (kW).",
+          "discharge_limit_entity": "Number entity for max battery discharging limit (kW).",
+          "l_current_entity": "Sensor showing the highest phase current (A). Used for fuse protection.",
+          "pv_power_entity": "Sensor showing current PV/solar power output (W)."
+        }
+      },
       "ev": {
         "title": "EV Charging",
         "description": "Configure your EV charger. Entities are auto-detected from Easee.",

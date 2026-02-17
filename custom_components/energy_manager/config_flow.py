@@ -4,6 +4,7 @@ Multi-step wizard:
   Step 1 (user)    — Nordpool sensor selection with auto-detection
   Step 2 (modules) — Enable/disable Home Battery and EV Charging modules
   Step 3 (battery) — Home Battery entity config (conditional, auto-detected SigenStor)
+  Step 3b (ems)    — EMS control config: fuse rating + control entities (after battery)
   Step 4 (ev)      — EV Charging entity config (conditional, auto-detected Easee)
 
 Plus:
@@ -51,6 +52,7 @@ from .auto_detect import (
     find_car_integrations,
     find_easee_entities,
     find_forecast_solar_entities,
+    find_sigenstor_ems_entities,
     find_sigenstor_entities,
 )
 from .const import (
@@ -60,17 +62,26 @@ from .const import (
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_CAR_NAME,
+    CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
+    CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_EMS_SELECT_ENTITY,
     CONF_EV_ENABLED,
     CONF_FORECAST_SOLAR_ENTITY,
+    CONF_FUSE_RATING,
     CONF_HOME_PLUGGED_ENTITY,
+    CONF_L_CURRENT_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
+    CONF_PV_POWER_ENTITY,
     CONF_SOC_ENTITY,
     CONFIG_MINOR_VERSION,
     CONFIG_VERSION,
+    DEFAULT_FUSE_RATING,
     DOMAIN,
+    MAX_FUSE_RATING,
+    MIN_FUSE_RATING,
     SUBENTRY_TYPE_CAR,
 )
 from .nordpool_adapter import detect_nordpool_type, find_all_nordpool_sensors
@@ -233,9 +244,8 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_FORECAST_SOLAR_ENTITY, ""
             )
 
-            if self._data.get(CONF_EV_ENABLED):
-                return await self.async_step_ev()
-            return self._create_entry()
+            # Route to EMS step (battery is enabled, so EMS config is relevant)
+            return await self.async_step_ems()
 
         # Auto-detect SigenStor entities and Forecast.Solar
         detected = find_sigenstor_entities(self.hass)
@@ -267,6 +277,80 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="battery",
+            data_schema=schema,
+        )
+
+    async def async_step_ems(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 3b: EMS Control Config — fuse rating and control entity selection.
+
+        Appears after the battery step and before the EV step.
+        Auto-detects SigenStor EMS control entities.
+        """
+        if user_input is not None:
+            self._data[CONF_FUSE_RATING] = user_input.get(
+                CONF_FUSE_RATING, DEFAULT_FUSE_RATING
+            )
+            self._data[CONF_EMS_SELECT_ENTITY] = user_input.get(
+                CONF_EMS_SELECT_ENTITY, ""
+            )
+            self._data[CONF_CHARGE_LIMIT_ENTITY] = user_input.get(
+                CONF_CHARGE_LIMIT_ENTITY, ""
+            )
+            self._data[CONF_DISCHARGE_LIMIT_ENTITY] = user_input.get(
+                CONF_DISCHARGE_LIMIT_ENTITY, ""
+            )
+            self._data[CONF_L_CURRENT_ENTITY] = user_input.get(
+                CONF_L_CURRENT_ENTITY, ""
+            )
+            self._data[CONF_PV_POWER_ENTITY] = user_input.get(
+                CONF_PV_POWER_ENTITY, ""
+            )
+
+            if self._data.get(CONF_EV_ENABLED):
+                return await self.async_step_ev()
+            return self._create_entry()
+
+        # Auto-detect SigenStor EMS entities
+        detected = find_sigenstor_ems_entities(self.hass)
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_FUSE_RATING, default=DEFAULT_FUSE_RATING
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_FUSE_RATING,
+                        max=MAX_FUSE_RATING,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(CONF_EMS_SELECT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="select")
+                ),
+                vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="number")
+                ),
+                vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="number")
+                ),
+                vol.Optional(CONF_L_CURRENT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+            }
+        )
+
+        # Pre-fill with auto-detected values
+        if detected:
+            schema = _add_suggested_values(schema, detected)
+
+        return self.async_show_form(
+            step_id="ems",
             data_schema=schema,
         )
 
@@ -329,6 +413,16 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_FORECAST_SOLAR_ENTITY: self._data.get(
                 CONF_FORECAST_SOLAR_ENTITY, ""
             ),
+            CONF_FUSE_RATING: self._data.get(CONF_FUSE_RATING, DEFAULT_FUSE_RATING),
+            CONF_EMS_SELECT_ENTITY: self._data.get(CONF_EMS_SELECT_ENTITY, ""),
+            CONF_CHARGE_LIMIT_ENTITY: self._data.get(
+                CONF_CHARGE_LIMIT_ENTITY, ""
+            ),
+            CONF_DISCHARGE_LIMIT_ENTITY: self._data.get(
+                CONF_DISCHARGE_LIMIT_ENTITY, ""
+            ),
+            CONF_L_CURRENT_ENTITY: self._data.get(CONF_L_CURRENT_ENTITY, ""),
+            CONF_PV_POWER_ENTITY: self._data.get(CONF_PV_POWER_ENTITY, ""),
             CONF_CHARGER_STATUS_ENTITY: self._data.get(
                 CONF_CHARGER_STATUS_ENTITY, ""
             ),

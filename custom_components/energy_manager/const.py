@@ -80,3 +80,32 @@ DEFAULT_MAX_SOC_PCT = 95.0
 
 # Default battery capacity if not configured
 DEFAULT_BATTERY_CAPACITY_KWH = 10.0
+
+# --- EMS Controller configuration ---
+
+CONF_FUSE_RATING = "fuse_rating"
+CONF_EMS_SELECT_ENTITY = "ems_select_entity"
+CONF_CHARGE_LIMIT_ENTITY = "charge_limit_entity"
+CONF_DISCHARGE_LIMIT_ENTITY = "discharge_limit_entity"
+CONF_L_CURRENT_ENTITY = "l_current_entity"
+CONF_PV_POWER_ENTITY = "pv_power_entity"
+
+# EMS defaults
+DEFAULT_FUSE_RATING = 20  # Amps
+DEFAULT_SAFETY_BUFFER_AMPS = 2.0
+DEFAULT_PV_THRESHOLD_W = 500
+MIN_FUSE_RATING = 10
+MAX_FUSE_RATING = 63
+
+# EMS update interval (seconds) -- faster than schedule for real-time control
+EMS_UPDATE_INTERVAL_SECONDS = 30
+
+# EMS mode mapping: internal mode -> SigenStor select option string
+EMS_MODE_MAP = {
+    "command_charging": "Command Charging (PV First)",
+    "max_self_consumption": "Maximum Self Consumption",
+    "standby": "Standby",
+}
+
+# Maximum safe charging limit (kW) -- hardware absolute limit
+MAX_CHARGE_LIMIT_KW = 15.0
