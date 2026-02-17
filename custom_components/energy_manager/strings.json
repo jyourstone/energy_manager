@@ -138,6 +138,9 @@
       },
       "next_discharging_slot": {
         "name": "Next Discharging Slot"
+      },
+      "ems_status": {
+        "name": "EMS Status"
       }
     },
     "number": {
