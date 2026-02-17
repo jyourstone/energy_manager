@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 2 complete (all 5 plans including schedule attribute filtering) — ready for Phase 3 (EMS Controller)
+**Current focus:** Phase 3 in progress -- EMS Controller (pure calculation module complete, coordinator next)
 
 ## Current Position
 
-Phase: 2 of 6 (Home Battery Schedule) -- COMPLETE
-Plan: 5 of 5 in current phase
-Status: Phase 2 Complete — all 5 plans executed (scheduler, coordinator, sensors, UAT gap closures)
-Last activity: 2026-02-16 -- Plan 02-05 complete: UAT gap closure (schedule attribute time filtering)
+Phase: 3 of 6 (EMS Controller)
+Plan: 1 of 3 in current phase
+Status: Plan 03-01 complete -- pure EMS calculation module with 27 tests
+Last activity: 2026-02-17 -- Plan 03-01 complete: TDD EMS controller calculations
 
-Progress: [####......] 40%
+Progress: [#####.....] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
+- Total plans completed: 11
 - Average duration: 3min
-- Total execution time: 0.53 hours
+- Total execution time: 0.58 hours
 
 **By Phase:**
 
@@ -37,9 +37,10 @@ Progress: [####......] 40%
 | Phase 02 P03 | 3min | 2 tasks | 5 files |
 | Phase 02 P04 | 2min | 2 tasks | 4 files |
 | Phase 02 P05 | 2min | 2 tasks | 2 files |
+| Phase 03 P01 | 3min | 2 tasks | 2 files |
 
 **Recent Trend:**
-- Last 5 plans: 11min, 3min, 3min, 2min, 2min
+- Last 5 plans: 3min, 3min, 2min, 2min, 3min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -81,6 +82,11 @@ Recent decisions affecting current work:
 - [Phase 02]: kW-to-W conversion at entity-coordinator boundary; coordinator stays in watts for scheduler
 - [Phase 02]: available() property on NextCharge/NextDischarge returns coordinator.data is not None (green when data exists, red on error)
 - [Phase 02]: Schedule attributes filter by slot.end > now before 48-slot cap (keeps in-progress slots, excludes fully past ones)
+- [Phase 03]: Pure Python ems_controller.py with zero HA imports for independent testability (same pattern as battery_scheduler.py)
+- [Phase 03]: PV opportunistic charging triggers on standby OR max_self_consumption modes
+- [Phase 03]: PVHysteresisTracker uses separate activate/deactivate thresholds (500W/300W) for hysteresis band
+- [Phase 03]: Car priority override only affects command_charging mode (discharge/standby unaffected)
+- [Phase 03]: Safety-first processing order: fuse headroom before mode decisions, car priority before charge limit
 
 ### Pending Todos
 
@@ -94,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-16
-Stopped at: Completed 02-05-PLAN.md (UAT Gap Closure: schedule attribute filtering) -- Phase 2 COMPLETE (all 5 plans)
+Last session: 2026-02-17
+Stopped at: Completed 03-01-PLAN.md (TDD EMS controller calculations)
 Resume file: None
