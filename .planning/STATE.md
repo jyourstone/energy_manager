@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 3 in progress -- EMS Controller (pure calculation module complete, coordinator next)
+**Current focus:** Phase 3 in progress -- EMS Controller (coordinator and config flow complete, sensors next)
 
 ## Current Position
 
 Phase: 3 of 6 (EMS Controller)
-Plan: 1 of 3 in current phase
-Status: Plan 03-01 complete -- pure EMS calculation module with 27 tests
-Last activity: 2026-02-17 -- Plan 03-01 complete: TDD EMS controller calculations
+Plan: 2 of 3 in current phase
+Status: Plan 03-02 complete -- EMSCoordinator with command sending, config flow EMS step
+Last activity: 2026-02-17 -- Plan 03-02 complete: EMSCoordinator and config flow
 
 Progress: [#####.....] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 11
+- Total plans completed: 12
 - Average duration: 3min
-- Total execution time: 0.58 hours
+- Total execution time: 0.65 hours
 
 **By Phase:**
 
@@ -38,9 +38,10 @@ Progress: [#####.....] 50%
 | Phase 02 P04 | 2min | 2 tasks | 4 files |
 | Phase 02 P05 | 2min | 2 tasks | 2 files |
 | Phase 03 P01 | 3min | 2 tasks | 2 files |
+| Phase 03 P02 | 4min | 2 tasks | 5 files |
 
 **Recent Trend:**
-- Last 5 plans: 3min, 3min, 2min, 2min, 3min
+- Last 5 plans: 2min, 2min, 3min, 3min, 4min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -87,6 +88,11 @@ Recent decisions affecting current work:
 - [Phase 03]: PVHysteresisTracker uses separate activate/deactivate thresholds (500W/300W) for hysteresis band
 - [Phase 03]: Car priority override only affects command_charging mode (discharge/standby unaffected)
 - [Phase 03]: Safety-first processing order: fuse headroom before mode decisions, car priority before charge limit
+- [Phase 03]: Fuse rating in config flow (not NumberEntity) -- hardware constant that should not change casually
+- [Phase 03]: EMS config flow as separate step between battery and EV (not merged into battery step)
+- [Phase 03]: L-current fallback scan across ALL entities (not just SigenStor) for template sensor support
+- [Phase 03]: Car plugged-in detection via Easee charger status (fast local) not car integration (slow cloud)
+- [Phase 03]: Safe command ordering: limit-first when switching to charge mode, mode-first when switching away
 
 ### Pending Todos
 
@@ -101,5 +107,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 03-01-PLAN.md (TDD EMS controller calculations)
+Stopped at: Completed 03-02-PLAN.md (EMSCoordinator and config flow)
 Resume file: None
