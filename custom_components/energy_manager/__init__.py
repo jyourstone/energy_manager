@@ -24,6 +24,7 @@ from .const import (
 )
 from .coordinator import (
     BatteryScheduleCoordinator,
+    EMSCoordinator,
     EnergyManagerConfigEntry,
     EnergyManagerData,
     PriceCoordinator,
@@ -64,10 +65,17 @@ async def async_setup_entry(
         )
         await battery_coordinator.async_config_entry_first_refresh()
 
+    # Phase 3: EMS coordinator (if battery module enabled and battery coordinator exists)
+    ems_coordinator = None
+    if battery_coordinator is not None:
+        ems_coordinator = EMSCoordinator(hass, entry, battery_coordinator)
+        await ems_coordinator.async_config_entry_first_refresh()
+
     # Store typed runtime data on the config entry
     entry.runtime_data = EnergyManagerData(
         price_coordinator=price_coordinator,
         battery_coordinator=battery_coordinator,
+        ems_coordinator=ems_coordinator,
         modules_enabled={
             MODULE_BATTERY: entry.options.get(CONF_BATTERY_ENABLED, False),
             MODULE_EV: entry.options.get(CONF_EV_ENABLED, False),

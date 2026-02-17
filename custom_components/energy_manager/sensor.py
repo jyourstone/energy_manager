@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .coordinator import BatteryScheduleData, EnergyManagerConfigEntry, PriceData
+from .coordinator import BatteryScheduleData, EMSData, EnergyManagerConfigEntry, PriceData
 from .entity import EnergyManagerEntity
 
 
@@ -53,6 +53,11 @@ async def async_setup_entry(
             NextChargeSensor(battery_coordinator, entry),
             NextDischargeSensor(battery_coordinator, entry),
         ])
+
+    # EMS status sensor (when EMS coordinator exists)
+    ems_coordinator = entry.runtime_data.ems_coordinator
+    if ems_coordinator is not None:
+        entities.append(EMSStatusSensor(ems_coordinator, entry))
 
     async_add_entities(entities)
 
@@ -283,3 +288,56 @@ class NextDischargeSensor(EnergyManagerEntity, SensorEntity):
                 "end": slot["end"],
             }
         return {}
+
+
+class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
+    """Sensor showing EMS controller status.
+
+    State is the current EMS mode. Attributes expose fuse headroom,
+    target mode, override reason, and verification status.
+    """
+
+    _attr_translation_key = "ems_status"
+    _attr_icon = "mdi:lightning-bolt"
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the EMS status sensor.
+
+        Args:
+            coordinator: The EMSCoordinator providing EMS state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_ems_status"
+
+    @property
+    def native_value(self) -> str:
+        """Return the current EMS mode."""
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return "unknown"
+        return data.current_mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return EMS control attributes.
+
+        Exposes target mode, charge limit, fuse headroom, override reason,
+        command verification status, and active override flags.
+        """
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "target_mode": data.target_mode,
+            "charge_limit_kw": round(data.charge_limit_kw, 2),
+            "fuse_headroom_amps": round(data.fuse_headroom_amps, 1),
+            "override_reason": data.override_reason,
+            "command_verified": data.command_verified,
+            "car_override_active": data.car_override_active,
+            "pv_charging_active": data.pv_charging_active,
+        }
