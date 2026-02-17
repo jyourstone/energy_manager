@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 3 in progress -- EMS Controller (coordinator and config flow complete, sensors next)
+**Current focus:** Phase 3 complete -- EMS Controller (all 3 plans done: pure module, coordinator+config, sensor+wiring)
 
 ## Current Position
 
 Phase: 3 of 6 (EMS Controller)
-Plan: 2 of 3 in current phase
-Status: Plan 03-02 complete -- EMSCoordinator with command sending, config flow EMS step
-Last activity: 2026-02-17 -- Plan 03-02 complete: EMSCoordinator and config flow
+Plan: 3 of 3 in current phase (PHASE COMPLETE)
+Status: Phase 03 complete -- All EMS plans done, ready for Phase 04
+Last activity: 2026-02-17 -- Plan 03-03 complete: EMS sensor and lifecycle wiring
 
-Progress: [#####.....] 50%
+Progress: [######....] 58%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
+- Total plans completed: 13
 - Average duration: 3min
-- Total execution time: 0.65 hours
+- Total execution time: 0.68 hours
 
 **By Phase:**
 
@@ -39,9 +39,10 @@ Progress: [#####.....] 50%
 | Phase 02 P05 | 2min | 2 tasks | 2 files |
 | Phase 03 P01 | 3min | 2 tasks | 2 files |
 | Phase 03 P02 | 4min | 2 tasks | 5 files |
+| Phase 03 P03 | 2min | 2 tasks | 4 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 3min, 3min, 4min
+- Last 5 plans: 2min, 3min, 3min, 4min, 2min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -93,6 +94,8 @@ Recent decisions affecting current work:
 - [Phase 03]: L-current fallback scan across ALL entities (not just SigenStor) for template sensor support
 - [Phase 03]: Car plugged-in detection via Easee charger status (fast local) not car integration (slow cloud)
 - [Phase 03]: Safe command ordering: limit-first when switching to charge mode, mode-first when switching away
+- [Phase 03]: EMSCoordinator only created when battery_coordinator exists (not via separate toggle -- EMS inherent to battery module)
+- [Phase 03]: EMS sensor conditional guard matches battery sensor pattern (coordinator is not None check)
 
 ### Pending Todos
 
@@ -107,5 +110,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 03-02-PLAN.md (EMSCoordinator and config flow)
+Stopped at: Completed 03-03-PLAN.md (EMS sensor and lifecycle wiring) -- Phase 03 complete
 Resume file: None
