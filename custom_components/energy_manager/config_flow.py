@@ -331,10 +331,10 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                     EntitySelectorConfig(domain="select")
                 ),
                 vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="number")
+                    EntitySelectorConfig(domain=["sensor", "number"])
                 ),
                 vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="number")
+                    EntitySelectorConfig(domain=["sensor", "number"])
                 ),
                 vol.Optional(CONF_L_CURRENT_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")

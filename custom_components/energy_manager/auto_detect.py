@@ -161,15 +161,19 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     entity_entry.entity_id,
                 )
 
-            # Look for max charging limit number entity
+            # Look for max charging limit entity (number or sensor domain)
             if (
-                entity_entry.domain == "number"
+                entity_entry.domain in ("number", "sensor")
                 and CONF_CHARGE_LIMIT_ENTITY not in result
                 and (
                     "max_charging_limit" in entity_id_lower
                     or "max_charging_limit" in unique_id_lower
                     or "ess_max_charging" in entity_id_lower
                     or "ess_max_charging" in unique_id_lower
+                    or "ess_rated_charging" in entity_id_lower
+                    or "ess_rated_charging" in unique_id_lower
+                    or "rated_charging_power" in entity_id_lower
+                    or "rated_charging_power" in unique_id_lower
                 )
             ):
                 result[CONF_CHARGE_LIMIT_ENTITY] = entity_entry.entity_id
@@ -178,15 +182,19 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     entity_entry.entity_id,
                 )
 
-            # Look for max discharging limit number entity
+            # Look for max discharging limit entity (number or sensor domain)
             if (
-                entity_entry.domain == "number"
+                entity_entry.domain in ("number", "sensor")
                 and CONF_DISCHARGE_LIMIT_ENTITY not in result
                 and (
                     "max_discharging_limit" in entity_id_lower
                     or "max_discharging_limit" in unique_id_lower
                     or "ess_max_discharging" in entity_id_lower
                     or "ess_max_discharging" in unique_id_lower
+                    or "ess_rated_discharging" in entity_id_lower
+                    or "ess_rated_discharging" in unique_id_lower
+                    or "rated_discharging_power" in entity_id_lower
+                    or "rated_discharging_power" in unique_id_lower
                 )
             ):
                 result[CONF_DISCHARGE_LIMIT_ENTITY] = entity_entry.entity_id
@@ -206,6 +214,9 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     or "phase_current" in unique_id_lower
                     or "l_current" in entity_id_lower
                     or "l_current" in unique_id_lower
+                    or "phase_a_active_power" in entity_id_lower
+                    or "phase_active_power" in entity_id_lower
+                    or "grid_phase" in entity_id_lower
                 )
             ):
                 result[CONF_L_CURRENT_ENTITY] = entity_entry.entity_id
@@ -243,6 +254,8 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
             if (
                 "highest_l_current" in entity_id_lower
                 or "l_current" in entity_id_lower
+                or "phase_a_active_power" in entity_id_lower
+                or "grid_phase" in entity_id_lower
             ):
                 result[CONF_L_CURRENT_ENTITY] = entity_entry.entity_id
                 _LOGGER.debug(
@@ -250,6 +263,39 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     entity_entry.entity_id,
                 )
                 break
+
+    # Fallback: scan ALL entities for PV power sensor
+    if CONF_PV_POWER_ENTITY not in result:
+        all_entities = registry.entities
+        pv_candidates: list[str] = []
+        for entity_entry in all_entities.values():
+            if entity_entry.domain != "sensor":
+                continue
+            entity_id_lower = entity_entry.entity_id.lower()
+            if "pv_power" in entity_id_lower:
+                pv_candidates.append(entity_entry.entity_id)
+
+        if pv_candidates:
+            # Prefer entity_id containing "sigen"
+            sigen_candidates = [
+                e for e in pv_candidates if "sigen" in e.lower()
+            ]
+            if sigen_candidates:
+                pv_candidates = sigen_candidates
+
+            # Prefer "plant" over "inverter" (plant-level = total after clipping)
+            plant_candidates = [
+                e for e in pv_candidates if "plant" in e.lower()
+            ]
+            if plant_candidates:
+                chosen = plant_candidates[0]
+            else:
+                chosen = pv_candidates[0]
+
+            result[CONF_PV_POWER_ENTITY] = chosen
+            _LOGGER.debug(
+                "Found PV power entity (fallback): %s", chosen
+            )
 
     if result:
         _LOGGER.debug("Auto-detected EMS entities: %s", result)
