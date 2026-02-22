@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 3 complete -- EMS Controller (all 3 plans done: pure module, coordinator+config, sensor+wiring)
+**Current focus:** Phase 3 complete -- EMS Controller (all 4 plans done: pure module, coordinator+config, sensor+wiring, UAT gap closure)
 
 ## Current Position
 
 Phase: 3 of 6 (EMS Controller)
-Plan: 3 of 3 in current phase (PHASE COMPLETE)
-Status: Phase 03 complete -- All EMS plans done, ready for Phase 04
-Last activity: 2026-02-17 -- Plan 03-03 complete: EMS sensor and lifecycle wiring
+Plan: 4 of 4 in current phase (PHASE COMPLETE)
+Status: Phase 03 complete -- All EMS plans done including UAT gap closure, ready for Phase 04
+Last activity: 2026-02-22 -- Plan 03-04 complete: UAT gap closure (auto-detection + fuse headroom fixes)
 
 Progress: [######....] 58%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 13
+- Total plans completed: 14
 - Average duration: 3min
-- Total execution time: 0.68 hours
+- Total execution time: 0.73 hours
 
 **By Phase:**
 
@@ -40,9 +40,10 @@ Progress: [######....] 58%
 | Phase 03 P01 | 3min | 2 tasks | 2 files |
 | Phase 03 P02 | 4min | 2 tasks | 5 files |
 | Phase 03 P03 | 2min | 2 tasks | 4 files |
+| Phase 03 P04 | 3min | 2 tasks | 4 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 3min, 3min, 4min, 2min
+- Last 5 plans: 3min, 3min, 4min, 2min, 3min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -96,6 +97,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Safe command ordering: limit-first when switching to charge mode, mode-first when switching away
 - [Phase 03]: EMSCoordinator only created when battery_coordinator exists (not via separate toggle -- EMS inherent to battery module)
 - [Phase 03]: EMS sensor conditional guard matches battery sensor pattern (coordinator is not None check)
+- [Phase 03]: Accept both sensor and number domains for charge/discharge limit auto-detection (SigenStor firmware variant)
+- [Phase 03]: L-current fallback includes phase_a_active_power (kW power, approximate but better than 0A assumption)
+- [Phase 03]: Global PV power fallback prefers plant-level over inverter-level entity (post-clipping total more accurate)
 
 ### Pending Todos
 
@@ -109,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-17
-Stopped at: Completed 03-03-PLAN.md (EMS sensor and lifecycle wiring) -- Phase 03 complete
+Last session: 2026-02-22
+Stopped at: Completed 03-04-PLAN.md (UAT gap closure: auto-detection + fuse headroom fixes) -- Phase 03 fully complete
 Resume file: None
