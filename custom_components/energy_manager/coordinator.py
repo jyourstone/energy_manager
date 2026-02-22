@@ -591,6 +591,11 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     self._handle_fuse_update,
                 )
             )
+        else:
+            _LOGGER.warning(
+                "L-current entity not configured -- fuse headroom will assume 0A load. "
+                "Configure an L-current sensor in the EMS settings for dynamic fuse protection."
+            )
 
         # Event-driven: react immediately to charger status changes
         if self._charger_status_entity:
