@@ -147,6 +147,9 @@
       },
       "ems_status": {
         "name": "EMS Status"
+      },
+      "car_schedule": {
+        "name": "Car Charging Schedule"
       }
     },
     "number": {
@@ -158,6 +161,17 @@
       },
       "max_charge_power": {
         "name": "Max Charging Power"
+      },
+      "car_target_soc": {
+        "name": "Target SOC"
+      },
+      "car_max_charge_power": {
+        "name": "Max Charge Power"
+      }
+    },
+    "time": {
+      "departure_time": {
+        "name": "Departure Time"
       }
     }
   }
