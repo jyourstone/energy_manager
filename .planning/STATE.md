@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 3 complete -- EMS Controller (all 5 plans done: pure module, coordinator+config, sensor+wiring, UAT gap closure, per-phase fuse protection)
+**Current focus:** Phase 4 in progress -- Car Charging (2 of 3 plans complete: scheduler TDD, coordinator+entity)
 
 ## Current Position
 
 Phase: 4 of 6 (Car Charging)
-Plan: 1 of 3 in current phase
-Status: Plan 04-01 complete -- Pure Python car charging scheduler with TDD
-Last activity: 2026-02-23 -- Plan 04-01 complete: Car charging schedule algorithm (TDD)
+Plan: 2 of 3 in current phase
+Status: Plan 04-02 complete -- CarChargingCoordinator, CarEntity base, __init__.py wiring
+Last activity: 2026-02-23 -- Plan 04-02 complete: Car charging coordinator and entity base
 
-Progress: [######=#..] 67%
+Progress: [########=.] 75%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
+- Total plans completed: 17
 - Average duration: 3min
-- Total execution time: 0.83 hours
+- Total execution time: 0.90 hours
 
 **By Phase:**
 
@@ -43,9 +43,10 @@ Progress: [######=#..] 67%
 | Phase 03 P04 | 3min | 2 tasks | 4 files |
 | Phase 03 P05 | 3min | 2 tasks | 7 files |
 | Phase 04 P01 | 3min | 2 tasks | 2 files |
+| Phase 04 P02 | 4min | 2 tasks | 4 files |
 
 **Recent Trend:**
-- Last 5 plans: 4min, 2min, 3min, 3min, 3min
+- Last 5 plans: 2min, 3min, 3min, 3min, 4min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -108,6 +109,11 @@ Recent decisions affecting current work:
 - [Phase 04]: Pure Python car_charging_scheduler.py follows battery_scheduler.py pattern (zero HA imports, frozen dataclasses)
 - [Phase 04]: Slot window filter uses start >= now (excludes partially-elapsed slots from charge selection)
 - [Phase 04]: solar_surplus_available flag marks all charge slots as solar_charge when True (Phase 5 handles actual PV routing)
+- [Phase 04]: CarChargingCoordinator reads charger_status_entity from entry.options for fallback detection (shared with EMSCoordinator)
+- [Phase 04]: Per-coordinator SOC staleness tracking (_soc_last_updated) for independent fallback evaluation per car
+- [Phase 04]: CarEntity uses TYPE_CHECKING import for CarChargingCoordinator to avoid circular imports
+- [Phase 04]: departure_time defaults to 07:00 local; rolls to tomorrow when departure <= now
+- [Phase 04]: solar_surplus_available always False in Phase 4 (Phase 5 wires actual PV detection via PVHysteresisTracker)
 
 ### Pending Todos
 
@@ -122,5 +128,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 04-01-PLAN.md (car charging schedule algorithm TDD)
+Stopped at: Completed 04-02-PLAN.md (car charging coordinator and entity base)
 Resume file: None
