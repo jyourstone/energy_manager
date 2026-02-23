@@ -3,6 +3,8 @@
 Provides a price sensor entity that exposes current electricity price
 as state. When the battery module is enabled, also provides battery
 schedule sensors showing current state, next charge, and next discharge slots.
+When the EV module is enabled, provides per-car schedule sensors showing
+the current charging action with full schedule in attributes.
 Downstream modules access full price slot data directly from
 the PriceCoordinator via entry.runtime_data.
 """
@@ -20,8 +22,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .coordinator import BatteryScheduleData, EMSData, EnergyManagerConfigEntry, PriceData
-from .entity import EnergyManagerEntity
+from .coordinator import (
+    BatteryScheduleData,
+    CarChargingData,
+    EMSData,
+    EnergyManagerConfigEntry,
+    PriceData,
+)
+from .entity import CarEntity, EnergyManagerEntity
 
 
 async def async_setup_entry(
@@ -60,6 +68,14 @@ async def async_setup_entry(
         entities.append(EMSStatusSensor(ems_coordinator, entry))
 
     async_add_entities(entities)
+
+    # Car schedule sensors (one per car subentry)
+    for subentry_id, coordinator in entry.runtime_data.car_coordinators.items():
+        subentry = entry.subentries[subentry_id]
+        async_add_entities(
+            [CarScheduleSensor(coordinator, entry, subentry)],
+            config_subentry_id=subentry_id,
+        )
 
 
 class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
@@ -340,4 +356,75 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
             "command_verified": data.command_verified,
             "car_override_active": data.car_override_active,
             "pv_charging_active": data.pv_charging_active,
+        }
+
+
+class CarScheduleSensor(CarEntity, SensorEntity):
+    """Sensor showing current car charging schedule.
+
+    State is the current charging action: charge, idle, or solar_charge.
+    Attributes expose the full schedule (max 48 future slots), slot counts,
+    energy needed, hours needed, SOC info, and calculation metadata.
+    """
+
+    _attr_translation_key = "car_schedule"
+    _attr_icon = "mdi:car-electric"
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+        subentry,
+    ) -> None:
+        """Initialize the car schedule sensor.
+
+        Args:
+            coordinator: The CarChargingCoordinator for this car.
+            entry: The config entry this sensor belongs to.
+            subentry: The car subentry with car-specific configuration.
+        """
+        super().__init__(coordinator, entry, subentry)
+        self._attr_unique_id = f"{subentry.subentry_id}_car_schedule"
+
+    @property
+    def native_value(self) -> str:
+        """Return the current car charging action."""
+        data: CarChargingData | None = self.coordinator.data
+        if data is None:
+            return "unknown"
+        return data.current_action
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return car schedule attributes.
+
+        Includes the schedule (max 48 future slots), slot counts, energy
+        needed, hours needed, SOC info, and calculation metadata.
+        """
+        data: CarChargingData | None = self.coordinator.data
+        if data is None:
+            return {}
+
+        # Filter out past slots, then cap at 48 for compact state.
+        now = dt_util.utcnow()
+        filtered = [s for s in data.schedule if s.end > now][:48]
+
+        schedule_list = []
+        for slot in filtered:
+            schedule_list.append({
+                "start": slot.start.isoformat(),
+                "end": slot.end.isoformat(),
+                "price": round(slot.price, 4),
+                "action": slot.action,
+            })
+
+        return {
+            "schedule": schedule_list,
+            "charging_slots": data.charging_slot_count,
+            "energy_needed_kwh": round(data.energy_needed_kwh, 2),
+            "hours_needed": round(data.hours_needed, 1),
+            "current_soc": data.current_soc,
+            "target_soc": data.target_soc,
+            "is_preliminary": data.is_preliminary,
+            "last_calculated": data.last_calculated.isoformat(),
         }
