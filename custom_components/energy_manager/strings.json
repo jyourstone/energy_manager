@@ -95,13 +95,15 @@
             "car_name": "Car name",
             "battery_capacity": "Battery capacity (kWh)",
             "battery_level_entity": "Battery level sensor",
-            "home_plugged_entity": "Home and plugged in sensor"
+            "charger_connected_entity": "Car charger connected sensor",
+            "location_entity": "Car location tracker"
           },
           "data_description": {
             "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
             "battery_capacity": "Total battery capacity of the car in kWh.",
             "battery_level_entity": "Sensor showing the car's battery level (%).",
-            "home_plugged_entity": "Sensor or binary sensor indicating the car is home and plugged in."
+            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
+            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home."
           }
         },
         "reconfigure": {
@@ -111,13 +113,15 @@
             "car_name": "Car name",
             "battery_capacity": "Battery capacity (kWh)",
             "battery_level_entity": "Battery level sensor",
-            "home_plugged_entity": "Home and plugged in sensor"
+            "charger_connected_entity": "Car charger connected sensor",
+            "location_entity": "Car location tracker"
           },
           "data_description": {
             "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
             "battery_capacity": "Total battery capacity of the car in kWh.",
             "battery_level_entity": "Sensor showing the car's battery level (%).",
-            "home_plugged_entity": "Sensor or binary sensor indicating the car is home and plugged in."
+            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
+            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home."
           }
         }
       }

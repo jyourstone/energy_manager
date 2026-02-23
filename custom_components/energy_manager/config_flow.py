@@ -73,8 +73,9 @@ from .const import (
     CONF_GRID_PHASE_A_ENTITY,
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
-    CONF_HOME_PLUGGED_ENTITY,
+    CONF_CHARGER_CONNECTED_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_LOCATION_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
@@ -507,8 +508,11 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
                 vol.Optional(CONF_BATTERY_LEVEL_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
-                vol.Optional(CONF_HOME_PLUGGED_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain=["sensor", "binary_sensor"])
+                vol.Optional(CONF_CHARGER_CONNECTED_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="binary_sensor")
+                ),
+                vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="device_tracker")
                 ),
             }
         )
@@ -523,6 +527,12 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
                 suggested[CONF_BATTERY_LEVEL_ENTITY] = first_car[
                     "battery_level_entity"
                 ]
+            if first_car.get("charger_connected_entity"):
+                suggested[CONF_CHARGER_CONNECTED_ENTITY] = first_car[
+                    "charger_connected_entity"
+                ]
+            if first_car.get("location_entity"):
+                suggested[CONF_LOCATION_ENTITY] = first_car["location_entity"]
             if suggested:
                 schema = _add_suggested_values(schema, suggested)
 
@@ -555,8 +565,11 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
                 vol.Optional(CONF_BATTERY_LEVEL_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
-                vol.Optional(CONF_HOME_PLUGGED_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain=["sensor", "binary_sensor"])
+                vol.Optional(CONF_CHARGER_CONNECTED_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="binary_sensor")
+                ),
+                vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="device_tracker")
                 ),
             }
         )

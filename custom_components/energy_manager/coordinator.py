@@ -54,7 +54,8 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
-    CONF_HOME_PLUGGED_ENTITY,
+    CONF_CHARGER_CONNECTED_ENTITY,
+    CONF_LOCATION_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
@@ -1063,8 +1064,11 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self._battery_level_entity: str = subentry.data.get(
             CONF_BATTERY_LEVEL_ENTITY, ""
         )
-        self._home_plugged_entity: str = subentry.data.get(
-            CONF_HOME_PLUGGED_ENTITY, ""
+        self._charger_connected_entity: str = subentry.data.get(
+            CONF_CHARGER_CONNECTED_ENTITY, ""
+        )
+        self._location_entity: str = subentry.data.get(
+            CONF_LOCATION_ENTITY, ""
         )
 
         # Charger status entity from main entry options (shared across all cars)
@@ -1256,6 +1260,50 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
 
         # 5. Recognized car with recent SOC
         return False
+
+    def _is_home_and_plugged_in(self) -> bool:
+        """Derive whether the car is home and plugged in from available signals.
+
+        Combines up to three signals:
+        1. Easee charger status entity (from main config) -- not "disconnected"
+        2. Car's charger_connected binary sensor (from car subentry) -- "on"
+        3. Vehicle location device_tracker (from car subentry) -- "home"
+
+        Returns True if the charger reports a connected state. If the car's
+        own charger_connected sensor is available, it must also confirm.
+        If location is available, the car must be in the "home" zone.
+
+        Returns:
+            True if the car appears to be home and plugged in.
+        """
+        # Signal 1: Easee charger status (shared across all cars)
+        charger_connected = False
+        if self._charger_status_entity:
+            state = self.hass.states.get(self._charger_status_entity)
+            if state is not None and state.state not in ("unavailable", "unknown"):
+                charger_connected = state.state.lower() not in (
+                    "disconnected",
+                    "offline",
+                )
+
+        if not charger_connected:
+            return False
+
+        # Signal 2: Car's own charger_connected binary sensor (if available)
+        if self._charger_connected_entity:
+            state = self.hass.states.get(self._charger_connected_entity)
+            if state is not None and state.state not in ("unavailable", "unknown"):
+                if state.state.lower() != "on":
+                    return False
+
+        # Signal 3: Vehicle location (if available)
+        if self._location_entity:
+            state = self.hass.states.get(self._location_entity)
+            if state is not None and state.state not in ("unavailable", "unknown"):
+                if state.state.lower() != "home":
+                    return False
+
+        return True
 
 
 @dataclass
