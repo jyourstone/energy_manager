@@ -1268,6 +1268,7 @@ class EnergyManagerData:
     price_coordinator: PriceCoordinator
     battery_coordinator: BatteryScheduleCoordinator | None = None
     ems_coordinator: "EMSCoordinator | None" = None
+    car_coordinators: dict[str, CarChargingCoordinator] = field(default_factory=dict)
     modules_enabled: dict[str, bool] = field(default_factory=dict)
 
 

@@ -21,9 +21,11 @@ from .const import (
     DOMAIN,
     MODULE_BATTERY,
     MODULE_EV,
+    SUBENTRY_TYPE_CAR,
 )
 from .coordinator import (
     BatteryScheduleCoordinator,
+    CarChargingCoordinator,
     EMSCoordinator,
     EnergyManagerConfigEntry,
     EnergyManagerData,
@@ -71,11 +73,23 @@ async def async_setup_entry(
         ems_coordinator = EMSCoordinator(hass, entry, battery_coordinator)
         await ems_coordinator.async_config_entry_first_refresh()
 
+    # Phase 4: Car charging coordinators (one per car subentry, if EV module enabled)
+    car_coordinators: dict[str, CarChargingCoordinator] = {}
+    if entry.options.get(CONF_EV_ENABLED):
+        for subentry_id, subentry in entry.subentries.items():
+            if subentry.subentry_type == SUBENTRY_TYPE_CAR:
+                car_coordinator = CarChargingCoordinator(
+                    hass, entry, subentry, price_coordinator
+                )
+                await car_coordinator.async_config_entry_first_refresh()
+                car_coordinators[subentry_id] = car_coordinator
+
     # Store typed runtime data on the config entry
     entry.runtime_data = EnergyManagerData(
         price_coordinator=price_coordinator,
         battery_coordinator=battery_coordinator,
         ems_coordinator=ems_coordinator,
+        car_coordinators=car_coordinators,
         modules_enabled={
             MODULE_BATTERY: entry.options.get(CONF_BATTERY_ENABLED, False),
             MODULE_EV: entry.options.get(CONF_EV_ENABLED, False),
@@ -120,7 +134,9 @@ def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
         platforms.append(Platform.NUMBER)
 
     if entry.options.get(CONF_EV_ENABLED):
-        pass  # Future: platforms.extend([Platform.SWITCH, ...])
+        if Platform.NUMBER not in platforms:
+            platforms.append(Platform.NUMBER)
+        platforms.append(Platform.TIME)
 
     return platforms
 
