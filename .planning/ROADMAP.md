@@ -88,11 +88,12 @@ Plans:
   3. User can see a per-car charging schedule that selects the cheapest hours before the departure deadline to reach the target SOC
   4. When an unrecognized vehicle is connected, fallback charging activates during off-peak hours
   5. Solar-surplus EV charging routes excess PV power to the charger with hysteresis to prevent on/off cycling
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md -- TDD: Pure car charging scheduler algorithm (cheapest N slots, fallback mode, solar marking)
+- [ ] 04-02-PLAN.md -- CarChargingCoordinator, CarEntity base, per-subentry wiring in __init__.py
+- [ ] 04-03-PLAN.md -- Per-car entities (schedule sensor, departure time, target SOC, max charge power) and translations
 
 ### Phase 5: Easee Charger Control
 **Goal**: The integration physically controls the Easee charger -- starting/stopping charge sessions, setting dynamic amp limits, and managing solar vs grid charging modes through a robust state machine
@@ -136,10 +137,10 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Core Infrastructure + Price Foundation | 5/5 | Complete | 2026-02-15 |
 | 2. Home Battery Schedule | 5/5 | Complete | 2026-02-16 |
 | 3. EMS Controller | 5/5 | Complete | 2026-02-23 |
-| 4. Car Charging | 0/0 | Not started | - |
+| 4. Car Charging | 0/3 | Planning complete | - |
 | 5. Easee Charger Control | 0/0 | Not started | - |
 | 6. Polish + Release | 0/0 | Not started | - |
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-23 (Phase 3 complete)*
+*Last updated: 2026-02-23 (Phase 4 planned)*
