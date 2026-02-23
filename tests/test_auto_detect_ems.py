@@ -1,11 +1,11 @@
 """Regression tests for EMS entity auto-detection in find_sigenstor_ems_entities().
 
-Tests verify fixes for 4 bugs discovered during UAT:
-- BUG 1: Charge limit entities with sensor domain (not just number)
-- BUG 2: Discharge limit entities with sensor domain (not just number)
-- BUG 3: L-current fallback via phase_active_power patterns
-- BUG 4: PV power global fallback scan with plant-over-inverter preference
-Plus a sanity check for EMS select detection (which was working).
+Tests verify:
+- Charge/discharge limit detection with sensor domain
+- Grid power detection for fuse headroom (replaces L-current)
+- PV power global fallback scan with plant-over-inverter preference
+- Disabled entity filtering (entities disabled by integration are skipped)
+- EMS select detection sanity check
 """
 
 from __future__ import annotations
@@ -22,7 +22,10 @@ from custom_components.energy_manager.const import (
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_EMS_SELECT_ENTITY,
-    CONF_L_CURRENT_ENTITY,
+    CONF_GRID_PHASE_A_ENTITY,
+    CONF_GRID_PHASE_B_ENTITY,
+    CONF_GRID_PHASE_C_ENTITY,
+    CONF_GRID_POWER_ENTITY,
     CONF_PV_POWER_ENTITY,
 )
 
@@ -36,6 +39,7 @@ class FakeEntityEntry:
     unique_id: str | None = None
     original_name: str | None = None
     device_id: str | None = None
+    disabled_by: str | None = None
 
 
 @dataclass
@@ -111,7 +115,7 @@ def _run_detect(
 
 
 class TestChargeLimit:
-    """BUG 1: Charge limit entity with sensor domain and ess_rated_charging pattern."""
+    """Charge limit entity with sensor domain and ess_rated_charging pattern."""
 
     def test_detects_charge_limit_sensor_domain(self):
         """sensor.sigen_battery_ess_rated_charging_power should be detected."""
@@ -131,7 +135,7 @@ class TestChargeLimit:
 
 
 class TestDischargeLimit:
-    """BUG 2: Discharge limit entity with sensor domain and ess_rated_discharging pattern."""
+    """Discharge limit entity with sensor domain and ess_rated_discharging pattern."""
 
     def test_detects_discharge_limit_sensor_domain(self):
         """sensor.sigen_plant_ess_rated_discharging_power should be detected."""
@@ -146,23 +150,47 @@ class TestDischargeLimit:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: L-current via phase_active_power pattern
+# Test 3: Grid power detection (replaces L-current)
 # ---------------------------------------------------------------------------
 
 
-class TestLCurrent:
-    """BUG 3: L-current detection via phase_a_active_power pattern."""
+class TestGridPower:
+    """Grid power detection for fuse headroom calculation."""
 
-    def test_detects_l_current_via_phase_active_power(self):
-        """sensor.sigen_plant_grid_phase_a_active_power should be detected."""
+    def test_detects_grid_active_power(self):
+        """sensor.sigen_plant_grid_active_power should be detected."""
         entity = FakeEntityEntry(
-            entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+            entity_id="sensor.sigen_plant_grid_active_power",
             domain="sensor",
-            unique_id="sigen_plant_grid_phase_a_active_power",
+            unique_id="sigen_plant_grid_active_power",
         )
         result = _run_detect([entity])
-        assert CONF_L_CURRENT_ENTITY in result
-        assert result[CONF_L_CURRENT_ENTITY] == entity.entity_id
+        assert CONF_GRID_POWER_ENTITY in result
+        assert result[CONF_GRID_POWER_ENTITY] == entity.entity_id
+
+    def test_skips_per_phase_grid_power(self):
+        """Per-phase grid power sensors should NOT be selected (prefer total)."""
+        phase_entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+            domain="sensor",
+        )
+        total_entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_active_power",
+            domain="sensor",
+        )
+        result = _run_detect([phase_entity, total_entity])
+        assert CONF_GRID_POWER_ENTITY in result
+        assert result[CONF_GRID_POWER_ENTITY] == total_entity.entity_id
+
+    def test_grid_power_fallback_scan(self):
+        """Grid power found via global fallback when not in sigen config entry."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_active_power",
+            domain="sensor",
+        )
+        result = _run_detect(sigen_entities=[], global_entities=[entity])
+        assert CONF_GRID_POWER_ENTITY in result
+        assert result[CONF_GRID_POWER_ENTITY] == entity.entity_id
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +199,7 @@ class TestLCurrent:
 
 
 class TestPVPowerFallback:
-    """BUG 4: PV power detection via global fallback scan."""
+    """PV power detection via global fallback scan."""
 
     def test_detects_pv_power_via_global_fallback(self):
         """PV power entity NOT under sigen config entry should be found via global fallback."""
@@ -217,7 +245,41 @@ class TestPVPlantPreference:
 
 
 # ---------------------------------------------------------------------------
-# Test 6: EMS select sanity check (existing working pattern)
+# Test 6: Disabled entities are skipped
+# ---------------------------------------------------------------------------
+
+
+class TestDisabledEntityFiltering:
+    """Entities disabled by the integration should be skipped."""
+
+    def test_skips_disabled_pv_power(self):
+        """Disabled PV entity should be skipped in favor of enabled one."""
+        disabled_entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_sigen_pv_power",
+            domain="sensor",
+            disabled_by="integration",
+        )
+        enabled_entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_pv_power",
+            domain="sensor",
+        )
+        result = _run_detect([disabled_entity, enabled_entity])
+        assert CONF_PV_POWER_ENTITY in result
+        assert result[CONF_PV_POWER_ENTITY] == "sensor.sigen_plant_pv_power"
+
+    def test_skips_disabled_grid_power_in_fallback(self):
+        """Disabled grid power entity skipped in global fallback."""
+        disabled_entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_active_power",
+            domain="sensor",
+            disabled_by="integration",
+        )
+        result = _run_detect(sigen_entities=[], global_entities=[disabled_entity])
+        assert CONF_GRID_POWER_ENTITY not in result
+
+
+# ---------------------------------------------------------------------------
+# Test 7: EMS select sanity check (existing working pattern)
 # ---------------------------------------------------------------------------
 
 
@@ -234,3 +296,98 @@ class TestEMSSelectSanity:
         result = _run_detect([entity])
         assert CONF_EMS_SELECT_ENTITY in result
         assert result[CONF_EMS_SELECT_ENTITY] == entity.entity_id
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Per-phase grid power detection
+# ---------------------------------------------------------------------------
+
+
+class TestPerPhaseGridPower:
+    """Per-phase grid power detection for 3-phase fuse protection."""
+
+    def test_detects_per_phase_a_power(self):
+        """sensor.sigen_plant_grid_phase_a_active_power should be detected for phase A."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+            domain="sensor",
+            unique_id="sigen_plant_grid_phase_a_active_power",
+        )
+        result = _run_detect([entity])
+        assert CONF_GRID_PHASE_A_ENTITY in result
+        assert result[CONF_GRID_PHASE_A_ENTITY] == entity.entity_id
+
+    def test_detects_all_three_phases(self):
+        """All three per-phase grid power sensors should be detected."""
+        phase_a = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+            domain="sensor",
+            unique_id="sigen_plant_grid_phase_a_active_power",
+        )
+        phase_b = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_b_active_power",
+            domain="sensor",
+            unique_id="sigen_plant_grid_phase_b_active_power",
+        )
+        phase_c = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_c_active_power",
+            domain="sensor",
+            unique_id="sigen_plant_grid_phase_c_active_power",
+        )
+        result = _run_detect([phase_a, phase_b, phase_c])
+        assert CONF_GRID_PHASE_A_ENTITY in result
+        assert result[CONF_GRID_PHASE_A_ENTITY] == phase_a.entity_id
+        assert CONF_GRID_PHASE_B_ENTITY in result
+        assert result[CONF_GRID_PHASE_B_ENTITY] == phase_b.entity_id
+        assert CONF_GRID_PHASE_C_ENTITY in result
+        assert result[CONF_GRID_PHASE_C_ENTITY] == phase_c.entity_id
+
+    def test_per_phase_and_total_coexist(self):
+        """Per-phase and total grid power should all be detected simultaneously."""
+        phase_a = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+            domain="sensor",
+        )
+        phase_b = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_b_active_power",
+            domain="sensor",
+        )
+        phase_c = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_c_active_power",
+            domain="sensor",
+        )
+        total = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_active_power",
+            domain="sensor",
+        )
+        result = _run_detect([phase_a, phase_b, phase_c, total])
+        assert CONF_GRID_PHASE_A_ENTITY in result
+        assert CONF_GRID_PHASE_B_ENTITY in result
+        assert CONF_GRID_PHASE_C_ENTITY in result
+        assert CONF_GRID_POWER_ENTITY in result
+        assert result[CONF_GRID_POWER_ENTITY] == total.entity_id
+
+    def test_per_phase_fallback_scan(self):
+        """Per-phase entities found via global fallback when not in sigen config entry."""
+        phase_a = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+            domain="sensor",
+        )
+        phase_b = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_b_active_power",
+            domain="sensor",
+        )
+        phase_c = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_phase_c_active_power",
+            domain="sensor",
+        )
+        result = _run_detect(
+            sigen_entities=[],
+            global_entities=[phase_a, phase_b, phase_c],
+        )
+        assert CONF_GRID_PHASE_A_ENTITY in result
+        assert result[CONF_GRID_PHASE_A_ENTITY] == phase_a.entity_id
+        assert CONF_GRID_PHASE_B_ENTITY in result
+        assert result[CONF_GRID_PHASE_B_ENTITY] == phase_b.entity_id
+        assert CONF_GRID_PHASE_C_ENTITY in result
+        assert result[CONF_GRID_PHASE_C_ENTITY] == phase_c.entity_id

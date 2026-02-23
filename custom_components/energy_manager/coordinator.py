@@ -41,7 +41,10 @@ from .const import (
     CONF_EV_ENABLED,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING,
-    CONF_L_CURRENT_ENTITY,
+    CONF_GRID_PHASE_A_ENTITY,
+    CONF_GRID_PHASE_B_ENTITY,
+    CONF_GRID_PHASE_C_ENTITY,
+    CONF_GRID_POWER_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
@@ -549,8 +552,17 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._discharge_limit_entity: str = entry.options.get(
             CONF_DISCHARGE_LIMIT_ENTITY, ""
         )
-        self._l_current_entity: str = entry.options.get(
-            CONF_L_CURRENT_ENTITY, ""
+        self._grid_power_entity: str = entry.options.get(
+            CONF_GRID_POWER_ENTITY, ""
+        )
+        self._grid_phase_a_entity: str = entry.options.get(
+            CONF_GRID_PHASE_A_ENTITY, ""
+        )
+        self._grid_phase_b_entity: str = entry.options.get(
+            CONF_GRID_PHASE_B_ENTITY, ""
+        )
+        self._grid_phase_c_entity: str = entry.options.get(
+            CONF_GRID_PHASE_C_ENTITY, ""
         )
         self._pv_power_entity: str = entry.options.get(
             CONF_PV_POWER_ENTITY, ""
@@ -582,19 +594,34 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         )
         self.config_entry.async_on_unload(lambda: unsub_battery())
 
-        # Event-driven: react immediately to L-current changes (fuse-critical)
-        if self._l_current_entity:
+        # Event-driven: react immediately to grid power changes (fuse-critical)
+        phase_entities = [
+            e for e in [
+                self._grid_phase_a_entity,
+                self._grid_phase_b_entity,
+                self._grid_phase_c_entity,
+            ] if e
+        ]
+        if phase_entities:
             self.config_entry.async_on_unload(
                 async_track_state_change_event(
                     self.hass,
-                    [self._l_current_entity],
+                    phase_entities,
+                    self._handle_fuse_update,
+                )
+            )
+        elif self._grid_power_entity:
+            self.config_entry.async_on_unload(
+                async_track_state_change_event(
+                    self.hass,
+                    [self._grid_power_entity],
                     self._handle_fuse_update,
                 )
             )
         else:
             _LOGGER.warning(
-                "L-current entity not configured -- fuse headroom will assume 0A load. "
-                "Configure an L-current sensor in the EMS settings for dynamic fuse protection."
+                "No grid power entities configured -- fuse headroom will assume 0A load. "
+                "Configure per-phase or total grid power sensors in the EMS settings for dynamic fuse protection."
             )
 
         # Event-driven: react immediately to charger status changes
@@ -639,7 +666,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             )
 
         # 2. Read real-time sensor values
-        l_current = self._read_float_state(self._l_current_entity, 0.0)
+        l_current = self._read_grid_current_amps()
         pv_power_w = self._read_float_state(self._pv_power_entity, 0.0)
         battery_soc = self._read_float_state(self._soc_entity, 50.0)
 
@@ -736,6 +763,49 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             return float(state.state)
         except (ValueError, TypeError):
             return default
+
+    def _read_grid_current_amps(self) -> float:
+        """Read per-phase grid power and return worst-case phase current in amps.
+
+        If per-phase sensors are configured, reads each phase's power and converts
+        to amps independently: I = abs(P_phase) / V_phase. Returns the MAX across
+        all three phases (worst-case for fuse protection).
+
+        Falls back to total-power balanced-load estimate if per-phase sensors are
+        not configured.
+
+        Returns:
+            Highest phase current in amps, or 0.0 if unavailable.
+        """
+        phase_entities = [
+            self._grid_phase_a_entity,
+            self._grid_phase_b_entity,
+            self._grid_phase_c_entity,
+        ]
+
+        if all(phase_entities):
+            # Per-phase mode: convert each phase to amps, take worst case
+            phase_amps = []
+            for entity_id in phase_entities:
+                power = self._read_float_state(entity_id, 0.0)
+                state = self.hass.states.get(entity_id)
+                if state is not None:
+                    uom = state.attributes.get("unit_of_measurement", "")
+                    if uom == "kW":
+                        power = power * 1000.0
+                phase_amps.append(abs(power) / 230.0)
+            return max(phase_amps) if phase_amps else 0.0
+
+        # Fallback: single total power sensor with balanced-load assumption
+        power = self._read_float_state(self._grid_power_entity, 0.0)
+        if power == 0.0:
+            return 0.0
+        state = self.hass.states.get(self._grid_power_entity)
+        if state is not None:
+            uom = state.attributes.get("unit_of_measurement", "")
+            if uom == "kW":
+                power = power * 1000.0
+        return abs(power) / (3.0 * 230.0)
 
     def _is_car_plugged_in(self) -> bool:
         """Check if a car is currently plugged in via charger status.
