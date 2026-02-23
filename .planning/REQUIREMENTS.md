@@ -61,7 +61,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **EV-08**: Fallback charging activates for unrecognized connected vehicles during off-peak hours
 - [ ] **EV-09**: Solar-surplus EV charging routes excess PV power to charger with hysteresis to prevent cycling
 - [ ] **EV-10**: Dynamic phase switching between 1-phase and 3-phase based on available power
-- [ ] **EV-11**: Schedule sensor exposes current state with full schedule in attributes
+- [x] **EV-11**: Schedule sensor exposes current state with full schedule in attributes
 
 ### Easee Charger Control
 
@@ -166,7 +166,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EV-08 | Phase 4 | Complete |
 | EV-09 | Phase 5 | Pending |
 | EV-10 | Phase 5 | Pending |
-| EV-11 | Phase 4 | Pending |
+| EV-11 | Phase 4 | Complete |
 | EASE-01 | Phase 5 | Pending |
 | EASE-02 | Phase 5 | Pending |
 | EASE-03 | Phase 5 | Pending |

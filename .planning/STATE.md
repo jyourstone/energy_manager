@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 4 in progress -- Car Charging (2 of 3 plans complete: scheduler TDD, coordinator+entity)
+**Current focus:** Phase 4 complete -- Car Charging (3 of 3 plans complete: scheduler TDD, coordinator+entity, per-car entities)
 
 ## Current Position
 
 Phase: 4 of 6 (Car Charging)
-Plan: 2 of 3 in current phase
-Status: Plan 04-02 complete -- CarChargingCoordinator, CarEntity base, __init__.py wiring
-Last activity: 2026-02-23 -- Plan 04-02 complete: Car charging coordinator and entity base
+Plan: 3 of 3 in current phase
+Status: Phase 04 complete -- all car charging plans executed
+Last activity: 2026-02-23 -- Plan 04-03 complete: Per-car entities and time platform
 
-Progress: [########=.] 75%
+Progress: [########=.] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17
+- Total plans completed: 18
 - Average duration: 3min
-- Total execution time: 0.90 hours
+- Total execution time: 0.95 hours
 
 **By Phase:**
 
@@ -44,9 +44,10 @@ Progress: [########=.] 75%
 | Phase 03 P05 | 3min | 2 tasks | 7 files |
 | Phase 04 P01 | 3min | 2 tasks | 2 files |
 | Phase 04 P02 | 4min | 2 tasks | 4 files |
+| Phase 04 P03 | 3min | 2 tasks | 5 files |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 3min, 3min, 3min, 4min
+- Last 5 plans: 3min, 3min, 3min, 4min, 3min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -114,6 +115,8 @@ Recent decisions affecting current work:
 - [Phase 04]: CarEntity uses TYPE_CHECKING import for CarChargingCoordinator to avoid circular imports
 - [Phase 04]: departure_time defaults to 07:00 local; rolls to tomorrow when departure <= now
 - [Phase 04]: solar_surplus_available always False in Phase 4 (Phase 5 wires actual PV detection via PVHysteresisTracker)
+- [Phase 04]: TimeEntity uses async_set_value (not async_set_native_value); RestoreEntity uses async_get_last_state (not number-specific)
+- [Phase 04]: number.py async_setup_entry restructured to allow car entities without battery module (no early return)
 
 ### Pending Todos
 
@@ -128,5 +131,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 04-02-PLAN.md (car charging coordinator and entity base)
+Stopped at: Completed 04-03-PLAN.md (per-car entities and time platform -- Phase 04 complete)
 Resume file: None
