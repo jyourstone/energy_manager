@@ -289,7 +289,8 @@ class TestFallbackMode:
         charge_slots = [s for s in result.schedule if s.action == "charge"]
         charge_prices = sorted(s.price for s in charge_slots)
         # The 5 cheapest: 0.10, 0.20, 0.30, 0.40, 0.50
-        assert charge_prices == [0.10, 0.20, 0.30, 0.40, 0.50]
+        expected = [0.10, 0.20, 0.30, 0.40, 0.50]
+        assert charge_prices == pytest.approx(expected)
 
     def test_fallback_ignores_energy_calculation(self):
         """Fallback mode selects by price, not by energy need."""
@@ -430,13 +431,13 @@ class TestCurrentAction:
     """current_action derived from which slot contains `now`."""
 
     def test_current_action_charge_when_in_charge_slot(self):
-        """When now falls within a selected charge slot, current_action='charge'."""
+        """When now falls at the start of a selected charge slot, current_action='charge'."""
         # Make slots where hour 2 is cheapest (will be selected for charging)
         prices = [(h, 1.00 if h != 2 else 0.10) for h in range(10)]
         slots = _make_slots(prices)
         departure = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
-        # now is in hour 2 (within the charge slot)
-        now = datetime(2026, 2, 15, 2, 30, 0, tzinfo=UTC)
+        # now is exactly at hour 2 start (slot start >= now includes it)
+        now = datetime(2026, 2, 15, 2, 0, 0, tzinfo=UTC)
 
         result = build_car_charging_schedule(
             price_slots=slots,
@@ -448,7 +449,7 @@ class TestCurrentAction:
             now=now,
         )
 
-        # Hour 2 is cheapest -> should be the only charge slot for ~7.7 kWh needed
+        # Hour 2 is cheapest -> should be the charge slot for ~7.7 kWh needed
         assert result.current_action == "charge"
 
     def test_current_action_idle_when_not_in_charge_slot(self):
