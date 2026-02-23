@@ -22,7 +22,10 @@ from .const import (
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_EMS_SELECT_ENTITY,
     CONF_FORECAST_SOLAR_ENTITY,
-    CONF_L_CURRENT_ENTITY,
+    CONF_GRID_PHASE_A_ENTITY,
+    CONF_GRID_PHASE_B_ENTITY,
+    CONF_GRID_PHASE_C_ENTITY,
+    CONF_GRID_POWER_ENTITY,
     CONF_PV_POWER_ENTITY,
     CONF_SOC_ENTITY,
 )
@@ -141,6 +144,10 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
         )
 
         for entity_entry in entity_entries:
+            # Skip disabled entities -- EntitySelector cannot display them
+            if getattr(entity_entry, "disabled_by", None) is not None:
+                continue
+
             entity_id_lower = entity_entry.entity_id.lower()
             unique_id_lower = (entity_entry.unique_id or "").lower()
 
@@ -203,25 +210,63 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     entity_entry.entity_id,
                 )
 
-            # Look for L-current sensor in SigenStor
+            # Look for grid power sensor (for fuse headroom calculation)
             if (
                 entity_entry.domain == "sensor"
-                and CONF_L_CURRENT_ENTITY not in result
+                and CONF_GRID_POWER_ENTITY not in result
                 and (
-                    "highest_l_current" in entity_id_lower
-                    or "highest_l_current" in unique_id_lower
-                    or "phase_current" in entity_id_lower
-                    or "phase_current" in unique_id_lower
-                    or "l_current" in entity_id_lower
-                    or "l_current" in unique_id_lower
-                    or "phase_a_active_power" in entity_id_lower
-                    or "phase_active_power" in entity_id_lower
-                    or "grid_phase" in entity_id_lower
+                    "grid_active_power" in entity_id_lower
+                    or "grid_active_power" in unique_id_lower
+                )
+                # Exclude per-phase variants (prefer total grid power)
+                and "phase_" not in entity_id_lower
+            ):
+                result[CONF_GRID_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor grid power entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            # Look for per-phase grid power sensors (for per-phase fuse protection)
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_GRID_PHASE_A_ENTITY not in result
+                and (
+                    "phase_a_active_power" in entity_id_lower
+                    or "phase_a_active_power" in unique_id_lower
                 )
             ):
-                result[CONF_L_CURRENT_ENTITY] = entity_entry.entity_id
+                result[CONF_GRID_PHASE_A_ENTITY] = entity_entry.entity_id
                 _LOGGER.debug(
-                    "Found SigenStor L-current entity: %s",
+                    "Found SigenStor grid phase A entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_GRID_PHASE_B_ENTITY not in result
+                and (
+                    "phase_b_active_power" in entity_id_lower
+                    or "phase_b_active_power" in unique_id_lower
+                )
+            ):
+                result[CONF_GRID_PHASE_B_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor grid phase B entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_GRID_PHASE_C_ENTITY not in result
+                and (
+                    "phase_c_active_power" in entity_id_lower
+                    or "phase_c_active_power" in unique_id_lower
+                )
+            ):
+                result[CONF_GRID_PHASE_C_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor grid phase C entity: %s",
                     entity_entry.entity_id,
                 )
 
@@ -238,28 +283,54 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     or "pv_generation" in unique_id_lower
                 )
             ):
-                result[CONF_PV_POWER_ENTITY] = entity_entry.entity_id
-                _LOGGER.debug(
-                    "Found SigenStor PV power entity: %s",
-                    entity_entry.entity_id,
-                )
+                # Prefer plant-level over inverter-level
+                if "plant" in entity_id_lower or CONF_PV_POWER_ENTITY not in result:
+                    result[CONF_PV_POWER_ENTITY] = entity_entry.entity_id
+                    _LOGGER.debug(
+                        "Found SigenStor PV power entity: %s",
+                        entity_entry.entity_id,
+                    )
 
-    # Fallback: scan ALL entities for L-current sensor (may be a template sensor)
-    if CONF_L_CURRENT_ENTITY not in result:
+    # Fallback: scan ALL entities for per-phase grid power sensors
+    phase_keys = [
+        (CONF_GRID_PHASE_A_ENTITY, "phase_a_active_power"),
+        (CONF_GRID_PHASE_B_ENTITY, "phase_b_active_power"),
+        (CONF_GRID_PHASE_C_ENTITY, "phase_c_active_power"),
+    ]
+    for phase_key, phase_pattern in phase_keys:
+        if phase_key not in result:
+            all_entities = registry.entities
+            for entity_entry in all_entities.values():
+                if entity_entry.domain != "sensor":
+                    continue
+                if getattr(entity_entry, "disabled_by", None) is not None:
+                    continue
+                entity_id_lower = entity_entry.entity_id.lower()
+                if phase_pattern in entity_id_lower:
+                    result[phase_key] = entity_entry.entity_id
+                    _LOGGER.debug(
+                        "Found %s entity (fallback): %s",
+                        phase_key,
+                        entity_entry.entity_id,
+                    )
+                    break
+
+    # Fallback: scan ALL entities for grid power sensor
+    if CONF_GRID_POWER_ENTITY not in result:
         all_entities = registry.entities
         for entity_entry in all_entities.values():
             if entity_entry.domain != "sensor":
                 continue
+            if getattr(entity_entry, "disabled_by", None) is not None:
+                continue
             entity_id_lower = entity_entry.entity_id.lower()
             if (
-                "highest_l_current" in entity_id_lower
-                or "l_current" in entity_id_lower
-                or "phase_a_active_power" in entity_id_lower
-                or "grid_phase" in entity_id_lower
+                "grid_active_power" in entity_id_lower
+                and "phase_" not in entity_id_lower
             ):
-                result[CONF_L_CURRENT_ENTITY] = entity_entry.entity_id
+                result[CONF_GRID_POWER_ENTITY] = entity_entry.entity_id
                 _LOGGER.debug(
-                    "Found L-current entity (fallback): %s",
+                    "Found grid power entity (fallback): %s",
                     entity_entry.entity_id,
                 )
                 break
@@ -270,6 +341,8 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
         pv_candidates: list[str] = []
         for entity_entry in all_entities.values():
             if entity_entry.domain != "sensor":
+                continue
+            if getattr(entity_entry, "disabled_by", None) is not None:
                 continue
             entity_id_lower = entity_entry.entity_id.lower()
             if "pv_power" in entity_id_lower:

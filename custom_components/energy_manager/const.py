@@ -87,7 +87,10 @@ CONF_FUSE_RATING = "fuse_rating"
 CONF_EMS_SELECT_ENTITY = "ems_select_entity"
 CONF_CHARGE_LIMIT_ENTITY = "charge_limit_entity"
 CONF_DISCHARGE_LIMIT_ENTITY = "discharge_limit_entity"
-CONF_L_CURRENT_ENTITY = "l_current_entity"
+CONF_GRID_POWER_ENTITY = "grid_power_entity"
+CONF_GRID_PHASE_A_ENTITY = "grid_phase_a_entity"
+CONF_GRID_PHASE_B_ENTITY = "grid_phase_b_entity"
+CONF_GRID_PHASE_C_ENTITY = "grid_phase_c_entity"
 CONF_PV_POWER_ENTITY = "pv_power_entity"
 
 # EMS defaults

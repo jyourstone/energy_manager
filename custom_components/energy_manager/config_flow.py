@@ -70,8 +70,11 @@ from .const import (
     CONF_EV_ENABLED,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING,
+    CONF_GRID_PHASE_A_ENTITY,
+    CONF_GRID_PHASE_B_ENTITY,
+    CONF_GRID_PHASE_C_ENTITY,
     CONF_HOME_PLUGGED_ENTITY,
-    CONF_L_CURRENT_ENTITY,
+    CONF_GRID_POWER_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
@@ -301,8 +304,17 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_DISCHARGE_LIMIT_ENTITY] = user_input.get(
                 CONF_DISCHARGE_LIMIT_ENTITY, ""
             )
-            self._data[CONF_L_CURRENT_ENTITY] = user_input.get(
-                CONF_L_CURRENT_ENTITY, ""
+            self._data[CONF_GRID_POWER_ENTITY] = user_input.get(
+                CONF_GRID_POWER_ENTITY, ""
+            )
+            self._data[CONF_GRID_PHASE_A_ENTITY] = user_input.get(
+                CONF_GRID_PHASE_A_ENTITY, ""
+            )
+            self._data[CONF_GRID_PHASE_B_ENTITY] = user_input.get(
+                CONF_GRID_PHASE_B_ENTITY, ""
+            )
+            self._data[CONF_GRID_PHASE_C_ENTITY] = user_input.get(
+                CONF_GRID_PHASE_C_ENTITY, ""
             )
             self._data[CONF_PV_POWER_ENTITY] = user_input.get(
                 CONF_PV_POWER_ENTITY, ""
@@ -336,7 +348,16 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain=["sensor", "number"])
                 ),
-                vol.Optional(CONF_L_CURRENT_ENTITY): EntitySelector(
+                vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_GRID_PHASE_A_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_GRID_PHASE_B_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_GRID_PHASE_C_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
@@ -421,7 +442,10 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_DISCHARGE_LIMIT_ENTITY: self._data.get(
                 CONF_DISCHARGE_LIMIT_ENTITY, ""
             ),
-            CONF_L_CURRENT_ENTITY: self._data.get(CONF_L_CURRENT_ENTITY, ""),
+            CONF_GRID_POWER_ENTITY: self._data.get(CONF_GRID_POWER_ENTITY, ""),
+            CONF_GRID_PHASE_A_ENTITY: self._data.get(CONF_GRID_PHASE_A_ENTITY, ""),
+            CONF_GRID_PHASE_B_ENTITY: self._data.get(CONF_GRID_PHASE_B_ENTITY, ""),
+            CONF_GRID_PHASE_C_ENTITY: self._data.get(CONF_GRID_PHASE_C_ENTITY, ""),
             CONF_PV_POWER_ENTITY: self._data.get(CONF_PV_POWER_ENTITY, ""),
             CONF_CHARGER_STATUS_ENTITY: self._data.get(
                 CONF_CHARGER_STATUS_ENTITY, ""
