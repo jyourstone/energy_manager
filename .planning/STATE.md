@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 
 ## Current Position
 
-Phase: 3 of 6 (EMS Controller)
-Plan: 5 of 5 in current phase (PHASE COMPLETE)
-Status: Phase 03 complete -- All EMS plans done including per-phase fuse protection gap closure, ready for Phase 04
-Last activity: 2026-02-23 -- Plan 03-05 complete: Per-phase fuse protection (safety-critical fix)
+Phase: 4 of 6 (Car Charging)
+Plan: 1 of 3 in current phase
+Status: Plan 04-01 complete -- Pure Python car charging scheduler with TDD
+Last activity: 2026-02-23 -- Plan 04-01 complete: Car charging schedule algorithm (TDD)
 
-Progress: [######....] 60%
+Progress: [######=#..] 67%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
+- Total plans completed: 16
 - Average duration: 3min
-- Total execution time: 0.78 hours
+- Total execution time: 0.83 hours
 
 **By Phase:**
 
@@ -42,9 +42,10 @@ Progress: [######....] 60%
 | Phase 03 P03 | 2min | 2 tasks | 4 files |
 | Phase 03 P04 | 3min | 2 tasks | 4 files |
 | Phase 03 P05 | 3min | 2 tasks | 7 files |
+| Phase 04 P01 | 3min | 2 tasks | 2 files |
 
 **Recent Trend:**
-- Last 5 plans: 3min, 4min, 2min, 3min, 3min
+- Last 5 plans: 4min, 2min, 3min, 3min, 3min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -104,6 +105,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Per-phase fuse protection uses max(abs(P_phase)/230) across all three phases for worst-case current
 - [Phase 03]: Per-phase mode requires ALL three phases configured; partial falls back to total power balanced-load estimate
 - [Phase 03]: Per-phase state change listeners replace single grid_power listener for fuse-critical events
+- [Phase 04]: Pure Python car_charging_scheduler.py follows battery_scheduler.py pattern (zero HA imports, frozen dataclasses)
+- [Phase 04]: Slot window filter uses start >= now (excludes partially-elapsed slots from charge selection)
+- [Phase 04]: solar_surplus_available flag marks all charge slots as solar_charge when True (Phase 5 handles actual PV routing)
 
 ### Pending Todos
 
@@ -118,5 +122,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 03-05-PLAN.md (per-phase fuse protection gap closure) -- Phase 03 fully complete
+Stopped at: Completed 04-01-PLAN.md (car charging schedule algorithm TDD)
 Resume file: None

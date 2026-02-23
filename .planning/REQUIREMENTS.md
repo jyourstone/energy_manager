@@ -51,13 +51,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### EV Charging
 
-- [ ] **EV-01**: User can view price-optimized charging schedule per car
+- [x] **EV-01**: User can view price-optimized charging schedule per car
 - [ ] **EV-02**: User can set departure time per car via datetime entity
 - [ ] **EV-03**: User can set target SOC percentage per car via number entity
 - [ ] **EV-04**: Each car is configured as a separate device (via subentry or per-car config)
 - [ ] **EV-05**: Integration auto-detects compatible car integrations (Skoda, VW) and offers setup
 - [ ] **EV-06**: User can manually add cars with custom entity mappings
-- [ ] **EV-07**: Schedule considers car battery capacity and current SOC to calculate energy needed
+- [x] **EV-07**: Schedule considers car battery capacity and current SOC to calculate energy needed
 - [ ] **EV-08**: Fallback charging activates for unrecognized connected vehicles during off-peak hours
 - [ ] **EV-09**: Solar-surplus EV charging routes excess PV power to charger with hysteresis to prevent cycling
 - [ ] **EV-10**: Dynamic phase switching between 1-phase and 3-phase based on available power
@@ -156,13 +156,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EMS-06 | Phase 3 | Pending |
 | EMS-07 | Phase 3 | Pending |
 | EMS-08 | Phase 3 | Pending |
-| EV-01 | Phase 4 | Pending |
+| EV-01 | Phase 4 | Complete |
 | EV-02 | Phase 4 | Pending |
 | EV-03 | Phase 4 | Pending |
 | EV-04 | Phase 4 | Pending |
 | EV-05 | Phase 4 | Pending |
 | EV-06 | Phase 4 | Pending |
-| EV-07 | Phase 4 | Pending |
+| EV-07 | Phase 4 | Complete |
 | EV-08 | Phase 4 | Pending |
 | EV-09 | Phase 5 | Pending |
 | EV-10 | Phase 5 | Pending |
