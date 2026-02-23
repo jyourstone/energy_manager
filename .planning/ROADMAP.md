@@ -87,12 +87,13 @@ Plans:
   2. Each car appears as a separate device with its own schedule sensor, departure time entity, and target SOC entity
   3. User can see a per-car charging schedule that selects the cheapest hours before the departure deadline to reach the target SOC
   4. When an unrecognized vehicle is connected, fallback charging activates during off-peak hours
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- TDD: Pure car charging scheduler algorithm (cheapest N slots, fallback mode, solar marking)
-- [ ] 04-02-PLAN.md -- CarChargingCoordinator, CarEntity base, fallback detection, per-subentry wiring
-- [ ] 04-03-PLAN.md -- Per-car entities (schedule sensor, departure time, target SOC, max charge power) and translations
+- [x] 04-01-PLAN.md -- TDD: Pure car charging scheduler algorithm (cheapest N slots, fallback mode, solar marking)
+- [x] 04-02-PLAN.md -- CarChargingCoordinator, CarEntity base, fallback detection, per-subentry wiring
+- [x] 04-03-PLAN.md -- Per-car entities (schedule sensor, departure time, target SOC, max charge power) and translations
+- [ ] 04-04-PLAN.md -- UAT gap closure: expand car auto-detection patterns and auto-derive home+plugged state
 
 ### Phase 5: Easee Charger Control
 **Goal**: The integration physically controls the Easee charger -- starting/stopping charge sessions, setting dynamic amp limits, and managing solar vs grid charging modes through a robust state machine
@@ -138,10 +139,10 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Core Infrastructure + Price Foundation | 5/5 | Complete | 2026-02-15 |
 | 2. Home Battery Schedule | 5/5 | Complete | 2026-02-16 |
 | 3. EMS Controller | 5/5 | Complete | 2026-02-23 |
-| 4. Car Charging | 0/3 | Planning complete | - |
+| 4. Car Charging | 3/4 | UAT gap closure | - |
 | 5. Easee Charger Control | 0/0 | Not started | - |
 | 6. Polish + Release | 0/0 | Not started | - |
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-23 (Phase 4 revised: EV-09/EV-10 moved to Phase 5)*
+*Last updated: 2026-02-23 (Phase 4: added UAT gap closure plan 04-04)*
