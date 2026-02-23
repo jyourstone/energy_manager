@@ -13,15 +13,20 @@ EMSCoordinator chains to BatteryScheduleCoordinator and orchestrates
 real-time EMS control. It reads schedule data, real-time sensor values,
 calls compute_ems_state() for decisions, sends control commands via HA
 service calls, and verifies commands took effect.
+
+CarChargingCoordinator (one per car subentry) chains to PriceCoordinator
+and wraps the pure car_charging_scheduler module, producing CarChargingData
+on every update. Each car gets independent scheduling based on its SOC,
+departure time, and battery capacity.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import (
@@ -32,8 +37,12 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
+    CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES,
+    CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
+    CONF_BATTERY_LEVEL_ENTITY,
+    CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
@@ -45,11 +54,13 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HOME_PLUGGED_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
     CONF_SOC_ENTITY,
     DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
     DEFAULT_FUSE_RATING,
@@ -58,14 +69,17 @@ from .const import (
     DEFAULT_MIN_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
     DEFAULT_SAFETY_BUFFER_AMPS,
+    DEFAULT_TARGET_SOC_PCT,
     EMS_MODE_MAP,
     EMS_UPDATE_INTERVAL_SECONDS,
+    FALLBACK_STALE_THRESHOLD_MINUTES,
     MAX_CHARGE_LIMIT_KW,
     MODULE_BATTERY,
     MODULE_EV,
     PRICE_UPDATE_INTERVAL_MINUTES,
 )
 from .battery_scheduler import BatteryScheduleResult, build_battery_schedule
+from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
 from .ems_controller import PVHysteresisTracker, compute_ems_state
 from .nordpool_adapter import async_get_prices
 
@@ -973,6 +987,275 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # Still waiting
         return True
+
+
+@dataclass(frozen=True, slots=True)
+class CarChargingData:
+    """Output of the car charging coordinator.
+
+    Attributes:
+        current_action: Current action for this car (charge/idle/solar_charge).
+        schedule: List of CarScheduleSlot objects from the pure scheduler.
+        charging_slot_count: Number of charge/solar_charge slots.
+        energy_needed_kwh: Energy needed to reach target SOC.
+        hours_needed: Hours of charging needed at max charge power.
+        is_preliminary: True when tomorrow's prices not yet available.
+        car_name: Display name of the car.
+        current_soc: Current state of charge percentage.
+        target_soc: Target state of charge percentage.
+        last_calculated: UTC timestamp of last calculation.
+    """
+
+    current_action: str
+    schedule: list
+    charging_slot_count: int
+    energy_needed_kwh: float
+    hours_needed: float
+    is_preliminary: bool
+    car_name: str
+    current_soc: float
+    target_soc: float
+    last_calculated: datetime
+
+
+class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
+    """Coordinator for a single car's charging schedule.
+
+    One instance per car subentry. Chains to PriceCoordinator and recalculates
+    on price updates. Reads car SOC from HA entity and converts departure time
+    to UTC. Calls the pure car_charging_scheduler module for slot selection.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        subentry: ConfigSubentry,
+        price_coordinator: PriceCoordinator,
+    ) -> None:
+        """Initialize the car charging coordinator.
+
+        Args:
+            hass: Home Assistant instance.
+            entry: The config entry for this integration.
+            subentry: The car subentry with car-specific configuration.
+            price_coordinator: The PriceCoordinator to chain to.
+        """
+        car_name = subentry.data.get(CONF_CAR_NAME, "Unknown Car")
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"Energy Manager Car: {car_name}",
+            config_entry=entry,
+            update_interval=timedelta(
+                minutes=CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES
+            ),
+            always_update=False,
+        )
+        self._subentry = subentry
+        self._price_coordinator = price_coordinator
+
+        # Car-specific configuration from subentry
+        self._car_name: str = car_name
+        self._battery_capacity_kwh: float = float(
+            subentry.data.get(CONF_BATTERY_CAPACITY, 60.0)
+        )
+        self._battery_level_entity: str = subentry.data.get(
+            CONF_BATTERY_LEVEL_ENTITY, ""
+        )
+        self._home_plugged_entity: str = subentry.data.get(
+            CONF_HOME_PLUGGED_ENTITY, ""
+        )
+
+        # Charger status entity from main entry options (shared across all cars)
+        self._charger_status_entity: str = entry.options.get(
+            CONF_CHARGER_STATUS_ENTITY, ""
+        )
+
+        # Mutable attributes -- updated by entity instances after setup
+        self.departure_time: time = time(7, 0)  # Default 07:00
+        self.target_soc: float = DEFAULT_TARGET_SOC_PCT
+        self.max_charge_power_kw: float = DEFAULT_CAR_MAX_CHARGE_POWER_KW
+
+        # SOC staleness tracking for fallback detection
+        self._soc_last_updated: datetime | None = None
+
+    async def _async_setup(self) -> None:
+        """Register listeners for coordinator chaining and SOC state changes.
+
+        Called once during async_config_entry_first_refresh.
+        """
+        # Chain to PriceCoordinator: recalculate when prices update
+        unsub_price = self._price_coordinator.async_add_listener(
+            self._handle_price_update
+        )
+        self.config_entry.async_on_unload(lambda: unsub_price())
+
+        # Listen for battery_level_entity state changes for immediate SOC updates
+        if self._battery_level_entity:
+            self.config_entry.async_on_unload(
+                async_track_state_change_event(
+                    self.hass,
+                    [self._battery_level_entity],
+                    self._handle_soc_update,
+                )
+            )
+
+    @callback
+    def _handle_price_update(self) -> None:
+        """Handle PriceCoordinator data updates via coordinator chaining."""
+        self.hass.async_create_task(self.async_request_refresh())
+
+    @callback
+    def _handle_soc_update(self, event) -> None:
+        """Handle car SOC entity state changes for immediate recalculation."""
+        self.hass.async_create_task(self.async_request_refresh())
+
+    async def _async_update_data(self) -> CarChargingData:
+        """Fetch inputs, run pure scheduler, and return CarChargingData.
+
+        Returns:
+            CarChargingData with the current schedule and derived state.
+
+        Raises:
+            UpdateFailed: If no price data is available.
+        """
+        # 1. Read price data from chained PriceCoordinator
+        price_data = self._price_coordinator.data
+        if price_data is None or not price_data.today:
+            raise UpdateFailed(
+                "No price data available for car charging schedule calculation"
+            )
+
+        # 2. Read car SOC from battery_level_entity
+        current_soc = self._read_car_soc()
+
+        # 3. Convert departure_time (local time-of-day) to UTC datetime
+        departure_utc = self._departure_to_utc()
+
+        # 4. Check if tomorrow's prices are available
+        is_preliminary = len(price_data.tomorrow) == 0
+
+        # 5. Combine today + tomorrow price slots into dicts
+        price_slots = [
+            {"start": slot.start, "end": slot.end, "price": slot.price}
+            for slot in price_data.today + price_data.tomorrow
+        ]
+
+        # 6. Detect fallback mode
+        fallback_mode = self._detect_fallback_needed()
+
+        # 7. Call pure scheduler with solar_surplus_available=False
+        # Phase 4 always passes False; Phase 5 wires actual PV detection
+        result: CarScheduleResult = build_car_charging_schedule(
+            price_slots=price_slots,
+            departure_time_utc=departure_utc,
+            current_soc_pct=current_soc,
+            target_soc_pct=self.target_soc,
+            battery_capacity_kwh=self._battery_capacity_kwh,
+            max_charge_power_kw=self.max_charge_power_kw,
+            now=dt_util.utcnow(),
+            fallback_mode=fallback_mode,
+            is_preliminary=is_preliminary,
+            solar_surplus_available=False,
+        )
+
+        # 8. Return CarChargingData
+        return CarChargingData(
+            current_action=result.current_action,
+            schedule=result.schedule,
+            charging_slot_count=result.charging_slot_count,
+            energy_needed_kwh=result.energy_needed_kwh,
+            hours_needed=result.hours_needed,
+            is_preliminary=result.is_preliminary,
+            car_name=self._car_name,
+            current_soc=current_soc,
+            target_soc=self.target_soc,
+            last_calculated=dt_util.utcnow(),
+        )
+
+    def _read_car_soc(self) -> float:
+        """Read the car's battery level from HA entity state.
+
+        Returns:
+            SOC as a percentage (0-100). Defaults to 50.0 if unavailable.
+        """
+        if not self._battery_level_entity:
+            return 50.0
+
+        state = self.hass.states.get(self._battery_level_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return 50.0
+
+        try:
+            soc = float(state.state)
+            # Update staleness tracker on successful read
+            self._soc_last_updated = dt_util.utcnow()
+            return soc
+        except (ValueError, TypeError):
+            return 50.0
+
+    def _departure_to_utc(self) -> datetime:
+        """Convert departure_time (local time-of-day) to UTC datetime.
+
+        If departure time has already passed today, assumes tomorrow.
+
+        Returns:
+            UTC-aware datetime for the next occurrence of departure_time.
+        """
+        local_now = dt_util.now()
+        local_departure = local_now.replace(
+            hour=self.departure_time.hour,
+            minute=self.departure_time.minute,
+            second=0,
+            microsecond=0,
+        )
+
+        # If departure is in the past, roll to tomorrow
+        if local_departure <= local_now:
+            local_departure += timedelta(days=1)
+
+        return dt_util.as_utc(local_departure)
+
+    def _detect_fallback_needed(self) -> bool:
+        """Detect if fallback charging mode is needed (EV-08).
+
+        Returns True when the Easee charger reports a car is connected but
+        this coordinator's car SOC has not updated recently. This indicates
+        an unrecognized vehicle that should receive off-peak charging.
+
+        Returns:
+            True if fallback mode should be used.
+        """
+        # 1. Read charger status entity
+        if not self._charger_status_entity:
+            return False
+
+        state = self.hass.states.get(self._charger_status_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return False
+
+        # 2. Check if charger reports a connected car
+        car_connected_states = (
+            "awaiting_start",
+            "charging",
+            "ready_to_charge",
+            "car_connected",
+        )
+        if state.state.lower() not in car_connected_states:
+            return False
+
+        # 3. Never received a SOC reading -> likely unrecognized car
+        if self._soc_last_updated is None:
+            return True
+
+        # 4. SOC reading is stale -> likely unrecognized car
+        elapsed = (dt_util.utcnow() - self._soc_last_updated).total_seconds()
+        if elapsed > FALLBACK_STALE_THRESHOLD_MINUTES * 60:
+            return True
+
+        # 5. Recognized car with recent SOC
+        return False
 
 
 @dataclass

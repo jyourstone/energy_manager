@@ -112,3 +112,26 @@ EMS_MODE_MAP = {
 
 # Maximum safe charging limit (kW) -- hardware absolute limit
 MAX_CHARGE_LIMIT_KW = 15.0
+
+# --- Car charging configuration ---
+
+# Config key for per-car max charge rate
+CONF_MAX_CHARGE_POWER_KW = "max_charge_power_kw"
+
+# Car charge power limits (kW)
+DEFAULT_CAR_MAX_CHARGE_POWER_KW = 7.4  # 1-phase default (32A * 230V)
+MIN_CAR_MAX_CHARGE_POWER_KW = 1.4  # Minimum ~6A single phase
+MAX_CAR_MAX_CHARGE_POWER_KW = 22.0  # Max 3-phase
+CAR_CHARGE_POWER_STEP_KW = 0.1
+
+# Target SOC limits (%)
+DEFAULT_TARGET_SOC_PCT = 80.0
+MIN_TARGET_SOC_PCT = 10.0
+MAX_TARGET_SOC_PCT = 100.0
+TARGET_SOC_STEP_PCT = 1.0
+
+# Car schedule update interval (minutes) -- polling fallback
+CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES = 5
+
+# Fallback charging detection: SOC stale threshold (minutes)
+FALLBACK_STALE_THRESHOLD_MINUTES = 60
