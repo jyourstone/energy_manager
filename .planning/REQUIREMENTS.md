@@ -164,8 +164,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EV-06 | Phase 4 | Pending |
 | EV-07 | Phase 4 | Pending |
 | EV-08 | Phase 4 | Pending |
-| EV-09 | Phase 4 | Pending |
-| EV-10 | Phase 4 | Pending |
+| EV-09 | Phase 5 | Pending |
+| EV-10 | Phase 5 | Pending |
 | EV-11 | Phase 4 | Pending |
 | EASE-01 | Phase 5 | Pending |
 | EASE-02 | Phase 5 | Pending |
@@ -187,4 +187,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2025-02-15*
-*Last updated: 2026-02-15 after roadmap creation (traceability mapped)*
+*Last updated: 2026-02-23 (EV-09, EV-10 moved from Phase 4 to Phase 5)*

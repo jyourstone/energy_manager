@@ -81,30 +81,31 @@ Plans:
 ### Phase 4: Car Charging
 **Goal**: Users can configure per-car charging schedules with departure times and target SOC, and the integration selects the cheapest charging slots automatically
 **Depends on**: Phase 1 (price data, config flow), Phase 3 (fuse protection foundation)
-**Requirements**: EV-01, EV-02, EV-03, EV-04, EV-05, EV-06, EV-07, EV-08, EV-09, EV-10, EV-11
+**Requirements**: EV-01, EV-02, EV-03, EV-04, EV-05, EV-06, EV-07, EV-08, EV-11
 **Success Criteria** (what must be TRUE):
   1. User can add a car via config flow with auto-detected Skoda/VW integration, or manually map entity IDs for unsupported cars
   2. Each car appears as a separate device with its own schedule sensor, departure time entity, and target SOC entity
   3. User can see a per-car charging schedule that selects the cheapest hours before the departure deadline to reach the target SOC
   4. When an unrecognized vehicle is connected, fallback charging activates during off-peak hours
-  5. Solar-surplus EV charging routes excess PV power to the charger with hysteresis to prevent on/off cycling
 **Plans**: 3 plans
 
 Plans:
 - [ ] 04-01-PLAN.md -- TDD: Pure car charging scheduler algorithm (cheapest N slots, fallback mode, solar marking)
-- [ ] 04-02-PLAN.md -- CarChargingCoordinator, CarEntity base, per-subentry wiring in __init__.py
+- [ ] 04-02-PLAN.md -- CarChargingCoordinator, CarEntity base, fallback detection, per-subentry wiring
 - [ ] 04-03-PLAN.md -- Per-car entities (schedule sensor, departure time, target SOC, max charge power) and translations
 
 ### Phase 5: Easee Charger Control
 **Goal**: The integration physically controls the Easee charger -- starting/stopping charge sessions, setting dynamic amp limits, and managing solar vs grid charging modes through a robust state machine
 **Depends on**: Phase 3 (fuse protection), Phase 4 (car charging schedule)
-**Requirements**: EASE-01, EASE-02, EASE-03, EASE-04, EASE-05, EASE-06, EASE-07
+**Requirements**: EASE-01, EASE-02, EASE-03, EASE-04, EASE-05, EASE-06, EASE-07, EV-09, EV-10
 **Success Criteria** (what must be TRUE):
   1. Charger dynamic amp limit changes automatically based on the active schedule and current fuse load
   2. Start/stop charging sequences follow a defined state machine that handles stuck states with timeout detection and recovery
   3. User can toggle a force-grid-charging switch to override the schedule and charge immediately
   4. Solar charging mode sets the charger limit based on available PV power after home consumption, and waits for the battery to reach a configurable SOC threshold before activating
   5. Fuse protection limits charger amps based on current phase load with safety buffer -- never exceeds the configured fuse rating
+  6. Solar-surplus EV charging routes excess PV power to the charger with hysteresis to prevent on/off cycling (EV-09)
+  7. Dynamic phase switching between 1-phase and 3-phase based on available power (EV-10)
 **Plans**: TBD
 
 Plans:
@@ -143,4 +144,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-23 (Phase 4 planned)*
+*Last updated: 2026-02-23 (Phase 4 revised: EV-09/EV-10 moved to Phase 5)*
