@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 4 complete -- Car Charging (3 of 3 plans complete: scheduler TDD, coordinator+entity, per-car entities)
+**Current focus:** Phase 4 complete -- Car Charging (4 of 4 plans complete: scheduler TDD, coordinator+entity, per-car entities, UAT gap closure)
 
 ## Current Position
 
 Phase: 4 of 6 (Car Charging)
-Plan: 3 of 3 in current phase
-Status: Phase 04 complete -- all car charging plans executed
-Last activity: 2026-02-23 -- Plan 04-03 complete: Per-car entities and time platform
+Plan: 4 of 4 in current phase
+Status: Phase 04 complete -- all car charging plans executed (including gap closure)
+Last activity: 2026-02-23 -- Plan 04-04 complete: UAT gap closure (car autodetect + home+plugged derivation)
 
 Progress: [########=.] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
+- Total plans completed: 19
 - Average duration: 3min
-- Total execution time: 0.95 hours
+- Total execution time: 1.00 hours
 
 **By Phase:**
 
@@ -45,9 +45,10 @@ Progress: [########=.] 80%
 | Phase 04 P01 | 3min | 2 tasks | 2 files |
 | Phase 04 P02 | 4min | 2 tasks | 4 files |
 | Phase 04 P03 | 3min | 2 tasks | 5 files |
+| Phase 04 P04 | 3min | 2 tasks | 6 files |
 
 **Recent Trend:**
-- Last 5 plans: 3min, 3min, 3min, 4min, 3min
+- Last 5 plans: 3min, 3min, 4min, 3min, 3min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -117,6 +118,10 @@ Recent decisions affecting current work:
 - [Phase 04]: solar_surplus_available always False in Phase 4 (Phase 5 wires actual PV detection via PVHysteresisTracker)
 - [Phase 04]: TimeEntity uses async_set_value (not async_set_native_value); RestoreEntity uses async_get_last_state (not number-specific)
 - [Phase 04]: number.py async_setup_entry restructured to allow car entities without battery module (no early return)
+- [Phase 04]: mySkoda added as explicit platform pattern alongside "skoda" for broader car integration support
+- [Phase 04]: battery_percentage and charging_level added to SOC entity patterns for mySkoda compatibility
+- [Phase 04]: _is_home_and_plugged_in() uses 3-signal cascade: Easee charger status (required), car charger_connected (optional), vehicle location (optional)
+- [Phase 04]: home_plugged_entity replaced by charger_connected_entity + location_entity (auto-detected, optional manual override)
 
 ### Pending Todos
 
@@ -131,5 +136,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 04-03-PLAN.md (per-car entities and time platform -- Phase 04 complete)
+Stopped at: Completed 04-04-PLAN.md (UAT gap closure -- car autodetect + home+plugged derivation)
 Resume file: None
