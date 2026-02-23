@@ -450,7 +450,7 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
 
     # Define platform patterns to search for
     platform_patterns = {
-        "skoda": ["skoda"],
+        "skoda": ["skoda", "myskoda"],
         "volkswagen": ["volkswagen", "vw"],
     }
 
@@ -478,6 +478,8 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
             for device_id, entities in device_entities.items():
                 battery_level_entity = None
                 car_name = None
+                charger_connected_entity = None
+                location_entity = None
 
                 for entity_entry in entities:
                     entity_id_lower = entity_entry.entity_id.lower()
@@ -489,8 +491,29 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
                         or "battery_level" in unique_id_lower
                         or "state_of_charge" in entity_id_lower
                         or "state_of_charge" in unique_id_lower
+                        or "battery_percentage" in entity_id_lower
+                        or "battery_percentage" in unique_id_lower
+                        or "charging_level" in entity_id_lower
+                        or "charging_level" in unique_id_lower
                     ):
                         battery_level_entity = entity_entry.entity_id
+
+                    # Look for charger connected binary sensor
+                    if entity_entry.domain == "binary_sensor" and (
+                        "charger_connected" in entity_id_lower
+                        or "charger_connected" in unique_id_lower
+                        or "plug_connected" in entity_id_lower
+                        or "plug_connected" in unique_id_lower
+                    ):
+                        charger_connected_entity = entity_entry.entity_id
+
+                    # Look for location device tracker
+                    if entity_entry.domain == "device_tracker" and (
+                        "position" in entity_id_lower
+                        or "location" in entity_id_lower
+                        or "parking" in entity_id_lower
+                    ):
+                        location_entity = entity_entry.entity_id
 
                     # Try to extract car name from entity's original name or device
                     if car_name is None and entity_entry.original_name:
@@ -506,12 +529,24 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
                         "battery_level_entity": battery_level_entity,
                         "platform": platform_name,
                     }
+                    if charger_connected_entity:
+                        car_info["charger_connected_entity"] = charger_connected_entity
+                    if location_entity:
+                        car_info["location_entity"] = location_entity
                     cars.append(car_info)
                     _LOGGER.debug(
                         "Found %s car: %s (battery: %s)",
                         platform_name,
                         car_name,
                         battery_level_entity,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Car integration %s device %s matched domain but no battery "
+                        "level entity found. Available sensors: %s",
+                        platform_name,
+                        device_id,
+                        [e.entity_id for e in entities if e.domain == "sensor"],
                     )
 
     if not cars:

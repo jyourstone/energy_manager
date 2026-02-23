@@ -47,6 +47,8 @@ CONF_CAR_NAME = "car_name"
 CONF_BATTERY_CAPACITY = "battery_capacity"
 CONF_BATTERY_LEVEL_ENTITY = "battery_level_entity"
 CONF_HOME_PLUGGED_ENTITY = "home_plugged_entity"
+CONF_CHARGER_CONNECTED_ENTITY = "charger_connected_entity"
+CONF_LOCATION_ENTITY = "location_entity"
 
 # --- Battery schedule configuration ---
 
