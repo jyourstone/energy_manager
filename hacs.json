@@ -1,5 +1,7 @@
 {
   "name": "Energy Manager",
   "render_readme": true,
-  "homeassistant": "2024.12.0"
+  "homeassistant": "2024.12.0",
+  "zip_release": true,
+  "filename": "energy_manager.zip"
 }
