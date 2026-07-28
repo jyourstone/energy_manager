@@ -15,13 +15,13 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **CORE-02**: Config flow auto-detects compatible integrations (Nordpool, SigenStor, Easee, Skoda, VW, Forecast.Solar) and pre-populates entity selections
 - [x] **CORE-03**: User can manually configure all entity IDs for advanced/unsupported setups
 - [x] **CORE-04**: Config flow auto-detects Nordpool integration (required -- blocks setup if not found) with both HACS and native variants supported
-- [ ] **CORE-05**: User can adjust all runtime settings via options flow without reconfiguring
+- [x] **CORE-05**: User can adjust all runtime settings via options flow without reconfiguring
 - [x] **CORE-06**: Integration properly handles setup, unload, reload, and config migration lifecycle
 - [x] **CORE-07**: All operations are fully async -- no blocking calls in the event loop
 - [x] **CORE-08**: Integration follows HACS publishing guidelines (hacs.json, manifest.json, proper structure)
 - [x] **CORE-09**: All UI text uses translation system (strings.json / translations/)
-- [ ] **CORE-10**: Integration exposes diagnostics platform for debug data export
-- [ ] **CORE-11**: ALL manual HA helpers AND template sensors are replaced -- inputs become integration-owned entities (number, switch, select, datetime), derived values (fuse headroom, filtered house load, solar surplus, actual price incl. fees) are computed internally and exposed as diagnostic sensors; zero Jinja templates required
+- [x] **CORE-10**: Integration exposes diagnostics platform for debug data export
+- [x] **CORE-11**: ALL manual HA helpers AND template sensors are replaced -- inputs become integration-owned entities (number, switch, select, datetime), derived values (fuse headroom, filtered house load, solar surplus, actual price incl. fees) are computed internally and exposed as diagnostic sensors; zero Jinja templates required
 - [x] **CORE-12**: Integration modules (Home Battery, EV Charging) can be enabled/disabled independently
 - [x] **CORE-13**: Each module works standalone without requiring other modules to be enabled
 - [x] **CORE-14**: Observe-only (dry-run) mode plus master enable switch -- integration computes and logs all decisions without sending any device commands, for safe parallel running next to a legacy system
@@ -41,9 +41,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **BATT-10**: User can set maximum charging power limit via number entity
 - [x] **BATT-11**: Battery SOC is tracked and used in scheduling decisions
 - [x] **BATT-12**: Schedule recalculates when prices update (event-driven via state change listener)
-- [ ] **BATT-13**: Multiple Forecast.Solar sensors (e.g. east + west arrays) can be selected and are summed; solar features activate only when Forecast.Solar is installed
-- [ ] **BATT-14**: Economics model -- charge/discharge decisions account for grid transfer fees and battery cycle cost via number entities; default discharge threshold derives from cycle cost minus transfer fee (parity with live system formula)
-- [ ] **BATT-15**: March 2026 algorithm improvements ported -- solar recharge estimation between peaks and refined future-peak energy reservation
+- [x] **BATT-13**: Multiple Forecast.Solar sensors (e.g. east + west arrays) can be selected and are summed; solar features activate only when Forecast.Solar is installed
+- [x] **BATT-14**: Economics model -- charge/discharge decisions account for grid transfer fees and battery cycle cost via number entities; default discharge threshold derives from cycle cost minus transfer fee (parity with live system formula)
+- [x] **BATT-15**: March 2026 algorithm improvements ported -- solar recharge estimation between peaks and refined future-peak energy reservation
 
 ### EMS Controller
 
@@ -90,11 +90,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Quality & Testing
 
-- [ ] **QUAL-01**: Safety-critical calculations (fuse capacity, amp limits) have exhaustive unit tests
-- [ ] **QUAL-02**: Core scheduling algorithms (peak grouping, virtual energy tracking) have unit tests
+- [x] **QUAL-01**: Safety-critical calculations (fuse capacity, amp limits) have exhaustive unit tests
+- [x] **QUAL-02**: Core scheduling algorithms (peak grouping, virtual energy tracking) have unit tests
 - [ ] **QUAL-03**: Integration setup/unload/reload lifecycle has integration tests
-- [ ] **QUAL-04**: CI pipeline runs tests, linting (ruff), HACS validation, and manifest validation on every PR
-- [ ] **QUAL-05**: All entity states handle "unavailable" and "unknown" gracefully -- no crashes on missing sensor data
+- [x] **QUAL-04**: CI pipeline runs tests, linting (ruff), HACS validation, and manifest validation on every PR
+- [x] **QUAL-05**: All entity states handle "unavailable" and "unknown" gracefully -- no crashes on missing sensor data
 
 ## v2 Requirements
 
@@ -144,13 +144,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CORE-02 | Phase 1 | Complete |
 | CORE-03 | Phase 1 | Complete |
 | CORE-04 | Phase 1 | Complete |
-| CORE-05 | Phase 6 | Pending |
+| CORE-05 | Phase 6 | Complete |
 | CORE-06 | Phase 1 | Complete |
 | CORE-07 | Phase 1 | Complete |
 | CORE-08 | Phase 1 | Complete |
 | CORE-09 | Phase 1 | Complete |
-| CORE-10 | Phase 6 | Pending |
-| CORE-11 | Phase 6 | Pending |
+| CORE-10 | Phase 6 | Complete |
+| CORE-11 | Phase 6 | Complete |
 | CORE-12 | Phase 1 | Complete |
 | CORE-13 | Phase 1 | Complete |
 | CORE-14 | Phase 5 | Complete |
@@ -167,9 +167,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BATT-10 | Phase 2 | Complete |
 | BATT-11 | Phase 2 | Complete |
 | BATT-12 | Phase 2 | Complete |
-| BATT-13 | Phase 6 | Pending |
-| BATT-14 | Phase 6 | Pending |
-| BATT-15 | Phase 6 | Pending |
+| BATT-13 | Phase 6 | Complete |
+| BATT-14 | Phase 6 | Complete |
+| BATT-15 | Phase 6 | Complete |
 | EMS-01 | Phase 3 | Complete |
 | EMS-02 | Phase 3 | Complete |
 | EMS-03 | Phase 3 | Complete |
@@ -204,11 +204,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EASE-07 | Phase 5 | Complete |
 | EASE-08 | Phase 5 | Complete |
 | EASE-09 | Phase 5 | Complete |
-| QUAL-01 | Phase 6 | Pending |
-| QUAL-02 | Phase 6 | Pending |
+| QUAL-01 | Phase 6 | Complete |
+| QUAL-02 | Phase 6 | Complete |
 | QUAL-03 | Phase 6 | Pending |
-| QUAL-04 | Phase 6 | Pending |
-| QUAL-05 | Phase 6 | Pending |
+| QUAL-04 | Phase 6 | Complete |
+| QUAL-05 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 69 total
