@@ -419,6 +419,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                             SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
                             SENSOR_FAIL_BEHAVIOR_BLOCK,
                         ],
+                        translation_key="sensor_fail_behavior",
                     )
                 ),
                 vol.Optional(

@@ -145,6 +145,14 @@
       }
     }
   },
+  "selector": {
+    "sensor_fail_behavior": {
+      "options": {
+        "assume_load": "Assume a fixed load (recommended)",
+        "block": "Block charging until sensors recover"
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "electricity_price": {

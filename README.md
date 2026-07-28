@@ -29,7 +29,6 @@ Not yet implemented:
 
 - **Easee charger actuation** — car charging schedules are computed but not yet sent to the Easee charger (planned)
 - **Full options flow** — most settings are configured once via the setup wizard; a complete "Configure" flow for changing them afterwards is still in development
-- Swedish translation of the UI (English is complete today)
 
 Expect rough edges, and expect entities/config to change before 1.0.
 
@@ -52,7 +51,7 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 - **Per-car configuration** — each car is a config subentry with its own departure time, target SOC, and max charge power entities, plus a cheapest-slot charging schedule constrained by the departure deadline
 - **PV opportunistic charging** — surplus solar production can trigger charging outside the price-driven schedule, with a hysteresis band to avoid rapid mode switching
 - **Modular** — Home Battery and EV Charging can each be enabled independently; a module works standalone without the other being configured
-- **Translations** — UI strings use Home Assistant's translation system; English is available today
+- **Translations** — UI strings use Home Assistant's translation system; English and Swedish are both complete
 
 ## Requirements
 
