@@ -95,18 +95,21 @@ def find_sigenstor_entities(hass: HomeAssistant) -> dict[str, str]:
                     "Found SigenStor SOC entity: %s", entity_entry.entity_id
                 )
 
-            # Look for battery power
-            if CONF_BATTERY_POWER_ENTITY not in result and (
-                "battery_power" in entity_id_lower
-                or "battery_power" in unique_id_lower
+            # Look for battery power (avoid matching the SOC entity again)
+            if (
+                CONF_BATTERY_POWER_ENTITY not in result
+                and (
+                    "battery_power" in entity_id_lower
+                    or "battery_power" in unique_id_lower
+                )
+                and "state_of_charge" not in entity_id_lower
+                and "soc" not in entity_id_lower
             ):
-                # Avoid matching SOC entity again
-                if "state_of_charge" not in entity_id_lower and "soc" not in entity_id_lower:
-                    result[CONF_BATTERY_POWER_ENTITY] = entity_entry.entity_id
-                    _LOGGER.debug(
-                        "Found SigenStor battery power entity: %s",
-                        entity_entry.entity_id,
-                    )
+                result[CONF_BATTERY_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor battery power entity: %s",
+                    entity_entry.entity_id,
+                )
 
     if not result:
         _LOGGER.debug("SigenStor integration found but no matching entities")
@@ -283,13 +286,13 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     or "pv_generation" in unique_id_lower
                 )
             ):
-                # Prefer plant-level over inverter-level
-                if "plant" in entity_id_lower or CONF_PV_POWER_ENTITY not in result:
-                    result[CONF_PV_POWER_ENTITY] = entity_entry.entity_id
-                    _LOGGER.debug(
-                        "Found SigenStor PV power entity: %s",
-                        entity_entry.entity_id,
-                    )
+                # First match wins here; the dedicated global fallback scan
+                # below handles plant-vs-inverter preference
+                result[CONF_PV_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor PV power entity: %s",
+                    entity_entry.entity_id,
+                )
 
     # Fallback: scan ALL entities for per-phase grid power sensors
     phase_keys = [

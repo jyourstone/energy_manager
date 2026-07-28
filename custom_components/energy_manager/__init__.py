@@ -118,8 +118,10 @@ async def async_setup_entry(
 def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
     """Build list of platforms to set up based on enabled modules.
 
-    Platform.SENSOR is always included for the core price sensor entity.
-    Module-specific platforms are added conditionally as modules are enabled.
+    Platform.SENSOR and Platform.SWITCH are always included -- the core
+    price sensor entity and the master "Device control" switch (CORE-14)
+    are present regardless of which modules are enabled. Module-specific
+    platforms are added conditionally as modules are enabled.
 
     Args:
         entry: The config entry to check for enabled modules.
@@ -127,8 +129,8 @@ def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
     Returns:
         List of Platform enums to forward.
     """
-    # Core price sensor is always present regardless of enabled modules
-    platforms: list[Platform] = [Platform.SENSOR]
+    # Core price sensor and master control switch are always present
+    platforms: list[Platform] = [Platform.SENSOR, Platform.SWITCH]
 
     if entry.options.get(CONF_BATTERY_ENABLED):
         platforms.append(Platform.NUMBER)

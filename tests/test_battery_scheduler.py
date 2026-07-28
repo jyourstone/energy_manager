@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-
 from custom_components.energy_manager.battery_scheduler import (
     BatteryScheduleResult,
     build_battery_schedule,
@@ -137,7 +136,7 @@ class TestPeakGrouping:
         # Hours 17-20: expensive (3.00) -- evening peak
         # Hours 21-23: cheap (0.35)
         price_data = (
-            [(h, 0.30) for h in range(0, 6)]
+            [(h, 0.30) for h in range(6)]
             + [(6, 0.60), (7, 0.70)]
             + [(h, 2.50) for h in range(8, 11)]  # morning peak
             + [(11, 0.60)]
@@ -234,7 +233,7 @@ class TestMultiCycleCharging:
         # Hours 12-15: expensive (3.00) -> discharge peak 2
         # Hours 16-23: mid (0.80) -> idle
         price_data = (
-            [(h, 0.20) for h in range(0, 4)]
+            [(h, 0.20) for h in range(4)]
             + [(h, 2.50) for h in range(4, 8)]
             + [(h, 0.25) for h in range(8, 12)]
             + [(h, 3.00) for h in range(12, 16)]
@@ -577,7 +576,7 @@ class TestScheduleAttributeFiltering:
 
     def test_filter_excludes_past_slots(self):
         """Past slots (end <= now) should be excluded from the visible window."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
 
         # Simulate a 72-slot schedule (3 days worth) with discharge at slots 36-42
         now = datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc)

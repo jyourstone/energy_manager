@@ -97,6 +97,10 @@
   },
   "config_subentries": {
     "car": {
+      "entry_type": "Bil",
+      "initiate_flow": {
+        "user": "Lägg till bil"
+      },
       "step": {
         "user": {
           "title": "Lägg till bil",
@@ -194,6 +198,11 @@
     "time": {
       "departure_time": {
         "name": "Avresetid"
+      }
+    },
+    "switch": {
+      "control_enabled": {
+        "name": "Enhetsstyrning"
       }
     }
   }

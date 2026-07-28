@@ -18,7 +18,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -66,6 +65,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
+    CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
@@ -78,10 +78,9 @@ from .const import (
     CONF_GRID_PHASE_A_ENTITY,
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
-    CONF_MAX_ESS_CHARGE_AMPS,
-    CONF_CHARGER_CONNECTED_ENTITY,
     CONF_GRID_POWER_ENTITY,
     CONF_LOCATION_ENTITY,
+    CONF_MAX_ESS_CHARGE_AMPS,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,

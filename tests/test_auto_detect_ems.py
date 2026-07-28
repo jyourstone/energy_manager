@@ -13,7 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
-
 from custom_components.energy_manager.auto_detect import (
     find_sigenstor_ems_entities,
 )

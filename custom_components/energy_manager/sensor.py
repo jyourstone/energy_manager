@@ -310,7 +310,8 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
     """Sensor showing EMS controller status.
 
     State is the current EMS mode. Attributes expose fuse headroom,
-    target mode, override reason, and verification status.
+    target mode, override reason, verification status, and observe-only
+    (dry-run) status (CORE-14).
     """
 
     _attr_translation_key = "ems_status"
@@ -343,7 +344,8 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
         """Return EMS control attributes.
 
         Exposes target mode, charge limit, fuse headroom, override reason,
-        command verification status, and active override flags.
+        command verification status, active override flags, and observe-only
+        (dry-run) status with the last suppressed command (CORE-14).
         """
         data: EMSData | None = self.coordinator.data
         if data is None:
@@ -356,6 +358,8 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
             "command_verified": data.command_verified,
             "car_override_active": data.car_override_active,
             "pv_charging_active": data.pv_charging_active,
+            "dry_run": data.dry_run,
+            "last_suppressed_command": data.last_suppressed_command,
         }
 
 

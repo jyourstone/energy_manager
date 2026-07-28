@@ -35,6 +35,8 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
+from .battery_scheduler import BatteryScheduleResult, build_battery_schedule
+from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
 from .const import (
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
     CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES,
@@ -45,6 +47,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
+    CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_EMS_SELECT_ENTITY,
@@ -56,9 +59,8 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
-    CONF_MAX_ESS_CHARGE_AMPS,
-    CONF_CHARGER_CONNECTED_ENTITY,
     CONF_LOCATION_ENTITY,
+    CONF_MAX_ESS_CHARGE_AMPS,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
@@ -87,11 +89,10 @@ from .const import (
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
     WATTS_TO_AMPS_3PHASE_DIVISOR,
 )
-from .battery_scheduler import BatteryScheduleResult, build_battery_schedule
-from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
 from .ems_controller import (
     ESSLimitRateLimiter,
     PVHysteresisTracker,
+    build_command_decision,
     car_demands_priority_charging,
     compute_available_ess_amps,
     compute_ems_state,
@@ -311,6 +312,10 @@ class EMSData:
         last_command_time: When last command was sent.
         car_override_active: Whether car priority paused battery.
         pv_charging_active: Whether PV opportunistic is active.
+        dry_run: True when the master "Device control" switch is OFF
+            (observe-only) -- commands are computed but not sent (CORE-14).
+        last_suppressed_command: Human-readable description of the most
+            recently suppressed command, or None if none has been suppressed.
     """
 
     current_mode: str
@@ -322,6 +327,8 @@ class EMSData:
     last_command_time: datetime | None
     car_override_active: bool
     pv_charging_active: bool
+    dry_run: bool
+    last_suppressed_command: str | None
 
 
 class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
@@ -643,6 +650,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._pending_verification: dict | None = None
         self._verification_attempts: int = 0
 
+        # Observe-only mode (CORE-14): most recently suppressed dry-run command
+        self._last_suppressed_command: str | None = None
+
     async def _async_setup(self) -> None:
         """Register listeners for coordinator chaining and fuse-critical events.
 
@@ -723,6 +733,8 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 last_command_time=None,
                 car_override_active=False,
                 pv_charging_active=False,
+                dry_run=not self._is_control_enabled(),
+                last_suppressed_command=self._last_suppressed_command,
             )
 
         # 2. Read real-time sensor values (signed: positive = import, negative = export)
@@ -780,23 +792,26 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         limit_changed = result.charge_limit_kw != self._last_charge_limit
 
         # 8. Safe command ordering (Research Pitfall 3)
+        mode_sent = False
         if mode_changed or limit_changed:
             if result.target_mode == "command_charging":
                 # Switching TO command_charging: send limit FIRST, then mode
                 if limit_changed:
                     await self._send_charge_limit(result.charge_limit_kw)
                 if mode_changed:
-                    await self._send_ems_mode(result.target_mode)
+                    mode_sent = await self._send_ems_mode(result.target_mode)
             else:
                 # Switching FROM command_charging (or between non-charge modes):
                 # send mode FIRST, then zero limit
                 if mode_changed:
-                    await self._send_ems_mode(result.target_mode)
+                    mode_sent = await self._send_ems_mode(result.target_mode)
                 if limit_changed:
                     await self._send_charge_limit(result.charge_limit_kw)
 
-        # 9. Schedule verification if mode changed
-        if mode_changed and self._ems_select_entity:
+        # 9. Schedule verification if mode changed and actually sent -- skip
+        # when suppressed by observe-only mode (CORE-14), otherwise the
+        # command would never be verified and would log a false warning.
+        if mode_changed and mode_sent and self._ems_select_entity:
             mapped_option = EMS_MODE_MAP.get(result.target_mode)
             if mapped_option:
                 self._schedule_verification(
@@ -821,7 +836,19 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             last_command_time=dt_util.utcnow() if mode_changed else None,
             car_override_active=result.override_reason == "car_charging_priority",
             pv_charging_active=result.override_reason == "pv_opportunistic",
+            dry_run=not self._is_control_enabled(),
+            last_suppressed_command=self._last_suppressed_command,
         )
+
+    def _is_control_enabled(self) -> bool:
+        """Return the master "Device control" switch state (CORE-14).
+
+        Reads runtime_data.control_enabled, defaulting to False (observe-only)
+        if runtime_data isn't set yet or the switch hasn't initialized --
+        fail-safe: this must never default to enabled.
+        """
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        return bool(getattr(runtime_data, "control_enabled", False))
 
     def _read_float_state(self, entity_id: str, default: float) -> float:
         """Read a sensor state and return as float, with safe fallback.
@@ -1027,6 +1054,19 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             )
             return False
 
+        # Choke point (CORE-14): suppress the command when observe-only.
+        decision = build_command_decision(
+            control_enabled=self._is_control_enabled(),
+            service_domain="select",
+            service_name="select_option",
+            entity_id=self._ems_select_entity,
+            value=option,
+        )
+        if not decision.should_send:
+            _LOGGER.info(decision.dry_run_message)
+            self._last_suppressed_command = decision.dry_run_message
+            return False
+
         _LOGGER.info("Setting EMS mode to %s (%s)", mode, option)
         await self.hass.services.async_call(
             "select",
@@ -1062,6 +1102,20 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # Clamp to safe range before sending (Pitfall 2)
         clamped = max(0.0, min(limit_kw, MAX_CHARGE_LIMIT_KW))
+
+        # Choke point (CORE-14): suppress the command when observe-only.
+        decision = build_command_decision(
+            control_enabled=self._is_control_enabled(),
+            service_domain="number",
+            service_name="set_value",
+            entity_id=self._charge_limit_entity,
+            value=clamped,
+        )
+        if not decision.should_send:
+            _LOGGER.info(decision.dry_run_message)
+            self._last_suppressed_command = decision.dry_run_message
+            return False
+
         _LOGGER.info(
             "Setting charge limit to %.1f kW (requested %.1f)",
             clamped,
@@ -1400,12 +1454,9 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             return True
 
         # 4. SOC reading is stale -> likely unrecognized car
+        # 5. Otherwise: recognized car with recent SOC
         elapsed = (dt_util.utcnow() - self._soc_last_updated).total_seconds()
-        if elapsed > FALLBACK_STALE_THRESHOLD_MINUTES * 60:
-            return True
-
-        # 5. Recognized car with recent SOC
-        return False
+        return elapsed > FALLBACK_STALE_THRESHOLD_MINUTES * 60
 
     def _is_home_and_plugged_in(self) -> bool:
         """Derive whether the car is home and plugged in from available signals.
@@ -1438,16 +1489,22 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # Signal 2: Car's own charger_connected binary sensor (if available)
         if self._charger_connected_entity:
             state = self.hass.states.get(self._charger_connected_entity)
-            if state is not None and state.state not in ("unavailable", "unknown"):
-                if state.state.lower() != "on":
-                    return False
+            if (
+                state is not None
+                and state.state not in ("unavailable", "unknown")
+                and state.state.lower() != "on"
+            ):
+                return False
 
         # Signal 3: Vehicle location (if available)
         if self._location_entity:
             state = self.hass.states.get(self._location_entity)
-            if state is not None and state.state not in ("unavailable", "unknown"):
-                if state.state.lower() != "home":
-                    return False
+            if (
+                state is not None
+                and state.state not in ("unavailable", "unknown")
+                and state.state.lower() != "home"
+            ):
+                return False
 
         return True
 
@@ -1461,9 +1518,14 @@ class EnergyManagerData:
 
     price_coordinator: PriceCoordinator
     battery_coordinator: BatteryScheduleCoordinator | None = None
-    ems_coordinator: "EMSCoordinator | None" = None
+    ems_coordinator: EMSCoordinator | None = None
     car_coordinators: dict[str, CarChargingCoordinator] = field(default_factory=dict)
     modules_enabled: dict[str, bool] = field(default_factory=dict)
+    # Master "Device control" switch state (CORE-14). False = observe-only:
+    # coordinators still compute and publish decisions, but no outgoing
+    # device command is ever sent. Set by the switch entity on toggle and
+    # read by coordinators at command time. Defaults OFF -- fail-safe.
+    control_enabled: bool = False
 
 
 EnergyManagerConfigEntry = ConfigEntry[EnergyManagerData]

@@ -97,6 +97,10 @@
   },
   "config_subentries": {
     "car": {
+      "entry_type": "Car",
+      "initiate_flow": {
+        "user": "Add car"
+      },
       "step": {
         "user": {
           "title": "Add Car",
@@ -194,6 +198,11 @@
     "time": {
       "departure_time": {
         "name": "Departure Time"
+      }
+    },
+    "switch": {
+      "control_enabled": {
+        "name": "Device control"
       }
     }
   }

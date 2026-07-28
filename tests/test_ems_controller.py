@@ -7,6 +7,7 @@ Tests cover all EMS decision paths:
 - EMS-04: Safety guards (clamp_amps)
 - EMS-08: PV opportunistic charging
 - PV hysteresis state machine
+- CORE-14: Observe-only command gating
 """
 
 from __future__ import annotations
@@ -16,9 +17,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.energy_manager.ems_controller import (
+    CommandDecision,
     EMSDecision,
     ESSLimitRateLimiter,
     PVHysteresisTracker,
+    build_command_decision,
     car_demands_priority_charging,
     clamp_amps,
     compute_available_ess_amps,
@@ -26,7 +29,6 @@ from custom_components.energy_manager.ems_controller import (
     resolve_current_sensor_fallback,
     worst_case_signed_amps,
 )
-
 
 # ---------------------------------------------------------------------------
 # EMS-01: Mode Selection (schedule-driven)
@@ -780,3 +782,60 @@ class TestCarPriorityWiring:
         )
         assert result.target_mode == "standby"
         assert result.override_reason == "car_charging_priority"
+
+
+# ---------------------------------------------------------------------------
+# CORE-14: Observe-only command gating
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCommandDecision:
+    """Tests for the observe-only command gating choke point."""
+
+    def test_control_enabled_should_send(self):
+        """control_enabled=True means the command should actually be sent."""
+        decision = build_command_decision(
+            control_enabled=True,
+            service_domain="select",
+            service_name="select_option",
+            entity_id="select.ems_mode",
+            value="Command Charging (PV First)",
+        )
+        assert isinstance(decision, CommandDecision)
+        assert decision.should_send is True
+
+    def test_control_disabled_suppresses_command(self):
+        """control_enabled=False (observe-only default) suppresses the command."""
+        decision = build_command_decision(
+            control_enabled=False,
+            service_domain="select",
+            service_name="select_option",
+            entity_id="select.ems_mode",
+            value="Command Charging (PV First)",
+        )
+        assert decision.should_send is False
+
+    def test_dry_run_message_states_service_entity_and_value(self):
+        """The dry-run message names exactly what would have been sent."""
+        decision = build_command_decision(
+            control_enabled=False,
+            service_domain="number",
+            service_name="set_value",
+            entity_id="number.charge_limit",
+            value=3.5,
+        )
+        assert decision.dry_run_message.startswith("[dry-run]")
+        assert "number.set_value" in decision.dry_run_message
+        assert "number.charge_limit" in decision.dry_run_message
+        assert "3.5" in decision.dry_run_message
+
+    def test_dry_run_message_present_even_when_sending(self):
+        """dry_run_message is always populated, regardless of should_send."""
+        decision = build_command_decision(
+            control_enabled=True,
+            service_domain="select",
+            service_name="select_option",
+            entity_id="select.ems_mode",
+            value="Standby",
+        )
+        assert decision.dry_run_message  # non-empty regardless

@@ -17,7 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -230,15 +229,18 @@ def compute_ems_state(
     safe_charge_kw = max(0.0, min(max_charge_power_kw, headroom_kw))
 
     # 5. PV opportunistic charging (EMS-08)
-    if mode in ("standby", "max_self_consumption") and pv_hysteresis_active:
-        if battery_soc_pct < max_soc_pct:
-            pv_kw = pv_power_w / 1000.0
-            return EMSDecision(
-                target_mode="command_charging",
-                charge_limit_kw=min(pv_kw, safe_charge_kw),
-                fuse_headroom_amps=headroom,
-                override_reason="pv_opportunistic",
-            )
+    if (
+        mode in ("standby", "max_self_consumption")
+        and pv_hysteresis_active
+        and battery_soc_pct < max_soc_pct
+    ):
+        pv_kw = pv_power_w / 1000.0
+        return EMSDecision(
+            target_mode="command_charging",
+            charge_limit_kw=min(pv_kw, safe_charge_kw),
+            fuse_headroom_amps=headroom,
+            override_reason="pv_opportunistic",
+        )
 
     # 6. Return final decision
     charge_limit = safe_charge_kw if mode == "command_charging" else 0.0
@@ -457,3 +459,58 @@ class ESSLimitRateLimiter:
             self._pending_since = None
 
         return self._applied
+
+
+# ---------------------------------------------------------------------------
+# Observe-only command gating (CORE-14)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CommandDecision:
+    """Decision of whether to send an outgoing device command, or suppress it.
+
+    This is the single choke-point decision behind the master "Device
+    control" switch (CORE-14): when the switch is OFF the integration is
+    observe-only -- every coordinator still computes and publishes its
+    decisions, but no hass.services.async_call is ever made.
+
+    Attributes:
+        should_send: True if the caller should actually invoke the HA
+            service call. False means the command must be suppressed.
+        dry_run_message: Human-readable "[dry-run] Would call ..." message
+            describing exactly what would have been sent. Callers log (and
+            record) this only when should_send is False.
+    """
+
+    should_send: bool
+    dry_run_message: str
+
+
+def build_command_decision(
+    control_enabled: bool,
+    service_domain: str,
+    service_name: str,
+    entity_id: str,
+    value: str | float,
+) -> CommandDecision:
+    """Decide whether to send a device command or suppress it (observe-only).
+
+    Args:
+        control_enabled: State of the master "Device control" switch. False
+            (the default) means observe-only -- suppress the command.
+        service_domain: HA service domain, e.g. "select" or "number".
+        service_name: HA service name, e.g. "select_option" or "set_value".
+        entity_id: Target entity ID the command would be sent to.
+        value: The option string or numeric value that would be sent.
+
+    Returns:
+        CommandDecision with should_send and a dry-run description message.
+    """
+    dry_run_message = (
+        f"[dry-run] Would call {service_domain}.{service_name} on "
+        f"{entity_id} with value={value!r}"
+    )
+    return CommandDecision(
+        should_send=control_enabled, dry_run_message=dry_run_message
+    )
