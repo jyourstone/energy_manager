@@ -15,6 +15,7 @@ The EMSCoordinator (Plan 03-02) will call compute_ems_state() and handle all I/O
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,8 @@ def compute_ems_state(
     max_soc_pct: float = 95.0,
     safety_buffer_amps: float = 2.0,
     voltage: float = 230.0,
+    sensor_blocked: bool = False,
+    available_ess_amps: float | None = None,
 ) -> EMSDecision:
     """Compute the EMS mode and safe charging limit.
 
@@ -166,7 +169,8 @@ def compute_ems_state(
     Args:
         target_ems_mode: Schedule-driven target mode from BatteryScheduleCoordinator.
             One of "command_charging", "max_self_consumption", "standby", "idle".
-        current_l_amps: Current highest phase load in amps.
+        current_l_amps: Signed worst-case phase current in amps. Positive means
+            import (load on the fuse); negative means export (adds headroom).
         fuse_rating_amps: Installed fuse rating in amps.
         max_charge_power_kw: Maximum battery charging power in kW.
         battery_soc_pct: Current battery state of charge (0-100).
@@ -178,13 +182,34 @@ def compute_ems_state(
         max_soc_pct: Maximum SOC target percentage. PV charging skipped above this.
         safety_buffer_amps: Amps reserved as safety margin on fuse headroom.
         voltage: Grid voltage in volts for amps-to-kW conversion.
+        sensor_blocked: When True, the current sensor(s) were unavailable and
+            the configured fail-behavior is "block" -- headroom is forced to
+            0 (no charge authorization) regardless of current_l_amps.
+        available_ess_amps: Optional pre-computed amps ceiling to use for the
+            charging-power derivation instead of the raw fuse headroom (see
+            compute_available_ess_amps() and ESSLimitRateLimiter). Leave None
+            to use the raw fuse headroom directly (previous behavior).
+            fuse_headroom_amps in the result always reports the raw,
+            instantaneous physical headroom regardless of this override.
 
     Returns:
         EMSDecision with the target mode, safe charge limit, fuse headroom,
         and any override reason.
     """
-    # 1. Fuse headroom calculation (EMS-02) -- never negative
+    # 1. Fuse headroom calculation (EMS-02) -- never negative. current_l_amps
+    # is signed: export (negative) increases headroom, import (positive)
+    # reduces it.
     headroom = max(0.0, fuse_rating_amps - current_l_amps - safety_buffer_amps)
+    if sensor_blocked:
+        headroom = 0.0
+
+    # Ceiling actually used to derive the charging power -- defaults to the
+    # raw headroom above, but callers may supply a pre-computed value (e.g.
+    # with battery self-consumption add-back and ESS-limit rate limiting
+    # already applied externally, see coordinator.py).
+    charge_ceiling_amps = headroom if available_ess_amps is None else available_ess_amps
+    if sensor_blocked:
+        charge_ceiling_amps = 0.0
 
     # 2. Map "idle" to "max_self_consumption" (idle = let battery optimize)
     mode = target_ems_mode
@@ -201,7 +226,7 @@ def compute_ems_state(
         )
 
     # 4. Fuse-limited charging power (EMS-02)
-    headroom_kw = (headroom * voltage) / 1000.0
+    headroom_kw = (charge_ceiling_amps * voltage) / 1000.0
     safe_charge_kw = max(0.0, min(max_charge_power_kw, headroom_kw))
 
     # 5. PV opportunistic charging (EMS-08)
@@ -245,3 +270,190 @@ def clamp_amps(
         The clamped amp value, guaranteed to be in [min_amps, max_amps].
     """
     return max(min_amps, min(value, max_amps))
+
+
+def worst_case_signed_amps(phase_amps: list[float]) -> float:
+    """Return the worst-case (highest) signed current across grid phases.
+
+    Positive values represent import (load on the fuse); negative values
+    represent export (extra headroom). The worst case for fuse protection
+    is always the highest (most-import) value -- an exporting or lightly
+    loaded phase must never mask an overloaded one.
+
+    Args:
+        phase_amps: Signed amps for each configured phase.
+
+    Returns:
+        The maximum value in phase_amps.
+    """
+    return max(phase_amps)
+
+
+def compute_available_ess_amps(
+    fuse_rating_amps: float,
+    safety_buffer_amps: float,
+    worst_phase_amps: float,
+    battery_own_amps: float = 0.0,
+    max_ess_charge_amps: float | None = None,
+) -> float:
+    """Compute the amps available for the battery's own charging.
+
+    Grid current sensors measure the battery's own charging draw as part of
+    the total load. Without compensation this causes a self-reinforcing
+    ratchet: each cycle the battery's own previous charging shows up as
+    "more load", so the computed limit keeps shrinking. Adding back
+    battery_own_amps corrects for this so the ceiling reflects only the
+    *other* household load.
+
+    Args:
+        fuse_rating_amps: Installed fuse rating in amps.
+        safety_buffer_amps: Amps reserved as a safety margin.
+        worst_phase_amps: Signed worst-case phase current (see
+            worst_case_signed_amps()).
+        battery_own_amps: The battery's own current charging draw in amps
+            (0.0 when idle or discharging).
+        max_ess_charge_amps: Optional hard cap on the result (hardware safety
+            limit). None means no additional cap beyond the fuse math.
+
+    Returns:
+        Available amps for the battery to charge with, clamped to
+        [0, max_ess_charge_amps] (or [0, inf) when no cap is given).
+    """
+    available = (
+        fuse_rating_amps - safety_buffer_amps - worst_phase_amps + battery_own_amps
+    )
+    if max_ess_charge_amps is None:
+        return max(0.0, available)
+    return max(0.0, min(available, max_ess_charge_amps))
+
+
+@dataclass(frozen=True)
+class SensorFallbackResult:
+    """Result of resolving a missing/unavailable current sensor reading.
+
+    Attributes:
+        effective_amps: Amps to use in place of the missing reading.
+        force_zero_headroom: True when headroom must be forced to 0
+            regardless of effective_amps (the "block" fail-behavior).
+    """
+
+    effective_amps: float
+    force_zero_headroom: bool
+
+
+def resolve_current_sensor_fallback(
+    fail_behavior: str,
+    assumed_load_amps: float,
+) -> SensorFallbackResult:
+    """Decide what to do when the L-current/phase sensors are unavailable.
+
+    Callers should only invoke this once a sensor read has actually failed
+    (unavailable, unknown, or unconfigured) -- use the real reading directly
+    otherwise. This replaces the previous silent "assume 0A" fallback, which
+    made fuse headroom always report a static, incorrect value.
+
+    Args:
+        fail_behavior: "assume_load" to use assumed_load_amps as the measured
+            load, or "block" to treat headroom as 0 (no charge authorization).
+        assumed_load_amps: Amps to assume when fail_behavior is "assume_load".
+
+    Returns:
+        SensorFallbackResult with the effective amps and whether headroom
+        should be forced to zero.
+    """
+    if fail_behavior == "block":
+        return SensorFallbackResult(effective_amps=0.0, force_zero_headroom=True)
+    return SensorFallbackResult(
+        effective_amps=assumed_load_amps, force_zero_headroom=False
+    )
+
+
+def car_demands_priority_charging(cars: list[tuple[bool, bool]]) -> bool:
+    """Return True if any car has an active charge slot AND is home+plugged.
+
+    A car "demands" priority charging only when both are true at once: its
+    computed schedule currently wants to charge, and it is actually home and
+    plugged in. Schedules remain visible/computed regardless of plugged
+    state -- this check is only used to decide battery priority override.
+
+    Args:
+        cars: List of (active_slot, home_and_plugged) tuples, one per car
+            coordinator. active_slot is True when the car's current_action
+            is "charge" or "solar_charge".
+
+    Returns:
+        True if at least one car currently demands priority charging.
+    """
+    return any(
+        active_slot and home_and_plugged for active_slot, home_and_plugged in cars
+    )
+
+
+class ESSLimitRateLimiter:
+    """Asymmetric timing for ESS (battery) charge-limit changes.
+
+    Decreases apply immediately -- reducing the charge limit is always safe
+    and must never be delayed. Increases only take effect once the computed
+    value has stayed at or above the pending candidate continuously for
+    increase_delay_seconds, preventing rapid ramp-up as fuse headroom
+    fluctuates. A decrease cancels any pending increase.
+
+    Stateful and mutated by update() -- not part of compute_ems_state() so
+    the pure decision function stays stateless (same pattern as
+    PVHysteresisTracker: the coordinator owns and updates the tracker once
+    per cycle and threads the result through).
+    """
+
+    def __init__(self, increase_delay_seconds: float = 180.0) -> None:
+        """Initialize the rate limiter.
+
+        Args:
+            increase_delay_seconds: How long a higher value must be
+                continuously observed before it is applied.
+        """
+        self._increase_delay_seconds = increase_delay_seconds
+        self._applied: float | None = None
+        self._pending: float | None = None
+        self._pending_since: datetime | None = None
+
+    @property
+    def applied(self) -> float | None:
+        """Currently applied (rate-limited) value, or None before first update."""
+        return self._applied
+
+    def update(self, computed: float, now: datetime) -> float:
+        """Process a new computed value and return the value to actually apply.
+
+        Args:
+            computed: The freshly computed (unrated) value for this cycle.
+            now: Current UTC timestamp.
+
+        Returns:
+            The value that should actually be applied this cycle.
+        """
+        if self._applied is None:
+            # First reading -- apply immediately, no history to compare against.
+            self._applied = computed
+            return self._applied
+
+        if computed <= self._applied:
+            # Decrease (or unchanged) -- apply immediately, cancel any pending increase.
+            self._applied = computed
+            self._pending = None
+            self._pending_since = None
+            return self._applied
+
+        # computed > self._applied -- candidate increase.
+        if self._pending is None or computed < self._pending:
+            # New (lower) target than previously tracked -- restart the timer.
+            self._pending = computed
+            self._pending_since = now
+            return self._applied
+
+        elapsed = (now - self._pending_since).total_seconds()
+        if elapsed >= self._increase_delay_seconds:
+            self._applied = self._pending
+            self._pending = None
+            self._pending_since = None
+
+        return self._applied

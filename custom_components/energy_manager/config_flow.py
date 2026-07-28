@@ -45,6 +45,8 @@ from homeassistant.helpers.selector import (
     EntitySelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
     TextSelector,
 )
 
@@ -56,6 +58,7 @@ from .auto_detect import (
     find_sigenstor_entities,
 )
 from .const import (
+    CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
@@ -67,25 +70,44 @@ from .const import (
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_EMS_SELECT_ENTITY,
+    CONF_ESS_INCREASE_DELAY,
     CONF_EV_ENABLED,
     CONF_FORECAST_SOLAR_ENTITY,
-    CONF_FUSE_RATING,
+    CONF_FUSE_RATING_AMPS,
+    CONF_FUSE_SAFETY_BUFFER_AMPS,
     CONF_GRID_PHASE_A_ENTITY,
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
+    CONF_MAX_ESS_CHARGE_AMPS,
     CONF_CHARGER_CONNECTED_ENTITY,
     CONF_GRID_POWER_ENTITY,
     CONF_LOCATION_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
+    CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
     CONFIG_MINOR_VERSION,
     CONFIG_VERSION,
-    DEFAULT_FUSE_RATING,
+    DEFAULT_ASSUMED_LOAD_AMPS,
+    DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+    DEFAULT_FUSE_RATING_AMPS,
+    DEFAULT_MAX_ESS_CHARGE_AMPS,
+    DEFAULT_SAFETY_BUFFER_AMPS,
+    DEFAULT_SENSOR_FAIL_BEHAVIOR,
     DOMAIN,
-    MAX_FUSE_RATING,
-    MIN_FUSE_RATING,
+    MAX_ASSUMED_LOAD_AMPS,
+    MAX_ESS_INCREASE_DELAY_SECONDS,
+    MAX_FUSE_RATING_AMPS,
+    MAX_MAX_ESS_CHARGE_AMPS,
+    MAX_SAFETY_BUFFER_AMPS,
+    MIN_ASSUMED_LOAD_AMPS,
+    MIN_ESS_INCREASE_DELAY_SECONDS,
+    MIN_FUSE_RATING_AMPS,
+    MIN_MAX_ESS_CHARGE_AMPS,
+    MIN_SAFETY_BUFFER_AMPS,
+    SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+    SENSOR_FAIL_BEHAVIOR_BLOCK,
     SUBENTRY_TYPE_CAR,
 )
 from .nordpool_adapter import detect_nordpool_type, find_all_nordpool_sensors
@@ -293,8 +315,11 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         Auto-detects SigenStor EMS control entities.
         """
         if user_input is not None:
-            self._data[CONF_FUSE_RATING] = user_input.get(
-                CONF_FUSE_RATING, DEFAULT_FUSE_RATING
+            self._data[CONF_FUSE_RATING_AMPS] = user_input.get(
+                CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
+            )
+            self._data[CONF_FUSE_SAFETY_BUFFER_AMPS] = user_input.get(
+                CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
             )
             self._data[CONF_EMS_SELECT_ENTITY] = user_input.get(
                 CONF_EMS_SELECT_ENTITY, ""
@@ -320,6 +345,18 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_PV_POWER_ENTITY] = user_input.get(
                 CONF_PV_POWER_ENTITY, ""
             )
+            self._data[CONF_SENSOR_FAIL_BEHAVIOR] = user_input.get(
+                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+            )
+            self._data[CONF_ASSUMED_LOAD_AMPS] = user_input.get(
+                CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
+            )
+            self._data[CONF_MAX_ESS_CHARGE_AMPS] = user_input.get(
+                CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
+            )
+            self._data[CONF_ESS_INCREASE_DELAY] = user_input.get(
+                CONF_ESS_INCREASE_DELAY, DEFAULT_ESS_INCREASE_DELAY_SECONDS
+            )
 
             if self._data.get(CONF_EV_ENABLED):
                 return await self.async_step_ev()
@@ -331,11 +368,21 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_FUSE_RATING, default=DEFAULT_FUSE_RATING
+                    CONF_FUSE_RATING_AMPS, default=DEFAULT_FUSE_RATING_AMPS
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=MIN_FUSE_RATING,
-                        max=MAX_FUSE_RATING,
+                        min=MIN_FUSE_RATING_AMPS,
+                        max=MAX_FUSE_RATING_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_FUSE_SAFETY_BUFFER_AMPS, default=DEFAULT_SAFETY_BUFFER_AMPS
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SAFETY_BUFFER_AMPS,
+                        max=MAX_SAFETY_BUFFER_AMPS,
                         step=1,
                         unit_of_measurement="A",
                     )
@@ -363,6 +410,47 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(
+                    CONF_SENSOR_FAIL_BEHAVIOR, default=DEFAULT_SENSOR_FAIL_BEHAVIOR
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+                            SENSOR_FAIL_BEHAVIOR_BLOCK,
+                        ],
+                    )
+                ),
+                vol.Optional(
+                    CONF_ASSUMED_LOAD_AMPS, default=DEFAULT_ASSUMED_LOAD_AMPS
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_ASSUMED_LOAD_AMPS,
+                        max=MAX_ASSUMED_LOAD_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_ESS_CHARGE_AMPS, default=DEFAULT_MAX_ESS_CHARGE_AMPS
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_ESS_CHARGE_AMPS,
+                        max=MAX_MAX_ESS_CHARGE_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_ESS_INCREASE_DELAY,
+                    default=DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_ESS_INCREASE_DELAY_SECONDS,
+                        max=MAX_ESS_INCREASE_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
                 ),
             }
         )
@@ -435,7 +523,12 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_FORECAST_SOLAR_ENTITY: self._data.get(
                 CONF_FORECAST_SOLAR_ENTITY, ""
             ),
-            CONF_FUSE_RATING: self._data.get(CONF_FUSE_RATING, DEFAULT_FUSE_RATING),
+            CONF_FUSE_RATING_AMPS: self._data.get(
+                CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
+            ),
+            CONF_FUSE_SAFETY_BUFFER_AMPS: self._data.get(
+                CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
+            ),
             CONF_EMS_SELECT_ENTITY: self._data.get(CONF_EMS_SELECT_ENTITY, ""),
             CONF_CHARGE_LIMIT_ENTITY: self._data.get(
                 CONF_CHARGE_LIMIT_ENTITY, ""
@@ -448,6 +541,18 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_GRID_PHASE_B_ENTITY: self._data.get(CONF_GRID_PHASE_B_ENTITY, ""),
             CONF_GRID_PHASE_C_ENTITY: self._data.get(CONF_GRID_PHASE_C_ENTITY, ""),
             CONF_PV_POWER_ENTITY: self._data.get(CONF_PV_POWER_ENTITY, ""),
+            CONF_SENSOR_FAIL_BEHAVIOR: self._data.get(
+                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+            ),
+            CONF_ASSUMED_LOAD_AMPS: self._data.get(
+                CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
+            ),
+            CONF_MAX_ESS_CHARGE_AMPS: self._data.get(
+                CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
+            ),
+            CONF_ESS_INCREASE_DELAY: self._data.get(
+                CONF_ESS_INCREASE_DELAY, DEFAULT_ESS_INCREASE_DELAY_SECONDS
+            ),
             CONF_CHARGER_STATUS_ENTITY: self._data.get(
                 CONF_CHARGER_STATUS_ENTITY, ""
             ),

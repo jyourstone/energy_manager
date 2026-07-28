@@ -8,11 +8,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from custom_components.energy_manager.battery_scheduler import (
     BatteryScheduleResult,
-    ScheduleSlot,
     build_battery_schedule,
 )
 
@@ -207,14 +205,10 @@ class TestVirtualEnergyTracking:
             max_soc_pct=95.0,
         )
 
-        # Calculate maximum dischargeable energy
-        usable_kwh = (50.0 - 10.0) / 100.0 * DEFAULT_CAPACITY  # 4 kWh
-        max_discharge_power_per_slot = DEFAULT_POWER / 1000.0  # 5 kW -> 5 kWh/h
-
+        # Usable energy: (50% - 10%) of capacity = 4 kWh at 5 kW max power.
         # With charging first (cheap hours 0-5), battery could be topped up
         # But total discharge energy should never exceed what the battery can provide
         discharge_slots = [s for s in result.schedule if s.action == "discharge"]
-        charge_slots = [s for s in result.schedule if s.action in ("charge", "solar_charge")]
 
         # The key constraint: discharge count should be reasonable given capacity
         # Not all 12 expensive hours should discharge (battery would be empty)
@@ -611,7 +605,7 @@ class TestScheduleAttributeFiltering:
 
     def test_filter_keeps_current_slot(self):
         """A slot currently in progress (start <= now < end) should be kept."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
 
         now = datetime(2026, 2, 16, 14, 30, tzinfo=timezone.utc)
         # Slot from 14:00 to 15:00 -- currently in progress

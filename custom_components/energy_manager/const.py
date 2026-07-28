@@ -85,7 +85,8 @@ DEFAULT_BATTERY_CAPACITY_KWH = 10.0
 
 # --- EMS Controller configuration ---
 
-CONF_FUSE_RATING = "fuse_rating"
+CONF_FUSE_RATING_AMPS = "fuse_rating_amps"
+CONF_FUSE_SAFETY_BUFFER_AMPS = "fuse_safety_buffer_amps"
 CONF_EMS_SELECT_ENTITY = "ems_select_entity"
 CONF_CHARGE_LIMIT_ENTITY = "charge_limit_entity"
 CONF_DISCHARGE_LIMIT_ENTITY = "discharge_limit_entity"
@@ -95,12 +96,42 @@ CONF_GRID_PHASE_B_ENTITY = "grid_phase_b_entity"
 CONF_GRID_PHASE_C_ENTITY = "grid_phase_c_entity"
 CONF_PV_POWER_ENTITY = "pv_power_entity"
 
+# Sensor-unavailable fallback behavior for fuse-critical current sensors
+CONF_SENSOR_FAIL_BEHAVIOR = "sensor_fail_behavior"
+SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD = "assume_load"
+SENSOR_FAIL_BEHAVIOR_BLOCK = "block"
+DEFAULT_SENSOR_FAIL_BEHAVIOR = SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD
+CONF_ASSUMED_LOAD_AMPS = "assumed_load_amps"
+DEFAULT_ASSUMED_LOAD_AMPS = 10.0
+MIN_ASSUMED_LOAD_AMPS = 0
+MAX_ASSUMED_LOAD_AMPS = 63
+
+# ESS (battery) charging current cap and self-consumption add-back
+CONF_MAX_ESS_CHARGE_AMPS = "max_ess_charge_amps"
+DEFAULT_MAX_ESS_CHARGE_AMPS = 16.0
+MIN_MAX_ESS_CHARGE_AMPS = 0
+MAX_MAX_ESS_CHARGE_AMPS = 63
+
+# Asymmetric ESS-limit timing: decreases apply immediately, increases are
+# delayed until the higher value has been stable for this many seconds
+CONF_ESS_INCREASE_DELAY = "ess_increase_delay"
+DEFAULT_ESS_INCREASE_DELAY_SECONDS = 180.0
+MIN_ESS_INCREASE_DELAY_SECONDS = 0
+MAX_ESS_INCREASE_DELAY_SECONDS = 3600
+
 # EMS defaults
-DEFAULT_FUSE_RATING = 20  # Amps
-DEFAULT_SAFETY_BUFFER_AMPS = 2.0
+DEFAULT_FUSE_RATING_AMPS = 20  # Amps
+DEFAULT_SAFETY_BUFFER_AMPS = 1.0
+MIN_SAFETY_BUFFER_AMPS = 0
+MAX_SAFETY_BUFFER_AMPS = 10
 DEFAULT_PV_THRESHOLD_W = 500
-MIN_FUSE_RATING = 10
-MAX_FUSE_RATING = 63
+MIN_FUSE_RATING_AMPS = 6
+MAX_FUSE_RATING_AMPS = 100
+
+# 3-phase 400V watts-to-amps divisor (sqrt(3) * 400V), used to convert a
+# single total power reading (e.g. battery charging power) to an equivalent
+# per-phase current contribution
+WATTS_TO_AMPS_3PHASE_DIVISOR = 692.8
 
 # EMS update interval (seconds) -- faster than schedule for real-time control
 EMS_UPDATE_INTERVAL_SECONDS = 30

@@ -11,13 +11,20 @@ Tests cover all EMS decision paths:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from custom_components.energy_manager.ems_controller import (
     EMSDecision,
+    ESSLimitRateLimiter,
     PVHysteresisTracker,
+    car_demands_priority_charging,
     clamp_amps,
+    compute_available_ess_amps,
     compute_ems_state,
+    resolve_current_sensor_fallback,
+    worst_case_signed_amps,
 )
 
 
@@ -463,3 +470,313 @@ class TestPVHysteresisTracker:
         result = tracker.update(100.0)
         assert tracker.state == "off"
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Signed Fuse Current Math (import positive / export negative)
+# ---------------------------------------------------------------------------
+
+
+class TestSignedFuseCurrent:
+    """Tests for signed grid current math -- PV export must increase headroom."""
+
+    def test_export_increases_headroom_vs_zero(self):
+        """current_l_amps=-10.0 (export) yields more headroom than 0.0 load."""
+        result_export = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=-10.0,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+            safety_buffer_amps=1.0,
+        )
+        result_zero = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=0.0,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+            safety_buffer_amps=1.0,
+        )
+        assert result_export.fuse_headroom_amps > result_zero.fuse_headroom_amps
+        assert result_export.fuse_headroom_amps == pytest.approx(29.0)  # 20 -(-10) -1
+        assert result_zero.fuse_headroom_amps == pytest.approx(19.0)
+
+    def test_worst_case_uses_highest_import_not_average(self):
+        """One phase importing 30A with low others -- worst case is 30A, not
+        an averaged ~13.3A estimate."""
+        worst = worst_case_signed_amps([30.0, 5.0, 5.0])
+        assert worst == 30.0
+
+        result = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=worst,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+            safety_buffer_amps=1.0,
+        )
+        # 30A already exceeds the 20A fuse rating -- headroom must be 0, not
+        # the ~4.7A a balanced-average estimate (13.3A) would have produced.
+        assert result.fuse_headroom_amps == 0.0
+
+    def test_worst_case_ignores_exporting_phase(self):
+        """An exporting (negative) phase must never mask an importing one."""
+        worst = worst_case_signed_amps([15.0, -8.1, 2.0])
+        assert worst == 15.0
+
+
+# ---------------------------------------------------------------------------
+# Sensor-Unavailable Fallback Behavior
+# ---------------------------------------------------------------------------
+
+
+class TestSensorFallback:
+    """Tests for the sensor-unavailable fallback (assume_load vs block)."""
+
+    def test_assume_load_returns_assumed_amps(self):
+        result = resolve_current_sensor_fallback(
+            fail_behavior="assume_load", assumed_load_amps=10.0
+        )
+        assert result.effective_amps == 10.0
+        assert result.force_zero_headroom is False
+
+    def test_block_forces_zero_headroom_flag(self):
+        result = resolve_current_sensor_fallback(
+            fail_behavior="block", assumed_load_amps=10.0
+        )
+        assert result.force_zero_headroom is True
+
+    def test_assume_load_feeds_normal_headroom_math(self):
+        """assume_load fallback still lets compute_ems_state calculate
+        headroom normally using the assumed load as current_l_amps."""
+        fallback = resolve_current_sensor_fallback(
+            fail_behavior="assume_load", assumed_load_amps=10.0
+        )
+        result = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=fallback.effective_amps,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+            safety_buffer_amps=1.0,
+            sensor_blocked=fallback.force_zero_headroom,
+        )
+        assert result.fuse_headroom_amps == pytest.approx(9.0)  # 20 - 10 - 1
+
+    def test_block_forces_charge_limit_to_zero(self):
+        """block fallback -- sensor_blocked=True means no charge authorization
+        regardless of the (unused) current reading."""
+        fallback = resolve_current_sensor_fallback(
+            fail_behavior="block", assumed_load_amps=10.0
+        )
+        result = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=fallback.effective_amps,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+            safety_buffer_amps=1.0,
+            sensor_blocked=fallback.force_zero_headroom,
+        )
+        assert result.fuse_headroom_amps == 0.0
+        assert result.charge_limit_kw == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Battery Self-Consumption Add-Back (prevents ESS-limit self-ratchet)
+# ---------------------------------------------------------------------------
+
+
+class TestBatterySelfConsumptionAddBack:
+    """Tests for compute_available_ess_amps() battery add-back."""
+
+    def test_battery_charging_at_limit_does_not_reduce_own_headroom(self):
+        """Grid current includes the battery's own charging draw. Without the
+        add-back, the battery's own charging looks like external load and
+        shrinks its own computed headroom (self-ratchet). With the add-back,
+        the true (unaffected) headroom is restored."""
+        # Household load excluding battery = 2A; battery itself charges at
+        # 16A, so the grid meter reads 18A total.
+        without_addback = compute_available_ess_amps(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            worst_phase_amps=18.0,
+            battery_own_amps=0.0,
+        )
+        with_addback = compute_available_ess_amps(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            worst_phase_amps=18.0,
+            battery_own_amps=16.0,
+        )
+        assert without_addback == pytest.approx(1.0)  # 20 - 1 - 18 (ratcheted down)
+        assert with_addback == pytest.approx(17.0)  # 20 - 1 - 18 + 16 (true headroom)
+        assert with_addback > without_addback
+
+    def test_available_ess_amps_clamped_to_max_ess_charge_amps(self):
+        """Hard hardware cap (max_ess_charge_amps) limits the result even
+        when the fuse math alone would allow more."""
+        result = compute_available_ess_amps(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            worst_phase_amps=0.0,
+            battery_own_amps=0.0,
+            max_ess_charge_amps=16.0,
+        )
+        assert result == 16.0  # would be 19.0 without the hardware cap
+
+    def test_available_ess_amps_never_negative(self):
+        result = compute_available_ess_amps(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            worst_phase_amps=30.0,
+            battery_own_amps=0.0,
+        )
+        assert result == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric ESS-Limit Timing (decrease immediate, increase delayed)
+# ---------------------------------------------------------------------------
+
+
+class TestESSLimitRateLimiter:
+    """Tests for ESSLimitRateLimiter -- decreases apply immediately, increases
+    only apply after CONF_ESS_INCREASE_DELAY seconds of continuous stability."""
+
+    def test_first_reading_applies_immediately(self):
+        limiter = ESSLimitRateLimiter(increase_delay_seconds=180.0)
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert limiter.update(10.0, now) == 10.0
+
+    def test_increase_not_applied_before_delay_elapses(self):
+        """Computed limit rising is not applied until 180s elapsed."""
+        limiter = ESSLimitRateLimiter(increase_delay_seconds=180.0)
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        limiter.update(5.0, t0)
+        applied = limiter.update(10.0, t0 + timedelta(seconds=60))
+        assert applied == 5.0
+
+    def test_increase_applied_after_delay_elapses(self):
+        """Once the higher value has been observed continuously for the full
+        delay, it is applied."""
+        limiter = ESSLimitRateLimiter(increase_delay_seconds=180.0)
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        limiter.update(5.0, t0)
+        limiter.update(10.0, t0 + timedelta(seconds=60))
+        applied = limiter.update(10.0, t0 + timedelta(seconds=241))  # 60 + 181
+        assert applied == 10.0
+
+    def test_decrease_applies_immediately(self):
+        """Falling applies immediately -- no delay for reducing the limit."""
+        limiter = ESSLimitRateLimiter(increase_delay_seconds=180.0)
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        limiter.update(10.0, t0)
+        applied = limiter.update(3.0, t0 + timedelta(seconds=1))
+        assert applied == 3.0
+
+    def test_decrease_cancels_pending_increase(self):
+        """A decrease while an increase is pending cancels it -- a later
+        higher reading must restart the delay from scratch."""
+        limiter = ESSLimitRateLimiter(increase_delay_seconds=180.0)
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        limiter.update(5.0, t0)
+        limiter.update(10.0, t0 + timedelta(seconds=60))  # pending increase starts
+        limiter.update(2.0, t0 + timedelta(seconds=90))  # decrease cancels it
+        # 151s after the cancel -- nowhere near a fresh 180s window
+        applied = limiter.update(10.0, t0 + timedelta(seconds=241))
+        assert applied == 2.0
+
+
+# ---------------------------------------------------------------------------
+# Car-Priority Wiring (real active-slot + home/plugged signals)
+# ---------------------------------------------------------------------------
+
+
+class TestCarPriorityWiring:
+    """Tests for car_demands_priority_charging() -- the aggregated signal
+    EMSCoordinator now derives from its car coordinators, replacing the old
+    'EV module enabled' flag."""
+
+    def test_module_enabled_but_car_unplugged_not_paused(self):
+        """Active schedule slot but car not home+plugged -- must NOT demand
+        priority (battery is not paused)."""
+        cars = [(True, False)]
+        assert car_demands_priority_charging(cars) is False
+
+    def test_car_plugged_and_active_slot_demands_priority(self):
+        """Active schedule slot AND home+plugged -- demands priority
+        charging (battery is paused)."""
+        cars = [(True, True)]
+        assert car_demands_priority_charging(cars) is True
+
+    def test_plugged_but_no_active_slot_not_paused(self):
+        """Car home+plugged but its schedule is currently idle -- no
+        priority demand."""
+        cars = [(False, True)]
+        assert car_demands_priority_charging(cars) is False
+
+    def test_multiple_cars_any_active_triggers_priority(self):
+        """If any car among several demands priority, the aggregate is True."""
+        cars = [(True, False), (False, True), (True, True)]
+        assert car_demands_priority_charging(cars) is True
+
+    def test_no_cars_no_priority(self):
+        assert car_demands_priority_charging([]) is False
+
+    def test_end_to_end_battery_not_paused_when_unplugged(self):
+        """Module enabled but car unplugged -- battery NOT paused, full
+        compute_ems_state pipeline."""
+        car_priority = car_demands_priority_charging([(True, False)])
+        result = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=5.0,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=car_priority,
+            car_plugged_in=car_priority,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason is None
+
+    def test_end_to_end_battery_paused_when_plugged_and_active(self):
+        """Car plugged in with an active slot -- battery IS paused, full
+        compute_ems_state pipeline."""
+        car_priority = car_demands_priority_charging([(True, True)])
+        result = compute_ems_state(
+            target_ems_mode="command_charging",
+            current_l_amps=5.0,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=car_priority,
+            car_plugged_in=car_priority,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+        )
+        assert result.target_mode == "standby"
+        assert result.override_reason == "car_charging_priority"

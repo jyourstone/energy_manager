@@ -43,7 +43,8 @@
         "title": "EMS Control",
         "description": "Configure fuse protection and battery control entities. Control entities are auto-detected from SigenStor.",
         "data": {
-          "fuse_rating": "Fuse rating (A)",
+          "fuse_rating_amps": "Fuse rating (A)",
+          "fuse_safety_buffer_amps": "Fuse safety buffer (A)",
           "ems_select_entity": "EMS mode select entity",
           "charge_limit_entity": "Max charging limit entity",
           "discharge_limit_entity": "Max discharging limit entity",
@@ -51,18 +52,27 @@
           "grid_phase_a_entity": "Grid phase A power",
           "grid_phase_b_entity": "Grid phase B power",
           "grid_phase_c_entity": "Grid phase C power",
-          "pv_power_entity": "PV power sensor"
+          "pv_power_entity": "PV power sensor",
+          "sensor_fail_behavior": "If current sensors are unavailable",
+          "assumed_load_amps": "Assumed load when sensors unavailable (A)",
+          "max_ess_charge_amps": "Max battery charging current (A)",
+          "ess_increase_delay": "Charge limit increase delay (s)"
         },
         "data_description": {
-          "fuse_rating": "Your main fuse rating in amps. Used to calculate safe charging limits.",
+          "fuse_rating_amps": "Your main fuse rating in amps. Used to calculate safe charging limits.",
+          "fuse_safety_buffer_amps": "Advanced: extra safety margin subtracted from the fuse rating before any charging headroom is calculated.",
           "ems_select_entity": "Select entity controlling the SigenStor EMS mode.",
           "charge_limit_entity": "Number entity for max battery charging limit (kW).",
           "discharge_limit_entity": "Number entity for max battery discharging limit (kW).",
-          "grid_power_entity": "Fallback: total grid active power (kW or W). Used only when per-phase sensors are not configured.",
-          "grid_phase_a_entity": "Per-phase grid power sensor for phase A (kW or W). For 3-phase fuse protection, configure all three phases.",
-          "grid_phase_b_entity": "Per-phase grid power sensor for phase B (kW or W).",
-          "grid_phase_c_entity": "Per-phase grid power sensor for phase C (kW or W).",
-          "pv_power_entity": "Sensor showing current PV/solar power output (W)."
+          "grid_power_entity": "Fallback: total grid active power (kW or W), signed (positive = import, negative = export). Used only when per-phase sensors are not configured.",
+          "grid_phase_a_entity": "Per-phase grid power sensor for phase A (kW or W), signed (positive = import, negative = export). For 3-phase fuse protection, configure all three phases.",
+          "grid_phase_b_entity": "Per-phase grid power sensor for phase B (kW or W), signed (positive = import, negative = export).",
+          "grid_phase_c_entity": "Per-phase grid power sensor for phase C (kW or W), signed (positive = import, negative = export).",
+          "pv_power_entity": "Sensor showing current PV/solar power output (W).",
+          "sensor_fail_behavior": "Advanced: what to do when the grid current sensors are unavailable, unknown, or not configured. 'Assume load' keeps charging using an assumed load estimate; 'Block' pauses battery charging entirely until sensors recover.",
+          "assumed_load_amps": "Advanced: load in amps to assume when current sensors are unavailable and the behavior above is 'Assume load'.",
+          "max_ess_charge_amps": "Advanced: hard safety cap on the battery's own charging current, independent of fuse headroom.",
+          "ess_increase_delay": "Advanced: how long a higher charge limit must stay stable before it is applied. Decreases always apply immediately."
         }
       },
       "ev": {

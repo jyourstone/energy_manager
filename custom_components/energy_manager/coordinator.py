@@ -38,50 +38,66 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
     CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES,
+    CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
-    CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
+    CONF_BATTERY_POWER_ENTITY,
     CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_EMS_SELECT_ENTITY,
-    CONF_EV_ENABLED,
+    CONF_ESS_INCREASE_DELAY,
     CONF_FORECAST_SOLAR_ENTITY,
-    CONF_FUSE_RATING,
+    CONF_FUSE_RATING_AMPS,
+    CONF_FUSE_SAFETY_BUFFER_AMPS,
     CONF_GRID_PHASE_A_ENTITY,
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_MAX_ESS_CHARGE_AMPS,
     CONF_CHARGER_CONNECTED_ENTITY,
     CONF_LOCATION_ENTITY,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_PV_POWER_ENTITY,
+    CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
+    DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
-    DEFAULT_FUSE_RATING,
+    DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+    DEFAULT_FUSE_RATING_AMPS,
     DEFAULT_MAX_CHARGE_POWER_KW,
+    DEFAULT_MAX_ESS_CHARGE_AMPS,
     DEFAULT_MAX_SOC_PCT,
     DEFAULT_MIN_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
     DEFAULT_SAFETY_BUFFER_AMPS,
+    DEFAULT_SENSOR_FAIL_BEHAVIOR,
     DEFAULT_TARGET_SOC_PCT,
     EMS_MODE_MAP,
     EMS_UPDATE_INTERVAL_SECONDS,
     FALLBACK_STALE_THRESHOLD_MINUTES,
     MAX_CHARGE_LIMIT_KW,
-    MODULE_BATTERY,
-    MODULE_EV,
     PRICE_UPDATE_INTERVAL_MINUTES,
+    SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+    WATTS_TO_AMPS_3PHASE_DIVISOR,
 )
 from .battery_scheduler import BatteryScheduleResult, build_battery_schedule
 from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
-from .ems_controller import PVHysteresisTracker, compute_ems_state
+from .ems_controller import (
+    ESSLimitRateLimiter,
+    PVHysteresisTracker,
+    car_demands_priority_charging,
+    compute_available_ess_amps,
+    compute_ems_state,
+    resolve_current_sensor_fallback,
+    worst_case_signed_amps,
+)
 from .nordpool_adapter import async_get_prices
 
 _LOGGER = logging.getLogger(__name__)
@@ -556,7 +572,24 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         )
         self._battery_coordinator = battery_coordinator
         self._fuse_rating_amps: float = float(
-            entry.options.get(CONF_FUSE_RATING, DEFAULT_FUSE_RATING)
+            entry.options.get(CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS)
+        )
+        self._safety_buffer_amps: float = float(
+            entry.options.get(CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS)
+        )
+        self._sensor_fail_behavior: str = entry.options.get(
+            CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+        )
+        self._assumed_load_amps: float = float(
+            entry.options.get(CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS)
+        )
+        self._max_ess_charge_amps: float = float(
+            entry.options.get(CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS)
+        )
+        self._ess_increase_delay_seconds: float = float(
+            entry.options.get(
+                CONF_ESS_INCREASE_DELAY, DEFAULT_ESS_INCREASE_DELAY_SECONDS
+            )
         )
         self._ems_select_entity: str = entry.options.get(
             CONF_EMS_SELECT_ENTITY, ""
@@ -582,6 +615,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._pv_power_entity: str = entry.options.get(
             CONF_PV_POWER_ENTITY, ""
         )
+        self._battery_power_entity: str = entry.options.get(
+            CONF_BATTERY_POWER_ENTITY, ""
+        )
         self._soc_entity: str = entry.options.get(CONF_SOC_ENTITY, "")
         self._charger_status_entity: str = entry.options.get(
             CONF_CHARGER_STATUS_ENTITY, ""
@@ -589,6 +625,15 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # PV hysteresis tracker for oscillation prevention
         self._pv_tracker = PVHysteresisTracker()
+
+        # Asymmetric ESS-limit timing: decreases apply immediately, increases
+        # are delayed until stable (prevents ramp-up chasing fuse headroom)
+        self._ess_limiter = ESSLimitRateLimiter(
+            increase_delay_seconds=self._ess_increase_delay_seconds
+        )
+
+        # Rate-limit the sensor-unavailable warning to once per state change
+        self._sensor_warned: bool = False
 
         # Change detection for command deduplication
         self._last_sent_mode: str | None = None
@@ -680,20 +725,39 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 pv_charging_active=False,
             )
 
-        # 2. Read real-time sensor values
-        l_current = self._read_grid_current_amps()
+        # 2. Read real-time sensor values (signed: positive = import, negative = export)
+        l_current, sensor_blocked = self._read_grid_current_amps()
         pv_power_w = self._read_float_state(self._pv_power_entity, 0.0)
         battery_soc = self._read_float_state(self._soc_entity, 50.0)
+        battery_own_amps = self._read_battery_own_amps()
 
-        # 3. Determine car state
-        car_plugged_in = self._is_car_plugged_in()
-        # Simplified for Phase 3: car_scheduled = EV module enabled
-        car_scheduled = self.config_entry.options.get(CONF_EV_ENABLED, False)
+        # 3. Determine car charging priority: any car with an active schedule
+        # slot AND home+plugged demands priority (EMS-03). Schedules stay
+        # visible regardless of plugged state -- this only gates the battery.
+        car_priority = self._check_car_priority()
 
         # 4. Update PV hysteresis tracker
         pv_active = self._pv_tracker.update(pv_power_w)
 
-        # 5. Call pure module for calculations
+        # 5. Compute the ESS amps ceiling: fuse headroom with the battery's
+        # own charging draw added back (prevents self-ratchet), then apply
+        # asymmetric rate limiting (decreases immediate, increases delayed).
+        raw_ess_ceiling = (
+            0.0
+            if sensor_blocked
+            else compute_available_ess_amps(
+                fuse_rating_amps=self._fuse_rating_amps,
+                safety_buffer_amps=self._safety_buffer_amps,
+                worst_phase_amps=l_current,
+                battery_own_amps=battery_own_amps,
+                max_ess_charge_amps=self._max_ess_charge_amps,
+            )
+        )
+        applied_ess_ceiling = self._ess_limiter.update(
+            raw_ess_ceiling, dt_util.utcnow()
+        )
+
+        # 6. Call pure module for calculations
         max_charge_power_kw = DEFAULT_MAX_CHARGE_POWER_KW
         result = compute_ems_state(
             target_ems_mode=schedule_data.target_ems_mode,
@@ -701,19 +765,21 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             fuse_rating_amps=self._fuse_rating_amps,
             max_charge_power_kw=max_charge_power_kw,
             battery_soc_pct=battery_soc,
-            car_scheduled=car_scheduled,
-            car_plugged_in=car_plugged_in,
+            car_scheduled=car_priority,
+            car_plugged_in=car_priority,
             pv_power_w=pv_power_w,
             pv_hysteresis_active=pv_active,
             max_soc_pct=DEFAULT_MAX_SOC_PCT,
-            safety_buffer_amps=DEFAULT_SAFETY_BUFFER_AMPS,
+            safety_buffer_amps=self._safety_buffer_amps,
+            sensor_blocked=sensor_blocked,
+            available_ess_amps=applied_ess_ceiling,
         )
 
-        # 6. Determine if mode or limit changed
+        # 7. Determine if mode or limit changed
         mode_changed = result.target_mode != self._last_sent_mode
         limit_changed = result.charge_limit_kw != self._last_charge_limit
 
-        # 7. Safe command ordering (Research Pitfall 3)
+        # 8. Safe command ordering (Research Pitfall 3)
         if mode_changed or limit_changed:
             if result.target_mode == "command_charging":
                 # Switching TO command_charging: send limit FIRST, then mode
@@ -729,7 +795,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 if limit_changed:
                     await self._send_charge_limit(result.charge_limit_kw)
 
-        # 8. Schedule verification if mode changed
+        # 9. Schedule verification if mode changed
         if mode_changed and self._ems_select_entity:
             mapped_option = EMS_MODE_MAP.get(result.target_mode)
             if mapped_option:
@@ -737,14 +803,14 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     self._ems_select_entity, mapped_option
                 )
 
-        # 9. Update change detection state
+        # 10. Update change detection state
         self._last_sent_mode = result.target_mode
         self._last_charge_limit = result.charge_limit_kw
 
-        # 10. Check pending verification
+        # 11. Check pending verification
         command_verified = self._check_verification()
 
-        # 11. Return EMSData
+        # 12. Return EMSData
         return EMSData(
             current_mode=result.target_mode,
             target_mode=schedule_data.target_ems_mode,
@@ -779,18 +845,49 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         except (ValueError, TypeError):
             return default
 
-    def _read_grid_current_amps(self) -> float:
-        """Read per-phase grid power and return worst-case phase current in amps.
+    def _is_sensor_available(self, entity_id: str) -> bool:
+        """Return True if entity_id is configured and has a valid numeric state."""
+        if not entity_id:
+            return False
+        state = self.hass.states.get(entity_id)
+        return state is not None and state.state not in ("unavailable", "unknown")
 
-        If per-phase sensors are configured, reads each phase's power and converts
-        to amps independently: I = abs(P_phase) / V_phase. Returns the MAX across
-        all three phases (worst-case for fuse protection).
+    def _read_signed_power_amps(self, entity_id: str, divisor: float) -> float:
+        """Read a power sensor and convert to signed amps.
 
-        Falls back to total-power balanced-load estimate if per-phase sensors are
-        not configured.
+        Sign convention: positive = import (load on the fuse), negative =
+        export (adds headroom) -- matches the live grid phase sensors.
+
+        Args:
+            entity_id: Power sensor entity (W or kW).
+            divisor: Voltage (per-phase reading) or 3*voltage (total-power
+                balanced-load estimate) to convert W -> A.
+        """
+        power = self._read_float_state(entity_id, 0.0)
+        state = self.hass.states.get(entity_id)
+        if state is not None:
+            uom = state.attributes.get("unit_of_measurement", "")
+            if uom == "kW":
+                power *= 1000.0
+        return power / divisor
+
+    def _read_grid_current_amps(self) -> tuple[float, bool]:
+        """Read grid power and return (signed worst-case phase current, sensor_blocked).
+
+        Sign convention: positive = import (load on the fuse), negative =
+        export (adds headroom). If per-phase sensors are configured and all
+        available, returns the worst-case (highest, signed) phase current --
+        an exporting or lightly loaded phase never masks an overloaded one.
+        Falls back to the single total grid power sensor (signed,
+        balanced-load estimate) if per-phase sensors are not configured.
+
+        If the required sensors are unavailable, unknown, or unconfigured,
+        applies the configured CONF_SENSOR_FAIL_BEHAVIOR instead of silently
+        assuming 0A load (see resolve_current_sensor_fallback()).
 
         Returns:
-            Highest phase current in amps, or 0.0 if unavailable.
+            Tuple of (current_l_amps, sensor_blocked). sensor_blocked is True
+            only when the sensors failed and the fail-behavior is "block".
         """
         phase_entities = [
             self._grid_phase_a_entity,
@@ -799,52 +896,97 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         ]
 
         if all(phase_entities):
-            # Per-phase mode: convert each phase to amps, take worst case
-            phase_amps = []
-            for entity_id in phase_entities:
-                power = self._read_float_state(entity_id, 0.0)
-                state = self.hass.states.get(entity_id)
-                if state is not None:
-                    uom = state.attributes.get("unit_of_measurement", "")
-                    if uom == "kW":
-                        power = power * 1000.0
-                phase_amps.append(abs(power) / 230.0)
-            return max(phase_amps) if phase_amps else 0.0
+            if all(self._is_sensor_available(e) for e in phase_entities):
+                amps = [
+                    self._read_signed_power_amps(e, 230.0) for e in phase_entities
+                ]
+                self._sensor_warned = False
+                return worst_case_signed_amps(amps), False
+            return self._apply_sensor_fallback("grid phase current sensors")
 
-        # Fallback: single total power sensor with balanced-load assumption
-        power = self._read_float_state(self._grid_power_entity, 0.0)
-        if power == 0.0:
+        if self._grid_power_entity:
+            if self._is_sensor_available(self._grid_power_entity):
+                amps = self._read_signed_power_amps(
+                    self._grid_power_entity, 3.0 * 230.0
+                )
+                self._sensor_warned = False
+                return amps, False
+            return self._apply_sensor_fallback("grid power sensor")
+
+        return self._apply_sensor_fallback("grid power sensor (not configured)")
+
+    def _apply_sensor_fallback(self, sensor_description: str) -> tuple[float, bool]:
+        """Apply the configured fail-behavior and log a rate-limited warning."""
+        result = resolve_current_sensor_fallback(
+            fail_behavior=self._sensor_fail_behavior,
+            assumed_load_amps=self._assumed_load_amps,
+        )
+        if not self._sensor_warned:
+            _LOGGER.warning(
+                "Fuse protection: %s unavailable -- applying '%s' fallback (%s). "
+                "Configure the grid sensors in the EMS options to restore "
+                "accurate fuse protection.",
+                sensor_description,
+                self._sensor_fail_behavior,
+                f"assuming {self._assumed_load_amps}A load"
+                if self._sensor_fail_behavior == SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD
+                else "blocking charge authorization",
+            )
+            self._sensor_warned = True
+        return result.effective_amps, result.force_zero_headroom
+
+    def _read_battery_own_amps(self) -> float:
+        """Read the battery's own charging draw in amps (self-consumption add-back).
+
+        Grid current sensors measure the battery's own charging draw as part
+        of the total load, which would otherwise cause the EMS to keep
+        shrinking its own charge limit (self-ratchet). Positive readings are
+        treated as charging; zero/negative (idle/discharging) contribute
+        nothing. Converts W to A with the 3-phase 400V divisor since this is
+        a single total-power reading, not a per-phase one.
+
+        Returns:
+            Battery's own current draw in amps, or 0.0 if not configured,
+            unavailable, or not currently charging.
+        """
+        if not self._battery_power_entity:
             return 0.0
-        state = self.hass.states.get(self._grid_power_entity)
+
+        power = self._read_float_state(self._battery_power_entity, 0.0)
+        state = self.hass.states.get(self._battery_power_entity)
         if state is not None:
             uom = state.attributes.get("unit_of_measurement", "")
             if uom == "kW":
-                power = power * 1000.0
-        return abs(power) / (3.0 * 230.0)
+                power *= 1000.0
 
-    def _is_car_plugged_in(self) -> bool:
-        """Check if a car is currently plugged in via charger status.
+        if power <= 0.0:
+            return 0.0
+        return power / WATTS_TO_AMPS_3PHASE_DIVISOR
 
-        Uses charger-side detection (Easee) for fast response rather than
-        car-side sensors which poll infrequently.
+    def _check_car_priority(self) -> bool:
+        """Check all car coordinators for active priority-charging demand.
+
+        A car demands priority charging only when it has an active schedule
+        slot ("charge" or "solar_charge") AND is home and plugged in
+        (CarChargingData.home_and_plugged). Schedules remain visible and
+        keep being computed regardless of plugged state -- this only gates
+        the battery priority override (EMS-03).
 
         Returns:
-            True if charger reports a car is connected.
+            True if at least one car currently demands priority charging.
         """
-        if not self._charger_status_entity:
-            return False
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        car_coordinators = getattr(runtime_data, "car_coordinators", None) or {}
 
-        state = self.hass.states.get(self._charger_status_entity)
-        if state is None or state.state in ("unavailable", "unknown"):
-            return False
+        cars: list[tuple[bool, bool]] = []
+        for car_coordinator in car_coordinators.values():
+            data = car_coordinator.data
+            if data is None:
+                continue
+            active_slot = data.current_action in ("charge", "solar_charge")
+            cars.append((active_slot, data.home_and_plugged))
 
-        car_connected_states = (
-            "awaiting_start",
-            "charging",
-            "ready_to_charge",
-            "car_connected",
-        )
-        return state.state.lower() in car_connected_states
+        return car_demands_priority_charging(cars)
 
     async def _send_ems_mode(self, mode: str) -> bool:
         """Send EMS mode change to SigenStor via HA service call.
@@ -1005,6 +1147,8 @@ class CarChargingData:
         current_soc: Current state of charge percentage.
         target_soc: Target state of charge percentage.
         last_calculated: UTC timestamp of last calculation.
+        home_and_plugged: Whether the car is currently home and plugged in
+            (see CarChargingCoordinator._is_home_and_plugged_in()).
     """
 
     current_action: str
@@ -1017,6 +1161,7 @@ class CarChargingData:
     current_soc: float
     target_soc: float
     last_calculated: datetime
+    home_and_plugged: bool
 
 
 class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
@@ -1176,6 +1321,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc=current_soc,
             target_soc=self.target_soc,
             last_calculated=dt_util.utcnow(),
+            home_and_plugged=self._is_home_and_plugged_in(),
         )
 
     def _read_car_soc(self) -> float:
