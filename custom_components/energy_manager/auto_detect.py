@@ -148,6 +148,7 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
     # and must never be selected here (see phase41 UAT bug 2).
     charge_limit_candidates: dict[str, str] = {}
     discharge_limit_candidates: dict[str, str] = {}
+    disabled_limit_entities: list[str] = []
 
     for config_entry in sigen_entries:
         entity_entries = er.async_entries_for_config_entry(
@@ -155,12 +156,20 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
         )
 
         for entity_entry in entity_entries:
-            # Skip disabled entities -- EntitySelector cannot display them
-            if getattr(entity_entry, "disabled_by", None) is not None:
-                continue
-
             entity_id_lower = entity_entry.entity_id.lower()
             unique_id_lower = (entity_entry.unique_id or "").lower()
+
+            # Skip disabled entities -- EntitySelector cannot display them.
+            # But remember disabled charge/discharge limit setpoints so we
+            # can tell the user to enable them (SigenStor ships the writable
+            # number.*_ess_max_*_limit entities disabled by default).
+            if getattr(entity_entry, "disabled_by", None) is not None:
+                if entity_entry.domain == "number" and (
+                    "charging_limit" in entity_id_lower
+                    or "charging_limit" in unique_id_lower
+                ):
+                    disabled_limit_entities.append(entity_entry.entity_id)
+                continue
 
             # Look for EMS mode select entity
             if (
@@ -193,6 +202,10 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                 elif (
                     "charging_limit" in entity_id_lower
                     or "charging_limit" in unique_id_lower
+                ) and (
+                    # "charging_limit" is a substring of "discharging_limit"
+                    "discharging" not in entity_id_lower
+                    and "discharging" not in unique_id_lower
                 ):
                     charge_limit_candidates.setdefault("mid", entity_entry.entity_id)
                 elif (
@@ -328,6 +341,20 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                 discharge_limit_candidates[tier],
             )
             break
+
+    # Writable setpoints exist but are disabled in the entity registry --
+    # they cannot be auto-suggested or selected until the user enables them
+    if (
+        CONF_CHARGE_LIMIT_ENTITY not in result
+        or CONF_DISCHARGE_LIMIT_ENTITY not in result
+    ) and disabled_limit_entities:
+        _LOGGER.warning(
+            "SigenStor charge/discharge limit setpoints found but DISABLED "
+            "in the entity registry: %s. Enable them in HA "
+            "(Settings > Devices & Services > Entities) to let Energy "
+            "Manager control battery charge limits.",
+            ", ".join(disabled_limit_entities),
+        )
 
     # Fallback: scan ALL entities for per-phase grid power sensors
     phase_keys = [
