@@ -217,6 +217,9 @@
       },
       "car_schedule": {
         "name": "Bilens laddningsschema"
+      },
+      "charger_status": {
+        "name": "Laddarstatus"
       }
     },
     "number": {
@@ -244,6 +247,9 @@
     "switch": {
       "control_enabled": {
         "name": "Enhetsstyrning"
+      },
+      "force_charging": {
+        "name": "Tvinga laddning"
       }
     }
   }

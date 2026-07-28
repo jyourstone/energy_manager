@@ -217,6 +217,9 @@
       },
       "car_schedule": {
         "name": "Car Charging Schedule"
+      },
+      "charger_status": {
+        "name": "Charger Status"
       }
     },
     "number": {
@@ -244,6 +247,9 @@
     "switch": {
       "control_enabled": {
         "name": "Device control"
+      },
+      "force_charging": {
+        "name": "Force charging"
       }
     }
   }

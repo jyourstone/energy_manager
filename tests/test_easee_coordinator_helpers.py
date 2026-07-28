@@ -31,6 +31,8 @@ from custom_components.energy_manager.coordinator import (
     _estimate_charger_current_amps,
     _read_control_enabled,
     _read_entity_float,
+    _read_force_charging,
+    _read_power_kw,
     build_easee_service_call,
 )
 
@@ -189,6 +191,47 @@ def test_read_control_enabled_true() -> None:
 def test_read_control_enabled_runtime_data_missing_attr_defaults_false() -> None:
     entry = SimpleNamespace(runtime_data=SimpleNamespace())
     assert _read_control_enabled(entry) is False
+
+
+def test_read_force_charging_no_runtime_data_defaults_false() -> None:
+    entry = SimpleNamespace()
+    assert _read_force_charging(entry) is False
+
+
+def test_read_force_charging_true() -> None:
+    entry = SimpleNamespace(runtime_data=SimpleNamespace(force_charging=True))
+    assert _read_force_charging(entry) is True
+
+
+def test_read_force_charging_runtime_data_missing_attr_defaults_false() -> None:
+    entry = SimpleNamespace(runtime_data=SimpleNamespace())
+    assert _read_force_charging(entry) is False
+
+
+# ---------------------------------------------------------------------------
+# _read_power_kw() -- EV-09 solar-surplus input reader
+# ---------------------------------------------------------------------------
+
+
+def test_read_power_kw_assumes_watts_by_default() -> None:
+    hass = FakeHass({"sensor.pv": FakeState("2300")})
+    assert _read_power_kw(hass, "sensor.pv") == pytest.approx(2.3)
+
+
+def test_read_power_kw_respects_kw_unit() -> None:
+    hass = FakeHass({"sensor.pv": FakeState("2.3", {"unit_of_measurement": "kW"})})
+    assert _read_power_kw(hass, "sensor.pv") == pytest.approx(2.3)
+
+
+def test_read_power_kw_missing_entity_defaults_zero() -> None:
+    hass = FakeHass({})
+    assert _read_power_kw(hass, "") == 0.0
+    assert _read_power_kw(hass, "sensor.missing") == 0.0
+
+
+def test_read_power_kw_unavailable_defaults_zero() -> None:
+    hass = FakeHass({"sensor.pv": FakeState("unavailable")})
+    assert _read_power_kw(hass, "sensor.pv") == 0.0
 
 
 # ---------------------------------------------------------------------------

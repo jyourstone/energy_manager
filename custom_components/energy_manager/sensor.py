@@ -25,6 +25,7 @@ from homeassistant.util import dt as dt_util
 from .coordinator import (
     BatteryScheduleData,
     CarChargingData,
+    EaseeData,
     EMSData,
     EnergyManagerConfigEntry,
     PriceData,
@@ -66,6 +67,11 @@ async def async_setup_entry(
     ems_coordinator = entry.runtime_data.ems_coordinator
     if ems_coordinator is not None:
         entities.append(EMSStatusSensor(ems_coordinator, entry))
+
+    # Easee charger status sensor (when the Easee coordinator exists)
+    easee_coordinator = entry.runtime_data.easee_coordinator
+    if easee_coordinator is not None:
+        entities.append(EaseeChargerStatusSensor(easee_coordinator, entry))
 
     async_add_entities(entities)
 
@@ -358,6 +364,68 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
             "command_verified": data.command_verified,
             "car_override_active": data.car_override_active,
             "pv_charging_active": data.pv_charging_active,
+            "dry_run": data.dry_run,
+            "last_suppressed_command": data.last_suppressed_command,
+        }
+
+
+class EaseeChargerStatusSensor(EnergyManagerEntity, SensorEntity):
+    """Sensor showing Easee charger controller status.
+
+    State is the current charger decision mode: forced, scheduled, solar,
+    or idle (see charger_state_machine.ChargerController.decide()).
+    Attributes expose the computed amp target, phase mode, phase-switch
+    sequence state, stuck-command flag, raw charger status, measured power,
+    fuse headroom, override reason, and observe-only (dry-run) status with
+    the last suppressed command (CORE-14).
+    """
+
+    _attr_translation_key = "charger_status"
+    _attr_icon = "mdi:ev-station"
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the charger status sensor.
+
+        Args:
+            coordinator: The EaseeCoordinator providing charger state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charger_status"
+
+    @property
+    def native_value(self) -> str:
+        """Return the current charger decision mode."""
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return "unknown"
+        return data.mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return charger control attributes.
+
+        Exposes target amps/phase mode, phase-switch sequence state, stuck
+        flag, raw charger status, measured power, fuse headroom, override
+        reason, and observe-only (dry-run) status with the last suppressed
+        command (CORE-14).
+        """
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "target_amps": round(data.target_amps, 1),
+            "target_phase_mode": data.target_phase_mode,
+            "sequence_state": data.sequence_state,
+            "stuck": data.stuck,
+            "charger_status": data.charger_status,
+            "charger_power_kw": round(data.charger_power_kw, 2),
+            "fuse_headroom_amps": round(data.fuse_headroom_amps, 1),
+            "override_reason": data.override_reason,
             "dry_run": data.dry_run,
             "last_suppressed_command": data.last_suppressed_command,
         }

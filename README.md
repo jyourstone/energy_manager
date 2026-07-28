@@ -24,11 +24,10 @@ Energy Manager is under active development and has not reached a stable 1.0 yet.
 - EMS mode control of a SigenStor inverter, including per-phase fuse protection
 - Per-car charging schedule computation (cheapest slots under a deadline + target SOC)
 - PV opportunistic charging with hysteresis
-- Easee charger control (mode arbitration, dynamic amp limits, 1/3-phase switching, fuse protection) — implemented internally and gated behind the same observe-only "Device control" switch as the battery EMS; no dedicated charger status/force-charging entities yet
+- Easee charger actuation implemented, gated behind the observe-only "Device control" switch; being validated in parallel with the legacy system
 
 Not yet implemented:
 
-- **Charger status/control entities and solar-surplus charging** — the charger control engine runs and can send commands, but the status sensor, force-grid-charging switch, and solar-surplus wiring are still in development
 - **Full options flow** — most settings are configured once via the setup wizard; a complete "Configure" flow for changing them afterwards is still in development
 
 Expect rough edges, and expect entities/config to change before 1.0.
@@ -51,6 +50,7 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 - **EMS mode control** — sets the SigenStor EMS mode (command charging / max self-consumption / standby) to follow the computed schedule, with per-phase fuse protection and verification that commands actually took effect
 - **Per-car configuration** — each car is a config subentry with its own departure time, target SOC, and max charge power entities, plus a cheapest-slot charging schedule constrained by the departure deadline
 - **PV opportunistic charging** — surplus solar production can trigger charging outside the price-driven schedule, with a hysteresis band to avoid rapid mode switching
+- **Easee charger control** — mode arbitration (forced/scheduled/solar/idle), dynamic amp limit with fuse protection, 1/2/3-phase awareness, solar-surplus charging, and a force-charging switch
 - **Modular** — Home Battery and EV Charging can each be enabled independently; a module works standalone without the other being configured
 - **Translations** — UI strings use Home Assistant's translation system; English and Swedish are both complete
 
@@ -108,6 +108,14 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Next Discharging Slot | Timestamp of the next scheduled discharge slot |
 | EMS Status | Current SigenStor EMS mode and fuse headroom |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
+| Charger Status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
+
+### Switches
+
+| Entity | Description |
+|--------|--------------|
+| Device control | Master observe-only switch (CORE-14); OFF means every coordinator still computes and publishes decisions, but no device command is actually sent |
+| Force charging | Forces the Easee charger to grid-charge regardless of schedule or solar state (EASE-03) |
 
 ### Numbers
 

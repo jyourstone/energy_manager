@@ -6,6 +6,11 @@ Defaults to OFF (observe-only) -- coordinators still compute and publish
 every decision, but no hass.services.async_call is made until this switch
 is turned on. Restores its last state across restarts via RestoreEntity,
 but fails safe to OFF whenever no previous state can be recovered.
+
+Also provides the "Force grid charging" switch (EASE-03), which replaces
+the legacy input_boolean.easee_force_charging -- when ON, the Easee charger
+controller's mode arbitration treats forced charging as the highest
+priority (see charger_state_machine.ChargerController.decide()).
 """
 
 from __future__ import annotations
@@ -26,14 +31,20 @@ async def async_setup_entry(
     entry: EnergyManagerConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Energy Manager device control switch from a config entry.
+    """Set up the Energy Manager switch entities from a config entry.
+
+    The "Force grid charging" switch (EASE-03) is only created when the
+    Easee charger coordinator exists.
 
     Args:
         hass: Home Assistant instance.
         entry: The config entry being set up.
         async_add_entities: Callback to register new entities.
     """
-    async_add_entities([DeviceControlSwitch(entry)])
+    entities: list[SwitchEntity] = [DeviceControlSwitch(entry)]
+    if entry.runtime_data.easee_coordinator is not None:
+        entities.append(ForceChargingSwitch(entry))
+    async_add_entities(entities)
 
 
 class DeviceControlSwitch(SwitchEntity, RestoreEntity):
@@ -88,9 +99,91 @@ class DeviceControlSwitch(SwitchEntity, RestoreEntity):
         self._attr_is_on = True
         self._entry.runtime_data.control_enabled = True
         self.async_write_ha_state()
+        await self._async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable device control (return to observe-only mode)."""
         self._attr_is_on = False
         self._entry.runtime_data.control_enabled = False
         self.async_write_ha_state()
+        await self._async_request_refresh()
+
+    async def _async_request_refresh(self) -> None:
+        """Request an immediate re-evaluation from both coordinators.
+
+        So flipping observe-only on/off takes effect immediately instead of
+        waiting for the next poll cycle.
+        """
+        runtime_data = self._entry.runtime_data
+        if runtime_data.ems_coordinator is not None:
+            await runtime_data.ems_coordinator.async_request_refresh()
+        if runtime_data.easee_coordinator is not None:
+            await runtime_data.easee_coordinator.async_request_refresh()
+
+
+class ForceChargingSwitch(SwitchEntity, RestoreEntity):
+    """Force-grid-charging switch (EASE-03), replaces input_boolean.easee_force_charging.
+
+    OFF by default and restores its previous state across restarts. When ON,
+    the Easee charger controller's mode arbitration treats "forced" as the
+    highest priority (see charger_state_machine.ChargerController.decide()),
+    starting the charger at the grid amp target regardless of the car's
+    schedule or solar state.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "force_charging"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_should_poll = False
+
+    def __init__(self, entry: EnergyManagerConfigEntry) -> None:
+        """Initialize the force-charging switch.
+
+        Args:
+            entry: The config entry this switch belongs to.
+        """
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_force_charging"
+        self._attr_is_on = False
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the Energy Manager hub device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name="Energy Manager",
+            manufacturer="Energy Manager",
+            model="Hub",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous state on startup, or default to OFF.
+
+        Fail-safe: no previous state, an unknown/unavailable last state, or
+        anything unexpected all resolve to OFF.
+        """
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        self._attr_is_on = last_state is not None and last_state.state == "on"
+        self._entry.runtime_data.force_charging = self._attr_is_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable forced grid charging."""
+        self._attr_is_on = True
+        self._entry.runtime_data.force_charging = True
+        self.async_write_ha_state()
+        await self._async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable forced grid charging."""
+        self._attr_is_on = False
+        self._entry.runtime_data.force_charging = False
+        self.async_write_ha_state()
+        await self._async_request_refresh()
+
+    async def _async_request_refresh(self) -> None:
+        """Request an immediate charger re-evaluation so the toggle takes effect now."""
+        easee_coordinator = self._entry.runtime_data.easee_coordinator
+        if easee_coordinator is not None:
+            await easee_coordinator.async_request_refresh()

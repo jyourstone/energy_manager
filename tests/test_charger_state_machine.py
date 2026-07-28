@@ -34,6 +34,7 @@ from custom_components.energy_manager.charger_state_machine import (
     compute_charger_capacity_amps,
     compute_solar_net_kw,
     compute_solar_raw_amps,
+    compute_solar_surplus_kw,
     conversion_factor_for_phase_capability,
     phase_switch_target,
     soc_gate_satisfied,
@@ -241,6 +242,90 @@ class TestSolarMath:
     def test_solar_raw_amps_floors(self):
         """net=3.0kW * 1.45 = 4.35 => floor to 4."""
         assert compute_solar_raw_amps(3.0, 1.45) == 4.0
+
+
+class TestComputeSolarSurplusKw:
+    """Tests for the EV-09 live solar-surplus formula.
+
+    surplus = pv - house_consumption - max(battery_power, 0) + charger_power,
+    with excluded_power_kw subtracted from house_consumption first (EMS-13).
+    """
+
+    def test_basic_formula(self):
+        # 5kW PV, 2kW house load, 1kW battery charging, 0.5kW charger draw
+        # 5 - 2 - 1 + 0.5 = 2.5
+        result = compute_solar_surplus_kw(
+            pv_power_kw=5.0,
+            house_consumption_kw=2.0,
+            battery_power_kw=1.0,
+            charger_power_kw=0.5,
+        )
+        assert result == pytest.approx(2.5)
+
+    def test_battery_discharging_not_subtracted(self):
+        # Negative (discharging) battery power must not add to the surplus --
+        # only max(battery_power, 0) is subtracted.
+        result = compute_solar_surplus_kw(
+            pv_power_kw=5.0,
+            house_consumption_kw=2.0,
+            battery_power_kw=-3.0,
+            charger_power_kw=0.0,
+        )
+        assert result == pytest.approx(3.0)
+
+    def test_battery_idle_zero_contributes_nothing(self):
+        result = compute_solar_surplus_kw(
+            pv_power_kw=2.0,
+            house_consumption_kw=1.0,
+            battery_power_kw=0.0,
+            charger_power_kw=0.0,
+        )
+        assert result == pytest.approx(1.0)
+
+    def test_excluded_power_reduces_effective_house_consumption(self):
+        # House consumption 3kW, but 1kW of that is an excluded water heater --
+        # effective consumption is 2kW, so surplus = 4 - 2 + 0 = 2.
+        result = compute_solar_surplus_kw(
+            pv_power_kw=4.0,
+            house_consumption_kw=3.0,
+            battery_power_kw=0.0,
+            charger_power_kw=0.0,
+            excluded_power_kw=1.0,
+        )
+        assert result == pytest.approx(2.0)
+
+    def test_charger_power_added_back(self):
+        # House consumption already includes the charger's own draw --
+        # charger_power_kw must be added back so the charger's own charging
+        # doesn't count against its own solar-surplus headroom.
+        without_charger = compute_solar_surplus_kw(
+            pv_power_kw=3.0,
+            house_consumption_kw=2.0,
+            battery_power_kw=0.0,
+            charger_power_kw=0.0,
+        )
+        with_charger = compute_solar_surplus_kw(
+            pv_power_kw=3.0,
+            house_consumption_kw=2.0,
+            battery_power_kw=0.0,
+            charger_power_kw=1.5,
+        )
+        assert with_charger == pytest.approx(without_charger + 1.5)
+
+    def test_no_clamping_negative_surplus_passes_through(self):
+        # A deficit (more house load than PV production) is returned as a
+        # negative value -- this function must NOT clamp to 0. The
+        # ChargerController's own SolarActivationTracker + solar safety
+        # buffer + start threshold (compute_solar_net_kw) are responsible
+        # for gating, not this formula.
+        result = compute_solar_surplus_kw(
+            pv_power_kw=1.0,
+            house_consumption_kw=4.0,
+            battery_power_kw=1.0,
+            charger_power_kw=0.0,
+        )
+        assert result == pytest.approx(-4.0)
+        assert result < 0.0
 
     def test_solar_raw_amps_floors_exact_integer(self):
         assert compute_solar_raw_amps(2.0, 2.5) == 5.0

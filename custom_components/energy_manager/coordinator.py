@@ -42,6 +42,7 @@ from .charger_state_machine import (
     ChargerCommand,
     ChargerController,
     ChargerInputs,
+    compute_solar_surplus_kw,
 )
 from .const import (
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
@@ -643,6 +644,50 @@ def _read_control_enabled(config_entry: ConfigEntry) -> bool:
     """
     runtime_data = getattr(config_entry, "runtime_data", None)
     return bool(getattr(runtime_data, "control_enabled", False))
+
+
+def _read_force_charging(config_entry: ConfigEntry) -> bool:
+    """Return the "Force grid charging" switch state (EASE-03).
+
+    Mirrors _read_control_enabled()'s defensive read of runtime_data --
+    defaults to False (not forcing) if runtime_data isn't set yet or the
+    switch hasn't initialized.
+
+    Args:
+        config_entry: The config entry to read runtime_data from.
+
+    Returns:
+        True if forced charging is requested, False otherwise.
+    """
+    runtime_data = getattr(config_entry, "runtime_data", None)
+    return bool(getattr(runtime_data, "force_charging", False))
+
+
+def _read_power_kw(hass: HomeAssistant, entity_id: str) -> float:
+    """Read a power sensor and return its value in kW, defaulting to 0.0.
+
+    Unit handling mirrors FuseSensorReader._read_signed_power_amps(): the
+    reading is assumed to be in watts unless the entity's
+    unit_of_measurement is exactly "kW". Used for the EV-09 solar-surplus
+    inputs (pv/house consumption/battery/excluded power entities), which are
+    plain sensors (unlike the Easee charger power entity, which reports kW
+    natively -- see EaseeCoordinator._read_charger_power_kw()).
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: The entity ID to read.
+
+    Returns:
+        The sensor's value in kW, or 0.0 if unavailable, unconfigured, or
+        unparseable.
+    """
+    power = _read_entity_float(hass, entity_id, 0.0)
+    state = hass.states.get(entity_id) if entity_id else None
+    if state is not None:
+        uom = state.attributes.get("unit_of_measurement", "")
+        if uom == "kW":
+            return power
+    return power / 1000.0
 
 
 class FuseSensorReader:
@@ -1498,8 +1543,9 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # 6. Detect fallback mode
         fallback_mode = self._detect_fallback_needed()
 
-        # 7. Call pure scheduler with solar_surplus_available=False
-        # Phase 4 always passes False; Phase 5 wires actual PV detection
+        # 7. Call pure scheduler with the Easee charger's live solar mode
+        # (EV-09) -- schedule marking only ("charge" vs "solar_charge"), no
+        # effect on the actual control loop.
         result: CarScheduleResult = build_car_charging_schedule(
             price_slots=price_slots,
             departure_time_utc=departure_utc,
@@ -1510,7 +1556,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             now=dt_util.utcnow(),
             fallback_mode=fallback_mode,
             is_preliminary=is_preliminary,
-            solar_surplus_available=False,
+            solar_surplus_available=self._read_solar_surplus_available(),
         )
 
         # 8. Return CarChargingData
@@ -1609,6 +1655,26 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # 5. Otherwise: recognized car with recent SOC
         elapsed = (dt_util.utcnow() - self._soc_last_updated).total_seconds()
         return elapsed > FALLBACK_STALE_THRESHOLD_MINUTES * 60
+
+    def _read_solar_surplus_available(self) -> bool:
+        """Return whether the Easee charger's solar mode is currently active (EV-09).
+
+        Feeds the pure car scheduler's solar_surplus_available flag, which
+        only affects schedule marking ("charge" vs "solar_charge" slot
+        labels) -- no effect on the actual charging control loop. Mirrors
+        EMSCoordinator._check_car_priority()'s defensive read of
+        runtime_data, which may not be assigned yet (this coordinator's
+        first refresh happens before EaseeCoordinator is created, see
+        __init__.py) or have no data yet.
+
+        Returns:
+            True if the Easee charger controller's mode is "solar".
+        """
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        easee_coordinator = getattr(runtime_data, "easee_coordinator", None)
+        if easee_coordinator is None or easee_coordinator.data is None:
+            return False
+        return easee_coordinator.data.mode == "solar"
 
     def _is_home_and_plugged_in(self) -> bool:
         """Derive whether the car is home and plugged in from available signals.
@@ -1835,8 +1901,10 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
     05-RESEARCH.md "shared fuse arbiter"), calls the pure ChargerController,
     and executes the returned commands via the easee.* services through the
     same build_command_decision observe-only choke point used by
-    EMSCoordinator. Force-charging and solar-surplus are Wave C
-    (force_charging=False, solar_surplus_kw=0.0 for now).
+    EMSCoordinator. Force-charging reads the "Force grid charging" switch
+    (EASE-03) from runtime_data; solar-surplus is computed live from the
+    configured pv/house-consumption/battery/charger power entities (EV-09,
+    see _read_solar_surplus_kw()).
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -1868,9 +1936,14 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         )
         self._soc_entity: str = entry.options.get(CONF_SOC_ENTITY, "")
         self._notify_service: str = entry.options.get(CONF_NOTIFY_SERVICE, "")
-        # TODO(wave-c): wired into the solar-surplus calc (EV-09/EMS-13).
+
+        # -- Solar-surplus inputs (EV-09/EMS-13) --
+        self._pv_power_entity: str = entry.options.get(CONF_PV_POWER_ENTITY, "")
         self._house_consumption_entity: str = entry.options.get(
             CONF_HOUSE_CONSUMPTION_ENTITY, ""
+        )
+        self._battery_power_entity: str = entry.options.get(
+            CONF_BATTERY_POWER_ENTITY, ""
         )
         self._excluded_power_entities: list[str] = list(
             entry.options.get(CONF_EXCLUDED_POWER_ENTITIES, []) or []
@@ -2003,10 +2076,8 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             charger_power_kw=charger_power_kw,
             measured_worst_case_signed_amps=0.0 if sensor_blocked else l_current,
             current_dynamic_limit_amps=current_dynamic_limit_amps,
-            # TODO(wave-c): wired to the force-charging switch entity (EASE-03).
-            force_charging=False,
-            # TODO(wave-c): wired to the EV-09 solar-surplus calc (EMS-13).
-            solar_surplus_kw=0.0,
+            force_charging=self._is_force_charging(),
+            solar_surplus_kw=self._read_solar_surplus_kw(charger_power_kw),
             battery_soc_pct=battery_soc,
             current_phase_mode=current_phase_mode,
             now=now,
@@ -2068,6 +2139,55 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
     def _is_control_enabled(self) -> bool:
         """Return the master "Device control" switch state (CORE-14)."""
         return _read_control_enabled(self.config_entry)
+
+    def _is_force_charging(self) -> bool:
+        """Return the "Force grid charging" switch state (EASE-03)."""
+        return _read_force_charging(self.config_entry)
+
+    def _read_solar_surplus_kw(self, charger_power_kw: float) -> float:
+        """Compute the live solar surplus available for the charger (EV-09).
+
+        Reads the configured pv/house-consumption/battery power entities and
+        each excluded-power entity (EMS-13), then calls the pure
+        compute_solar_surplus_kw(). Requires both the PV and house
+        consumption entities to be configured -- otherwise there is no
+        meaningful surplus to compute and solar mode simply never activates
+        (matches the pre-Wave-C default of solar_surplus_kw=0.0).
+
+        The raw result is passed straight through to
+        ChargerInputs.solar_surplus_kw -- it must NOT be pre-gated here, as
+        the ChargerController's own SolarActivationTracker + safety buffer +
+        start threshold already do that (see charger_state_machine.py
+        compute_solar_net_kw()).
+
+        Args:
+            charger_power_kw: This tick's measured charger power draw,
+                already read by the caller -- added back since the house
+                consumption reading already includes the charger's draw.
+
+        Returns:
+            Signed solar surplus in kW (0.0 if pv/house consumption entities
+            are not configured).
+        """
+        if not self._pv_power_entity or not self._house_consumption_entity:
+            return 0.0
+
+        pv_power_kw = _read_power_kw(self.hass, self._pv_power_entity)
+        house_consumption_kw = _read_power_kw(self.hass, self._house_consumption_entity)
+        battery_power_kw = _read_power_kw(self.hass, self._battery_power_entity)
+        excluded_power_kw = sum(
+            _read_power_kw(self.hass, entity_id)
+            for entity_id in self._excluded_power_entities
+            if entity_id
+        )
+
+        return compute_solar_surplus_kw(
+            pv_power_kw=pv_power_kw,
+            house_consumption_kw=house_consumption_kw,
+            battery_power_kw=battery_power_kw,
+            charger_power_kw=charger_power_kw,
+            excluded_power_kw=excluded_power_kw,
+        )
 
     def _read_charger_status(self) -> str:
         """Read the charger status entity, defaulting to "disconnected"."""
@@ -2204,6 +2324,11 @@ class EnergyManagerData:
     # device command is ever sent. Set by the switch entity on toggle and
     # read by coordinators at command time. Defaults OFF -- fail-safe.
     control_enabled: bool = False
+    # "Force grid charging" switch state (EASE-03, replaces
+    # input_boolean.easee_force_charging). Set by ForceChargingSwitch on
+    # toggle and read by EaseeCoordinator when building ChargerInputs.
+    # Defaults OFF.
+    force_charging: bool = False
 
 
 EnergyManagerConfigEntry = ConfigEntry[EnergyManagerData]

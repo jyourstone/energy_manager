@@ -293,6 +293,54 @@ def compute_charger_capacity_amps(
     return max(0.0, min(fuse_available, grid_power_ceiling_amps, car_max_amps))
 
 
+def compute_solar_surplus_kw(
+    pv_power_kw: float,
+    house_consumption_kw: float,
+    battery_power_kw: float,
+    charger_power_kw: float,
+    excluded_power_kw: float = 0.0,
+) -> float:
+    """Compute the live solar surplus available for the charger (EV-09).
+
+    Live formula (05-RESEARCH.md "Solar surplus formula (live)"):
+        pv_power - house_consumption - max(battery_power, 0) + charger_power
+
+    House consumption first has each configured excluded-power reading
+    subtracted (EMS-13, e.g. a separately-managed water heater) before the
+    rest of the formula is applied. battery_power_kw is signed with the same
+    convention as EMSCoordinator._read_battery_own_amps: positive means
+    charging (real load to subtract), zero/negative (idle/discharging)
+    contributes nothing. charger_power_kw is added back since the house
+    consumption reading already includes the charger's own draw.
+
+    This deliberately returns the RAW (unclamped, possibly negative) value --
+    the ChargerController's own SolarActivationTracker + solar_safety_buffer_kw
+    + solar_start_threshold_kw already gate start/stop timing (see
+    compute_solar_net_kw() below), so this function must not pre-gate or
+    clamp the result a second time.
+
+    Args:
+        pv_power_kw: Current PV/solar production in kW.
+        house_consumption_kw: Total house power consumption in kW, before
+            exclusions.
+        battery_power_kw: Signed house battery power in kW (positive =
+            charging).
+        charger_power_kw: Measured charger power draw in kW.
+        excluded_power_kw: Sum of configured excluded-power entity readings
+            in kW, subtracted from house_consumption_kw (EMS-13).
+
+    Returns:
+        Signed solar surplus in kW. Negative means a deficit (no surplus).
+    """
+    net_house_consumption_kw = house_consumption_kw - excluded_power_kw
+    return (
+        pv_power_kw
+        - net_house_consumption_kw
+        - max(0.0, battery_power_kw)
+        + charger_power_kw
+    )
+
+
 def compute_solar_net_kw(solar_surplus_kw: float, safety_buffer_kw: float) -> float:
     """Return max(0, solar_surplus_kw - safety_buffer_kw)."""
     return max(0.0, solar_surplus_kw - safety_buffer_kw)
