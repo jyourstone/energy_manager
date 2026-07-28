@@ -9,7 +9,10 @@ Multi-step wizard:
 
 Plus:
   - Car subentry flow for per-car EV configuration
-  - Stub options flow (full options flow is Phase 6)
+  - Options flow (CORE-05): mirrors the config flow's step structure
+    (init/price -> modules -> battery -> ems -> ev) so any setting can be
+    revisited later. Car subentries have their own reconfigure flow and are
+    not duplicated here.
 """
 
 from __future__ import annotations
@@ -159,6 +162,7 @@ from .const import (
     SUBENTRY_TYPE_CAR,
 )
 from .nordpool_adapter import detect_nordpool_type, find_all_nordpool_sensors
+from .options_flow_support import merge_detected_with_current
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -839,20 +843,589 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class EnergyManagerOptionsFlow(OptionsFlowWithReload):
-    """Stub options flow — full implementation in Phase 6."""
+    """Options flow mirroring the config flow's step structure.
+
+    Steps: init (price source) -> modules -> battery -> ems -> ev, matching
+    the config flow wizard so any part of the initial setup can be revisited
+    later. Car subentries have their own reconfigure flow (see
+    CarSubentryFlowHandler) and are intentionally not duplicated here.
+
+    Every field is pre-filled from the current entry data/options via
+    suggested_value: it can be left untouched, changed, or (for optional
+    entity fields) cleared. Auto-detection only fills fields that are
+    currently empty -- it never overrides an existing choice.
+
+    Note on reload: on modern HA, OptionsFlowWithReload reloads the entry
+    once this flow finishes. The manual update listener registered in
+    __init__.py must stay in place regardless -- it is what reloads the
+    entry when a car subentry is added/edited/removed, which does not go
+    through this options flow. As a result, saving options may trigger a
+    second, harmless reload (coordinators are simply recreated). This is
+    preferred over adding a dedupe flag, which would add cross-module
+    shared state for a purely cosmetic, non-hot-path concern.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the options flow."""
+        super().__init__(*args, **kwargs)
+        self._options: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show placeholder settings form."""
-        if user_input is not None:
-            return self.async_create_entry(data=self.config_entry.options)
+        """Step 1: Price Source — change the Nordpool sensor."""
+        if not self._options:
+            self._options = dict(self.config_entry.options)
 
-        # Empty form — serves as a placeholder until Phase 6
-        schema = vol.Schema({})
+        errors: dict[str, str] = {}
+        current_sensor = self.config_entry.data.get(CONF_NORDPOOL_SENSOR, "")
+
+        if user_input is not None:
+            new_sensor = user_input.get(CONF_NORDPOOL_SENSOR, current_sensor)
+            if new_sensor != current_sensor:
+                nordpool_type = detect_nordpool_type(self.hass, new_sensor)
+                if nordpool_type == "unknown":
+                    errors["base"] = "nordpool_not_found"
+                else:
+                    new_data = dict(self.config_entry.data)
+                    new_data[CONF_NORDPOOL_SENSOR] = new_sensor
+                    new_data[CONF_NORDPOOL_TYPE] = nordpool_type
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry, data=new_data
+                    )
+            if not errors:
+                return await self.async_step_modules()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_NORDPOOL_SENSOR): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+            }
+        )
+        if current_sensor:
+            schema = _add_suggested_values(
+                schema, {CONF_NORDPOOL_SENSOR: current_sensor}
+            )
 
         return self.async_show_form(
             step_id="init",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_modules(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 2: Module Selection — enable/disable Home Battery and EV Charging."""
+        if user_input is not None:
+            self._options[CONF_BATTERY_ENABLED] = user_input.get(
+                CONF_BATTERY_ENABLED, False
+            )
+            self._options[CONF_EV_ENABLED] = user_input.get(CONF_EV_ENABLED, False)
+
+            if self._options[CONF_BATTERY_ENABLED]:
+                return await self.async_step_battery()
+            if self._options[CONF_EV_ENABLED]:
+                return await self.async_step_ev()
+            return self.async_create_entry(data=self._options)
+
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_BATTERY_ENABLED,
+                    default=self._options.get(CONF_BATTERY_ENABLED, False),
+                ): BooleanSelector(),
+                vol.Optional(
+                    CONF_EV_ENABLED,
+                    default=self._options.get(CONF_EV_ENABLED, False),
+                ): BooleanSelector(),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="modules",
+            data_schema=schema,
+        )
+
+    async def async_step_battery(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 3: Home Battery Config — conditional, auto-detected SigenStor entities."""
+        if user_input is not None:
+            self._options[CONF_SOC_ENTITY] = user_input.get(CONF_SOC_ENTITY, "")
+            self._options[CONF_BATTERY_POWER_ENTITY] = user_input.get(
+                CONF_BATTERY_POWER_ENTITY, ""
+            )
+            self._options[CONF_BATTERY_CAPACITY_KWH] = user_input.get(
+                CONF_BATTERY_CAPACITY_KWH, 10.0
+            )
+            self._options[CONF_FORECAST_SOLAR_ENTITY] = user_input.get(
+                CONF_FORECAST_SOLAR_ENTITY, ""
+            )
+
+            # Route to EMS step (battery is enabled, so EMS config is relevant)
+            return await self.async_step_ems()
+
+        # Auto-detect SigenStor entities and Forecast.Solar; only fills
+        # fields that are not already configured (see merge_detected_with_current)
+        detected = find_sigenstor_entities(self.hass)
+        detected.update(find_forecast_solar_entities(self.hass))
+        suggested = merge_detected_with_current(detected, self._options)
+
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_SOC_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_BATTERY_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(
+                    CONF_BATTERY_CAPACITY_KWH,
+                    default=self._options.get(CONF_BATTERY_CAPACITY_KWH, 10.0),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1, max=100, step=0.1, unit_of_measurement="kWh"
+                    )
+                ),
+                vol.Optional(CONF_FORECAST_SOLAR_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+            }
+        )
+
+        if suggested:
+            schema = _add_suggested_values(schema, suggested)
+
+        return self.async_show_form(
+            step_id="battery",
+            data_schema=schema,
+        )
+
+    async def async_step_ems(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 3b: EMS Control Config — fuse rating and control entity selection.
+
+        Appears after the battery step. Auto-detects SigenStor EMS control
+        entities for fields that are not already configured.
+        """
+        if user_input is not None:
+            self._options[CONF_FUSE_RATING_AMPS] = user_input.get(
+                CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
+            )
+            self._options[CONF_FUSE_SAFETY_BUFFER_AMPS] = user_input.get(
+                CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
+            )
+            self._options[CONF_EMS_SELECT_ENTITY] = user_input.get(
+                CONF_EMS_SELECT_ENTITY, ""
+            )
+            self._options[CONF_CHARGE_LIMIT_ENTITY] = user_input.get(
+                CONF_CHARGE_LIMIT_ENTITY, ""
+            )
+            self._options[CONF_DISCHARGE_LIMIT_ENTITY] = user_input.get(
+                CONF_DISCHARGE_LIMIT_ENTITY, ""
+            )
+            self._options[CONF_GRID_POWER_ENTITY] = user_input.get(
+                CONF_GRID_POWER_ENTITY, ""
+            )
+            self._options[CONF_GRID_PHASE_A_ENTITY] = user_input.get(
+                CONF_GRID_PHASE_A_ENTITY, ""
+            )
+            self._options[CONF_GRID_PHASE_B_ENTITY] = user_input.get(
+                CONF_GRID_PHASE_B_ENTITY, ""
+            )
+            self._options[CONF_GRID_PHASE_C_ENTITY] = user_input.get(
+                CONF_GRID_PHASE_C_ENTITY, ""
+            )
+            self._options[CONF_PV_POWER_ENTITY] = user_input.get(
+                CONF_PV_POWER_ENTITY, ""
+            )
+            self._options[CONF_SENSOR_FAIL_BEHAVIOR] = user_input.get(
+                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+            )
+            self._options[CONF_ASSUMED_LOAD_AMPS] = user_input.get(
+                CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
+            )
+            self._options[CONF_MAX_ESS_CHARGE_AMPS] = user_input.get(
+                CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
+            )
+            self._options[CONF_ESS_INCREASE_DELAY] = user_input.get(
+                CONF_ESS_INCREASE_DELAY, DEFAULT_ESS_INCREASE_DELAY_SECONDS
+            )
+
+            if self._options.get(CONF_EV_ENABLED):
+                return await self.async_step_ev()
+            return self.async_create_entry(data=self._options)
+
+        detected = merge_detected_with_current(
+            find_sigenstor_ems_entities(self.hass), self._options
+        )
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_FUSE_RATING_AMPS,
+                    default=self._options.get(
+                        CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_FUSE_RATING_AMPS,
+                        max=MAX_FUSE_RATING_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_FUSE_SAFETY_BUFFER_AMPS,
+                    default=self._options.get(
+                        CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SAFETY_BUFFER_AMPS,
+                        max=MAX_SAFETY_BUFFER_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(CONF_EMS_SELECT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="select")
+                ),
+                vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="number")
+                ),
+                vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="number")
+                ),
+                vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_GRID_PHASE_A_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_GRID_PHASE_B_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_GRID_PHASE_C_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(
+                    CONF_SENSOR_FAIL_BEHAVIOR,
+                    default=self._options.get(
+                        CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+                    ),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+                            SENSOR_FAIL_BEHAVIOR_BLOCK,
+                        ],
+                        translation_key="sensor_fail_behavior",
+                    )
+                ),
+                vol.Optional(
+                    CONF_ASSUMED_LOAD_AMPS,
+                    default=self._options.get(
+                        CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_ASSUMED_LOAD_AMPS,
+                        max=MAX_ASSUMED_LOAD_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_ESS_CHARGE_AMPS,
+                    default=self._options.get(
+                        CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_ESS_CHARGE_AMPS,
+                        max=MAX_MAX_ESS_CHARGE_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_ESS_INCREASE_DELAY,
+                    default=self._options.get(
+                        CONF_ESS_INCREASE_DELAY,
+                        DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_ESS_INCREASE_DELAY_SECONDS,
+                        max=MAX_ESS_INCREASE_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+            }
+        )
+
+        if detected:
+            schema = _add_suggested_values(schema, detected)
+
+        return self.async_show_form(
+            step_id="ems",
+            data_schema=schema,
+        )
+
+    async def async_step_ev(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 4: EV Charging Config — conditional, auto-detected Easee entities."""
+        if user_input is not None:
+            self._options[CONF_CHARGER_STATUS_ENTITY] = user_input.get(
+                CONF_CHARGER_STATUS_ENTITY, ""
+            )
+            self._options[CONF_CHARGER_POWER_ENTITY] = user_input.get(
+                CONF_CHARGER_POWER_ENTITY, ""
+            )
+            self._options[CONF_CHARGER_DEVICE_ID] = user_input.get(
+                CONF_CHARGER_DEVICE_ID, ""
+            )
+            self._options[CONF_HOUSE_CONSUMPTION_ENTITY] = user_input.get(
+                CONF_HOUSE_CONSUMPTION_ENTITY, ""
+            )
+            self._options[CONF_EXCLUDED_POWER_ENTITIES] = user_input.get(
+                CONF_EXCLUDED_POWER_ENTITIES, []
+            )
+            self._options[CONF_NOTIFY_SERVICE] = user_input.get(
+                CONF_NOTIFY_SERVICE, ""
+            )
+            self._options[CONF_MIN_CHARGE_AMPS] = user_input.get(
+                CONF_MIN_CHARGE_AMPS, DEFAULT_MIN_CHARGE_AMPS
+            )
+            self._options[CONF_MAX_CHARGE_AMPS] = user_input.get(
+                CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS
+            )
+            self._options[CONF_MAX_GRID_CHARGE_POWER_KW] = user_input.get(
+                CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
+            )
+            self._options[CONF_PHASE_SWITCH_THRESHOLD_KW] = user_input.get(
+                CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
+            )
+            self._options[CONF_SOLAR_START_THRESHOLD_KW] = user_input.get(
+                CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
+            )
+            self._options[CONF_BATTERY_SOC_GATE_PCT] = user_input.get(
+                CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
+            )
+            self._options[CONF_AMP_INCREASE_DELAY] = user_input.get(
+                CONF_AMP_INCREASE_DELAY, DEFAULT_AMP_INCREASE_DELAY_SECONDS
+            )
+            self._options[CONF_AMP_DECREASE_DELAY] = user_input.get(
+                CONF_AMP_DECREASE_DELAY, DEFAULT_AMP_DECREASE_DELAY_SECONDS
+            )
+            self._options[CONF_SOLAR_ACTIVATION_DELAY] = user_input.get(
+                CONF_SOLAR_ACTIVATION_DELAY, DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS
+            )
+            self._options[CONF_SOLAR_DEACTIVATION_DELAY] = user_input.get(
+                CONF_SOLAR_DEACTIVATION_DELAY,
+                DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+            )
+            self._options[CONF_EMERGENCY_MARGIN_AMPS] = user_input.get(
+                CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
+            )
+            return self.async_create_entry(data=self._options)
+
+        # Auto-detect Easee entities + charger device_id + house consumption;
+        # only fills fields that are not already configured
+        detected = find_easee_entities(self.hass)
+        detected.update(find_house_consumption_entity(self.hass))
+        if detected.get(CONF_CHARGER_STATUS_ENTITY):
+            charger_device_id = find_easee_charger_device_id(
+                self.hass, detected[CONF_CHARGER_STATUS_ENTITY]
+            )
+            if charger_device_id:
+                detected[CONF_CHARGER_DEVICE_ID] = charger_device_id
+        suggested = merge_detected_with_current(detected, self._options)
+
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_CHARGER_STATUS_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_CHARGER_POWER_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_CHARGER_DEVICE_ID): TextSelector(),
+                vol.Optional(CONF_HOUSE_CONSUMPTION_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_EXCLUDED_POWER_ENTITIES): EntitySelector(
+                    EntitySelectorConfig(domain="sensor", multiple=True)
+                ),
+                vol.Optional(CONF_NOTIFY_SERVICE): TextSelector(),
+                vol.Optional(
+                    CONF_MIN_CHARGE_AMPS,
+                    default=self._options.get(
+                        CONF_MIN_CHARGE_AMPS, DEFAULT_MIN_CHARGE_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MIN_CHARGE_AMPS,
+                        max=MAX_MIN_CHARGE_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_CHARGE_AMPS,
+                    default=self._options.get(
+                        CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_CHARGE_AMPS,
+                        max=MAX_MAX_CHARGE_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_GRID_CHARGE_POWER_KW,
+                    default=self._options.get(
+                        CONF_MAX_GRID_CHARGE_POWER_KW,
+                        DEFAULT_MAX_GRID_CHARGE_POWER_KW,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_GRID_CHARGE_POWER_KW,
+                        max=MAX_MAX_GRID_CHARGE_POWER_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                # -- Advanced (mirrors the EMS step's grouping) --
+                vol.Optional(
+                    CONF_AMP_INCREASE_DELAY,
+                    default=self._options.get(
+                        CONF_AMP_INCREASE_DELAY,
+                        DEFAULT_AMP_INCREASE_DELAY_SECONDS,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_AMP_DELAY_SECONDS,
+                        max=MAX_AMP_INCREASE_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_AMP_DECREASE_DELAY,
+                    default=self._options.get(
+                        CONF_AMP_DECREASE_DELAY,
+                        DEFAULT_AMP_DECREASE_DELAY_SECONDS,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_AMP_DELAY_SECONDS,
+                        max=MAX_AMP_DECREASE_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_PHASE_SWITCH_THRESHOLD_KW,
+                    default=self._options.get(
+                        CONF_PHASE_SWITCH_THRESHOLD_KW,
+                        DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_PHASE_SWITCH_THRESHOLD_KW,
+                        max=MAX_PHASE_SWITCH_THRESHOLD_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_START_THRESHOLD_KW,
+                    default=self._options.get(
+                        CONF_SOLAR_START_THRESHOLD_KW,
+                        DEFAULT_SOLAR_START_THRESHOLD_KW,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SOLAR_START_THRESHOLD_KW,
+                        max=MAX_SOLAR_START_THRESHOLD_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_ACTIVATION_DELAY,
+                    default=self._options.get(
+                        CONF_SOLAR_ACTIVATION_DELAY,
+                        DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SOLAR_DELAY_SECONDS,
+                        max=MAX_SOLAR_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_DEACTIVATION_DELAY,
+                    default=self._options.get(
+                        CONF_SOLAR_DEACTIVATION_DELAY,
+                        DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SOLAR_DELAY_SECONDS,
+                        max=MAX_SOLAR_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_BATTERY_SOC_GATE_PCT,
+                    default=self._options.get(
+                        CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_BATTERY_SOC_GATE_PCT,
+                        max=MAX_BATTERY_SOC_GATE_PCT,
+                        step=1,
+                        unit_of_measurement="%",
+                    )
+                ),
+                vol.Optional(
+                    CONF_EMERGENCY_MARGIN_AMPS,
+                    default=self._options.get(
+                        CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_EMERGENCY_MARGIN_AMPS,
+                        max=MAX_EMERGENCY_MARGIN_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+            }
+        )
+
+        if suggested:
+            schema = _add_suggested_values(schema, suggested)
+
+        return self.async_show_form(
+            step_id="ev",
             data_schema=schema,
         )
 

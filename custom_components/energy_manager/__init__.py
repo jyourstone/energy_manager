@@ -126,7 +126,11 @@ async def async_setup_entry(
 
     # Reload the entry whenever it (or a subentry, e.g. adding/editing/
     # removing a car) is updated -- otherwise newly added subentries create
-    # no entities until HA is restarted.
+    # no entities until HA is restarted. This listener must stay registered
+    # unconditionally (not just on legacy HA) because subentry changes don't
+    # go through the options flow. On modern HA, OptionsFlowWithReload
+    # (config_flow.py) also reloads the entry after an options save, so
+    # saving options may trigger a second, harmless reload.
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     return True
