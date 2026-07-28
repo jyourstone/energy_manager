@@ -30,13 +30,21 @@
           "soc_entity": "Sensor för batteriets laddningsnivå",
           "battery_power_entity": "Sensor för batterieffekt",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
-          "forecast_solar_entity": "Sensor för solprognos"
+          "forecast_solar_entity": "Sensorer för solprognos",
+          "charge_buffer_pct": "Laddningsbuffert (%)",
+          "production_factor": "Solprognosfaktor",
+          "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
+          "peak_gap_hours": "Gap mellan toppar (h)"
         },
         "data_description": {
           "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
           "battery_power_entity": "Sensor som visar batteriets effekt (W).",
           "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
-          "forecast_solar_entity": "Valfri Forecast.Solar-sensor för solprognosbaserad schemaläggning. Lämna tomt om den inte finns."
+          "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns.",
+          "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
+          "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
+          "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
+          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp."
         }
       },
       "ems": {
@@ -206,13 +214,21 @@
           "soc_entity": "Sensor för batteriets laddningsnivå",
           "battery_power_entity": "Sensor för batterieffekt",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
-          "forecast_solar_entity": "Sensor för solprognos"
+          "forecast_solar_entity": "Sensorer för solprognos",
+          "charge_buffer_pct": "Laddningsbuffert (%)",
+          "production_factor": "Solprognosfaktor",
+          "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
+          "peak_gap_hours": "Gap mellan toppar (h)"
         },
         "data_description": {
           "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
           "battery_power_entity": "Sensor som visar batteriets effekt (W).",
           "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
-          "forecast_solar_entity": "Valfri Forecast.Solar-sensor för solprognosbaserad schemaläggning. Lämna tomt om den inte finns."
+          "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns.",
+          "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
+          "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
+          "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
+          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp."
         }
       },
       "ems": {
@@ -335,6 +351,9 @@
       },
       "charger_status": {
         "name": "Laddarstatus"
+      },
+      "actual_electricity_price": {
+        "name": "Faktiskt elpris"
       }
     },
     "number": {
@@ -352,6 +371,15 @@
       },
       "car_max_charge_power": {
         "name": "Max laddningseffekt"
+      },
+      "battery_cycle_cost": {
+        "name": "Batteriets cykelkostnad"
+      },
+      "grid_transfer_fee": {
+        "name": "Nätöverföringsavgift"
+      },
+      "electricity_company_fee": {
+        "name": "Elhandelsavgift"
       }
     },
     "time": {

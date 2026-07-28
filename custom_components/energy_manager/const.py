@@ -81,6 +81,9 @@ CHARGE_POWER_STEP_KW = 0.1
 
 # Peak grouping
 DEFAULT_PEAK_GAP_HOURS = 2.0
+CONF_PEAK_GAP_HOURS = "peak_gap_hours"
+MIN_PEAK_GAP_HOURS = 0.5
+MAX_PEAK_GAP_HOURS = 12.0
 
 # SOC constraints
 DEFAULT_MIN_SOC_PCT = 10.0
@@ -88,6 +91,34 @@ DEFAULT_MAX_SOC_PCT = 95.0
 
 # Default battery capacity if not configured
 DEFAULT_BATTERY_CAPACITY_KWH = 10.0
+
+# --- BATT-15 algorithm tuning options (config + options flow battery step) ---
+
+CONF_CHARGE_BUFFER_PCT = "charge_buffer_pct"
+DEFAULT_CHARGE_BUFFER_PCT = 20.0  # %
+MIN_CHARGE_BUFFER_PCT = 0.0
+MAX_CHARGE_BUFFER_PCT = 100.0
+
+CONF_PRODUCTION_FACTOR = "production_factor"
+DEFAULT_PRODUCTION_FACTOR = 0.8
+MIN_PRODUCTION_FACTOR = 0.1
+MAX_PRODUCTION_FACTOR = 1.0
+
+CONF_ESTIMATED_CHARGE_POWER_KW = "estimated_charge_power_kw"
+DEFAULT_ESTIMATED_CHARGE_POWER_KW = 6.0  # kW
+MIN_ESTIMATED_CHARGE_POWER_KW = 0.5
+MAX_ESTIMATED_CHARGE_POWER_KW = 22.0
+
+# Rolling house-consumption average used to size BATT-15 energy needs
+MEAN_CONSUMPTION_WINDOW_HOURS = 48.0
+DEFAULT_MEAN_CONSUMPTION_KW = 0.5
+
+# --- BATT-14 economics number entities (RestoreNumber, hub-level) ---
+# Reuses MIN_PRICE_THRESHOLD/MAX_PRICE_THRESHOLD/PRICE_THRESHOLD_STEP above
+# (same SEK/kWh range as the charge/discharge thresholds).
+DEFAULT_BATTERY_CYCLE_COST = 0.0  # SEK/kWh -- 0 disables the BATT-14 derivation
+DEFAULT_GRID_TRANSFER_FEE = 0.0  # SEK/kWh
+DEFAULT_ELECTRICITY_COMPANY_FEE = 0.0  # SEK/kWh -- actual-price sensor only
 
 # --- EMS Controller configuration ---
 

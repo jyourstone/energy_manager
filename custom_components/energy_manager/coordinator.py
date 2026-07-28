@@ -35,7 +35,11 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
-from .battery_scheduler import BatteryScheduleResult, build_battery_schedule
+from .battery_scheduler import (
+    BatteryScheduleResult,
+    build_battery_schedule,
+    compute_effective_discharge_threshold,
+)
 from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
 from .charger_state_machine import (
     CarDemand,
@@ -56,6 +60,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
     CONF_CAR_NAME,
+    CONF_CHARGE_BUFFER_PCT,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_DEVICE_ID,
@@ -65,6 +70,7 @@ from .const import (
     CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
+    CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EXCLUDED_POWER_ENTITIES,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
@@ -82,8 +88,10 @@ from .const import (
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_NOTIFY_SERVICE,
+    CONF_PEAK_GAP_HOURS,
     CONF_PHASE_CAPABILITY,
     CONF_PHASE_SWITCH_THRESHOLD_KW,
+    CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
@@ -94,29 +102,36 @@ from .const import (
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
+    DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
     DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
     DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
     DEFAULT_COMMAND_STUCK_TIMEOUT_SECONDS,
     DEFAULT_DISCHARGE_THRESHOLD,
+    DEFAULT_ELECTRICITY_COMPANY_FEE,
     DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+    DEFAULT_ESTIMATED_CHARGE_POWER_KW,
     DEFAULT_FUSE_RATING_AMPS,
     DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
+    DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_AMPS,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_ESS_CHARGE_AMPS,
     DEFAULT_MAX_GRID_CHARGE_POWER_KW,
     DEFAULT_MAX_SOC_PCT,
+    DEFAULT_MEAN_CONSUMPTION_KW,
     DEFAULT_MIN_CHARGE_AMPS,
     DEFAULT_MIN_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
     DEFAULT_PHASE_CAPABILITY,
     DEFAULT_PHASE_SEQUENCE_STEP_TIMEOUT_SECONDS,
     DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
+    DEFAULT_PRODUCTION_FACTOR,
     DEFAULT_SAFETY_BUFFER_AMPS,
     DEFAULT_SENSOR_FAIL_BEHAVIOR,
     DEFAULT_SOC_ROUND_UP,
@@ -130,6 +145,7 @@ from .const import (
     EMS_UPDATE_INTERVAL_SECONDS,
     FALLBACK_STALE_THRESHOLD_MINUTES,
     MAX_CHARGE_LIMIT_KW,
+    MEAN_CONSUMPTION_WINDOW_HOURS,
     PRICE_UPDATE_INTERVAL_MINUTES,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
     WATTS_TO_AMPS_3PHASE_DIVISOR,
@@ -414,6 +430,14 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         self.discharge_threshold: float = DEFAULT_DISCHARGE_THRESHOLD
         self.max_charge_power_w: float = DEFAULT_MAX_CHARGE_POWER_KW * 1000
 
+        # BATT-14 economics -- updated by NumberEntity instances after setup
+        self.battery_cycle_cost: float = DEFAULT_BATTERY_CYCLE_COST
+        self.grid_transfer_fee: float = DEFAULT_GRID_TRANSFER_FEE
+        self.electricity_company_fee: float = DEFAULT_ELECTRICITY_COMPANY_FEE
+
+        # BATT-15 in-memory rolling house-consumption samples (~48h window)
+        self._consumption_samples: list[tuple[datetime, float]] = []
+
     async def _async_setup(self) -> None:
         """Register listeners for coordinator chaining and entity state changes.
 
@@ -434,12 +458,14 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
                 )
             )
 
-        # Listen for Forecast.Solar entity state changes
-        solar_entity = self.config_entry.options.get(CONF_FORECAST_SOLAR_ENTITY)
-        if solar_entity:
+        # Listen for Forecast.Solar entity state changes (BATT-13: one or
+        # more entities -- _get_forecast_solar_entities() tolerates the
+        # pre-multi-forecast plain-string config shape too)
+        solar_entities = self._get_forecast_solar_entities()
+        if solar_entities:
             self.config_entry.async_on_unload(
                 async_track_state_change_event(
-                    self.hass, [solar_entity], self._handle_external_update
+                    self.hass, solar_entities, self._handle_external_update
                 )
             )
 
@@ -478,34 +504,67 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # 3. Read current SOC from HA entity state
         current_soc = self._read_soc()
 
-        # 4. Read solar forecast if configured
-        solar_forecast_wh = self._get_solar_forecast_wh()
+        # 4. Sum remaining-today production across all configured
+        #    Forecast.Solar sensors (BATT-13)
+        solar_forecast_remaining_wh = self._get_solar_forecast_remaining_wh()
 
-        # 5. Read battery capacity from entry options
+        # 5. Read battery capacity and BATT-15 tuning options from entry options
         battery_capacity_kwh = self.config_entry.options.get(
             CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH
         )
+        charge_buffer_pct = self.config_entry.options.get(
+            CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
+        )
+        production_factor = self.config_entry.options.get(
+            CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
+        )
+        estimated_charge_power_kw = self.config_entry.options.get(
+            CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
+        )
+        peak_gap_hours = self.config_entry.options.get(
+            CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
+        )
 
-        # 6. Call the pure scheduler
+        # 6. Sample house consumption into the rolling average (BATT-15)
+        mean_consumption_kw = self._sample_and_get_mean_consumption_kw()
+
+        # 7. Read dawn/dusk from sun.sun (BATT-15a)
+        dawn, dusk = _read_sun_dawn_dusk(self.hass)
+
+        # 8. BATT-14: derive the effective discharge threshold from economics
+        #    (overrides self.discharge_threshold when battery_cycle_cost > 0)
+        effective_discharge_threshold = compute_effective_discharge_threshold(
+            discharge_threshold=self.discharge_threshold,
+            battery_cycle_cost=self.battery_cycle_cost,
+            grid_transfer_fee=self.grid_transfer_fee,
+        )
+
+        # 9. Call the pure scheduler
         result: BatteryScheduleResult = build_battery_schedule(
             price_slots=price_slots,
             charge_threshold=self.charge_threshold,
-            discharge_threshold=self.discharge_threshold,
+            discharge_threshold=effective_discharge_threshold,
             max_charge_power_w=self.max_charge_power_w,
             battery_capacity_kwh=battery_capacity_kwh,
             current_soc_pct=current_soc,
             now=dt_util.utcnow(),
-            solar_forecast_wh=solar_forecast_wh,
-            peak_gap_hours=DEFAULT_PEAK_GAP_HOURS,
+            mean_consumption_kw=mean_consumption_kw,
+            estimated_charge_power_kw=estimated_charge_power_kw,
+            charge_buffer_pct=charge_buffer_pct,
+            solar_forecast_remaining_wh=solar_forecast_remaining_wh,
+            production_factor=production_factor,
+            dawn=dawn,
+            dusk=dusk,
+            peak_gap_hours=peak_gap_hours,
             min_soc_pct=DEFAULT_MIN_SOC_PCT,
             max_soc_pct=DEFAULT_MAX_SOC_PCT,
         )
 
-        # 7. Serialize next slots to dicts
+        # 10. Serialize next slots to dicts
         next_charging = _serialize_slot(result.next_charging_slot)
         next_discharging = _serialize_slot(result.next_discharging_slot)
 
-        # 8. Map current_action to current_state
+        # 11. Map current_action to current_state
         state_map = {
             "charge": "grid_charging",
             "solar_charge": "solar_charging",
@@ -514,7 +573,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         }
         current_state = state_map.get(result.current_action, result.current_action)
 
-        # 9. Return BatteryScheduleData
+        # 12. Return BatteryScheduleData
         return BatteryScheduleData(
             current_state=current_state,
             schedule=result.schedule,
@@ -524,7 +583,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             discharging_slot_count=result.discharging_slot_count,
             target_ems_mode=result.target_ems_mode,
             last_calculated=dt_util.utcnow(),
-            solar_forecast_used=solar_forecast_wh is not None,
+            solar_forecast_used=solar_forecast_remaining_wh is not None,
         )
 
     def _read_soc(self) -> float:
@@ -546,32 +605,152 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         except (ValueError, TypeError):
             return 50.0
 
-    def _get_solar_forecast_wh(self) -> float | None:
-        """Read Forecast.Solar entity state and return production in Wh.
+    def _get_forecast_solar_entities(self) -> list[str]:
+        """Return the configured Forecast.Solar entity IDs as a list (BATT-13).
+
+        Tolerates a plain string (the pre-multi-forecast config shape, e.g.
+        an existing dev config entry) by wrapping it in a single-item list.
 
         Returns:
-            Solar forecast in Wh, or None if not configured or unavailable.
-            Converts from kWh if the entity uses that unit.
+            List of entity IDs, possibly empty.
         """
-        solar_entity_id = self.config_entry.options.get(CONF_FORECAST_SOLAR_ENTITY)
-        if not solar_entity_id:
+        raw = self.config_entry.options.get(CONF_FORECAST_SOLAR_ENTITY, [])
+        if isinstance(raw, str):
+            return [raw] if raw else []
+        if isinstance(raw, list):
+            return [entity_id for entity_id in raw if entity_id]
+        return []
+
+    def _get_solar_forecast_remaining_wh(self) -> float | None:
+        """Sum remaining-today production across all configured
+        Forecast.Solar sensors (BATT-13).
+
+        Returns:
+            Total remaining production in Wh, or None if no sensors are
+            configured or none currently have a valid numeric state.
+        """
+        entity_ids = self._get_forecast_solar_entities()
+        if not entity_ids:
             return None
 
-        state = self.hass.states.get(solar_entity_id)
-        if state is None or state.state in ("unavailable", "unknown"):
+        readings: list[tuple[float, str]] = []
+        for entity_id in entity_ids:
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in ("unavailable", "unknown"):
+                continue
+            try:
+                value = float(state.state)
+            except (ValueError, TypeError):
+                continue
+            readings.append((value, state.attributes.get("unit_of_measurement", "")))
+
+        if not readings:
             return None
 
-        try:
-            value = float(state.state)
-        except (ValueError, TypeError):
-            return None
+        return sum_solar_forecast_wh(readings)
 
-        # Check unit_of_measurement -- convert kWh to Wh
-        uom = state.attributes.get("unit_of_measurement", "")
-        if uom.lower() in ("kwh", "kwh"):
+    def _sample_and_get_mean_consumption_kw(self) -> float:
+        """Sample house consumption and return the rolling-average mean (BATT-15).
+
+        Appends the current reading (if available) to an in-memory sample
+        list, prunes samples older than the ~48h window, and averages what
+        remains. Falls back to the instantaneous reading when the window
+        has no samples yet, and to a conservative default when no reading
+        is available at all.
+
+        Returns:
+            Mean house consumption in kW.
+        """
+        house_consumption_entity = self.config_entry.options.get(
+            CONF_HOUSE_CONSUMPTION_ENTITY
+        )
+        now = dt_util.utcnow()
+
+        current_kw: float | None = None
+        if house_consumption_entity and _entity_has_value(
+            self.hass, house_consumption_entity
+        ):
+            current_kw = _read_power_kw(self.hass, house_consumption_entity)
+            self._consumption_samples.append((now, current_kw))
+
+        self._consumption_samples = _prune_samples(
+            self._consumption_samples, now, MEAN_CONSUMPTION_WINDOW_HOURS
+        )
+
+        if self._consumption_samples:
+            return sum(v for _, v in self._consumption_samples) / len(
+                self._consumption_samples
+            )
+        if current_kw is not None:
+            return current_kw
+        return DEFAULT_MEAN_CONSUMPTION_KW
+
+
+def sum_solar_forecast_wh(readings: list[tuple[float, str]]) -> float:
+    """Sum Forecast.Solar sensor readings into a single Wh total (BATT-13).
+
+    Converts any kWh-unit reading to Wh before summing so multiple
+    Forecast.Solar sensors (e.g. east + west arrays) can be combined
+    regardless of each sensor's configured unit. Pure and HA-free so it can
+    be unit tested directly.
+
+    Args:
+        readings: List of (value, unit_of_measurement) tuples, one per
+            configured Forecast.Solar sensor with a valid numeric state.
+
+    Returns:
+        Total production estimate in Wh.
+    """
+    total = 0.0
+    for value, uom in readings:
+        if uom.lower() == "kwh":
             value *= 1000.0
+        total += value
+    return total
 
-        return value
+
+def _prune_samples(
+    samples: list[tuple[datetime, float]], now: datetime, window_hours: float
+) -> list[tuple[datetime, float]]:
+    """Drop samples older than window_hours relative to now.
+
+    Pure and HA-free so it can be unit tested directly.
+    """
+    cutoff = now - timedelta(hours=window_hours)
+    return [(t, v) for t, v in samples if t >= cutoff]
+
+
+def _read_sun_dawn_dusk(hass: HomeAssistant) -> tuple[datetime | None, datetime | None]:
+    """Read sun.sun's next_dawn/next_dusk attributes (BATT-15a).
+
+    These are the NEXT occurrence of each event (see
+    battery_scheduler._normalize_daylight_window for how the pure scheduler
+    resolves that into a single daylight window).
+
+    Args:
+        hass: Home Assistant instance.
+
+    Returns:
+        (dawn, dusk) tuple of UTC-aware datetimes, or (None, None) if the
+        sun.sun entity or its attributes are unavailable.
+    """
+    state = hass.states.get("sun.sun")
+    if state is None:
+        return None, None
+
+    dawn = _parse_optional_iso_datetime(state.attributes.get("next_dawn"))
+    dusk = _parse_optional_iso_datetime(state.attributes.get("next_dusk"))
+    return dawn, dusk
+
+
+def _parse_optional_iso_datetime(value: object) -> datetime | None:
+    """Parse an ISO datetime string, returning None on any invalid input."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _serialize_slot(slot) -> dict | None:

@@ -61,6 +61,7 @@ async def async_setup_entry(
             BatteryScheduleSensor(battery_coordinator, entry),
             NextChargeSensor(battery_coordinator, entry),
             NextDischargeSensor(battery_coordinator, entry),
+            ActualPriceSensor(battery_coordinator, price_coordinator, entry),
         ])
 
     # EMS status sensor (when EMS coordinator exists)
@@ -310,6 +311,51 @@ class NextDischargeSensor(EnergyManagerEntity, SensorEntity):
                 "end": slot["end"],
             }
         return {}
+
+
+class ActualPriceSensor(EnergyManagerEntity, SensorEntity):
+    """Sensor showing the actual electricity price incl. fees (BATT-14, CORE-11).
+
+    State is spot price + grid_transfer_fee + electricity_company_fee
+    (SEK/kWh), internalizing the live system's "Faktiskt elpris" template.
+    Diagnostic-ish informational sensor -- no state_class (None is correct
+    for monetary spot prices, see Phase 1 lesson).
+    """
+
+    _attr_translation_key = "actual_electricity_price"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "SEK/kWh"
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        price_coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the actual price sensor.
+
+        Args:
+            coordinator: The BatteryScheduleCoordinator providing the
+                grid_transfer_fee and electricity_company_fee values.
+            price_coordinator: The PriceCoordinator providing the spot price.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._price_coordinator = price_coordinator
+        self._attr_unique_id = f"{entry.entry_id}_actual_electricity_price"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return spot price + grid transfer fee + electricity company fee."""
+        price_data: PriceData | None = self._price_coordinator.data
+        if price_data is None or price_data.current_price is None:
+            return None
+        return (
+            price_data.current_price
+            + self.coordinator.grid_transfer_fee
+            + self.coordinator.electricity_company_fee
+        )
 
 
 class EMSStatusSensor(EnergyManagerEntity, SensorEntity):

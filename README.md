@@ -90,7 +90,7 @@ Click the button above, or add it manually via **Settings** -> **Devices & Servi
 
 **Step 2 — Modules:** Choose which modules to enable — Home Battery and/or EV Charging. Both are optional and independent; you can enable just one.
 
-**Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, a Forecast.Solar entity for solar-aware scheduling. Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
+**Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, one or more Forecast.Solar "remaining today" entities for solar-aware scheduling (e.g. separate east + west arrays — their readings are summed), plus the BATT-15 algorithm tuning options (charge buffer %, solar production factor, estimated charge power, and peak-grouping gap). Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
 
 **Step 4 — EV Charging** *(if enabled)*: Charger status and power entities, auto-detected from an Easee integration if present, plus the charger's device ID (auto-detected) used to address the Easee control services. Also configures charger amp limits, grid charging power cap, phase-switch and solar-charging thresholds, and an optional notify service for charger safety alerts — all pre-filled with tuned defaults and grouped with the advanced options at the end of the step.
 
@@ -107,6 +107,7 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Next Charging Slot | Timestamp of the next scheduled charge slot |
 | Next Discharging Slot | Timestamp of the next scheduled discharge slot |
 | EMS Status | Current SigenStor EMS mode and fuse headroom |
+| Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
 | Charger Status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
 
@@ -121,9 +122,12 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 
 | Entity | Description |
 |--------|--------------|
-| Charge Price Threshold | Price below which the battery is scheduled to charge |
-| Discharge Price Threshold | Price above which the battery is scheduled to discharge |
+| Charge Price Threshold | Spread threshold (SEK/kWh): a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
+| Discharge Price Threshold | Spread threshold (SEK/kWh): a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by the Battery Cycle Cost formula below when that is set above 0 |
 | Max Charge Power | Maximum battery charge power (kW) |
+| Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `battery_cycle_cost - grid_transfer_fee`, overriding the manual Discharge Price Threshold above (parity with the live system's economics formula). Default 0 (disabled) |
+| Grid Transfer Fee | Grid transfer fee (SEK/kWh); feeds the Battery Cycle Cost formula and the Actual Electricity Price sensor |
+| Electricity Company Fee | Electricity company fee (SEK/kWh); used only by the Actual Electricity Price sensor |
 | Car Target SOC *(per car)* | Target state of charge for that car |
 | Car Max Charge Power *(per car)* | Maximum charge power for that car (kW) |
 

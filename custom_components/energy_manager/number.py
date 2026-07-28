@@ -25,9 +25,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     CAR_CHARGE_POWER_STEP_KW,
     CHARGE_POWER_STEP_KW,
+    DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
+    DEFAULT_ELECTRICITY_COMPANY_FEE,
+    DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_TARGET_SOC_PCT,
     MAX_CAR_MAX_CHARGE_POWER_KW,
@@ -68,6 +71,9 @@ async def async_setup_entry(
             BatteryChargeThreshold(battery_coordinator, entry),
             BatteryDischargeThreshold(battery_coordinator, entry),
             BatteryMaxChargePower(battery_coordinator, entry),
+            BatteryCycleCost(battery_coordinator, entry),
+            GridTransferFee(battery_coordinator, entry),
+            ElectricityCompanyFee(battery_coordinator, entry),
         ])
 
     # Car number entities (one set per car subentry)
@@ -226,6 +232,158 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
         self._attr_native_value = value
         self.async_write_ha_state()
         self.coordinator.max_charge_power_w = value * 1000
+        await self.coordinator.async_request_refresh()
+
+
+class BatteryCycleCost(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the battery's per-cycle wear cost (BATT-14).
+
+    When set above 0, this overrides the manual discharge price threshold:
+    the effective discharge spread threshold becomes
+    battery_cycle_cost - grid_transfer_fee (parity with the live system's
+    economics formula). At the default of 0, the manual discharge threshold
+    entity applies unchanged. Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "battery_cycle_cost"
+    _attr_native_min_value = MIN_PRICE_THRESHOLD
+    _attr_native_max_value = MAX_PRICE_THRESHOLD
+    _attr_native_step = PRICE_THRESHOLD_STEP
+    _attr_native_unit_of_measurement = "SEK/kWh"
+
+    _default_value = DEFAULT_BATTERY_CYCLE_COST
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the battery cycle cost entity."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_battery_cycle_cost"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = self._default_value
+        self.coordinator.battery_cycle_cost = self._attr_native_value
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the battery cycle cost and trigger schedule recalculation.
+
+        Args:
+            value: New battery cycle cost in SEK/kWh.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.battery_cycle_cost = value
+        await self.coordinator.async_request_refresh()
+
+
+class GridTransferFee(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the grid transfer fee (BATT-14).
+
+    Used together with battery_cycle_cost to derive the effective discharge
+    spread threshold, and added into the actual electricity price sensor.
+    Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "grid_transfer_fee"
+    _attr_native_min_value = MIN_PRICE_THRESHOLD
+    _attr_native_max_value = MAX_PRICE_THRESHOLD
+    _attr_native_step = PRICE_THRESHOLD_STEP
+    _attr_native_unit_of_measurement = "SEK/kWh"
+
+    _default_value = DEFAULT_GRID_TRANSFER_FEE
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the grid transfer fee entity."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_grid_transfer_fee"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = self._default_value
+        self.coordinator.grid_transfer_fee = self._attr_native_value
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the grid transfer fee and trigger schedule recalculation.
+
+        Args:
+            value: New grid transfer fee in SEK/kWh.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.grid_transfer_fee = value
+        await self.coordinator.async_request_refresh()
+
+
+class ElectricityCompanyFee(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the electricity company's fee (BATT-14).
+
+    Used only by the actual electricity price sensor (spot + grid_transfer_fee
+    + electricity_company_fee); does not affect scheduling. Value persists
+    across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "electricity_company_fee"
+    _attr_native_min_value = MIN_PRICE_THRESHOLD
+    _attr_native_max_value = MAX_PRICE_THRESHOLD
+    _attr_native_step = PRICE_THRESHOLD_STEP
+    _attr_native_unit_of_measurement = "SEK/kWh"
+
+    _default_value = DEFAULT_ELECTRICITY_COMPANY_FEE
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the electricity company fee entity."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_electricity_company_fee"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = self._default_value
+        self.coordinator.electricity_company_fee = self._attr_native_value
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the electricity company fee and trigger a sensor refresh.
+
+        Args:
+            value: New electricity company fee in SEK/kWh.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.electricity_company_fee = value
         await self.coordinator.async_request_refresh()
 
 

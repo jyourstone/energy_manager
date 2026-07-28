@@ -760,24 +760,30 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
     return cars
 
 
-def find_forecast_solar_entities(hass: HomeAssistant) -> dict[str, str]:
-    """Scan for Forecast.Solar integration entities.
+def find_forecast_solar_entities(hass: HomeAssistant) -> dict[str, list[str]]:
+    """Scan for Forecast.Solar integration entities (BATT-13).
 
-    Looks for config entries with domain "forecast_solar" and finds
-    the energy production today sensor.
+    Looks for ALL config entries with domain "forecast_solar" (e.g. separate
+    east + west array installs) and collects every "remaining today"
+    production sensor found -- the one build_battery_schedule's BATT-15a
+    solar recharge estimation reads from (decreases as the day progresses,
+    unlike the fixed daily total). Multiple sensors are summed by the
+    coordinator (BATT-13).
 
     Returns:
-        Dict with CONF_FORECAST_SOLAR_ENTITY key if found, empty dict otherwise.
+        Dict with CONF_FORECAST_SOLAR_ENTITY key mapping to a list of
+        entity IDs (possibly spanning multiple config entries), or an
+        empty dict if none found.
     """
     registry = er.async_get(hass)
-    result: dict[str, str] = {}
+    entity_ids: list[str] = []
 
-    # Find Forecast.Solar config entries
+    # Find ALL Forecast.Solar config entries (e.g. multiple arrays)
     solar_entries = hass.config_entries.async_entries("forecast_solar")
 
     if not solar_entries:
         _LOGGER.debug("No Forecast.Solar integration found")
-        return result
+        return {}
 
     for config_entry in solar_entries:
         entity_entries = er.async_entries_for_config_entry(
@@ -791,20 +797,20 @@ def find_forecast_solar_entities(hass: HomeAssistant) -> dict[str, str]:
             entity_id_lower = entity_entry.entity_id.lower()
             unique_id_lower = (entity_entry.unique_id or "").lower()
 
-            # Look for energy production today sensor
+            # Look for the "remaining today" production sensor
             if (
-                "energy_production_today" in entity_id_lower
-                or "energy_production_today" in unique_id_lower
+                "energy_production_today_remaining" in entity_id_lower
+                or "energy_production_today_remaining" in unique_id_lower
             ):
-                result[CONF_FORECAST_SOLAR_ENTITY] = entity_entry.entity_id
+                entity_ids.append(entity_entry.entity_id)
                 _LOGGER.debug(
                     "Found Forecast.Solar entity: %s", entity_entry.entity_id
                 )
-                return result
 
-    if not result:
+    if not entity_ids:
         _LOGGER.debug(
             "Forecast.Solar integration found but no matching entities"
         )
+        return {}
 
-    return result
+    return {CONF_FORECAST_SOLAR_ENTITY: entity_ids}

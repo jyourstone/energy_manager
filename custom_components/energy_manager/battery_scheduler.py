@@ -1,25 +1,41 @@
 """Pure-Python battery scheduling algorithm with zero Home Assistant dependencies.
 
 Implements multi-cycle charge/discharge scheduling using peak grouping and
-virtual energy tracking. Ported from the proven AppDaemon HomeBatteryManager.
+virtual energy tracking. Ported from the proven AppDaemon HomeBatteryManager,
+including the March 2026 algorithm refinements (BATT-15).
 
 This module is intentionally free of any HA imports so it can be thoroughly
 unit-tested independently.
 
-Algorithm overview:
-    1. Classify each price slot as charge-candidate, discharge-candidate, or idle
-    2. Group discharge candidates into peaks separated by configurable gaps
-    3. Virtual energy tracking simulates the battery through time, allocating
-       charge slots to fill before discharge peaks and limiting discharge to
-       available energy
-    4. Solar forecast reduces grid charge needs during daylight hours
-    5. Derive current action and EMS mode from the slot containing 'now'
+Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
+    1. Classify discharge candidates by SPREAD against the period's minimum
+       price: a slot is profitable discharge when
+       ``price - min_price > discharge_threshold``. Charge candidates are
+       peak-relative (a slot is worth charging for a given peak when
+       ``peak_max_price - price > charge_threshold``) and are therefore only
+       evaluated while processing that peak, not up front.
+    2. Group discharge candidates into peaks separated by configurable gaps.
+    3. Energy needed to serve a peak is sized from house consumption
+       (``len(peak_slots) * mean_consumption_kw * slot_duration``), not from
+       the battery's max discharge power -- the battery discharges to cover
+       house load, it does not export at full inverter power.
+    4. Virtual energy tracking simulates the battery through time: solar
+       recharge accumulated in the gap before each peak is added first
+       (BATT-15a), future more-expensive peaks reserve energy net of their
+       own upcoming recharge so an early cheap peak cannot starve a later,
+       pricier one (BATT-15b), then a cheapest-first charge deficit (with
+       buffer) is scheduled, and finally discharge is marked
+       most-expensive-first while consumption energy remains.
+    5. Charge slots that fall within the daylight window are relabeled
+       "solar_charge" -- a cosmetic distinction only (EMS treats both the
+       same way) communicating that the draw could be covered by PV.
+    6. Derive current action and EMS mode from the slot containing 'now'.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -95,7 +111,13 @@ def build_battery_schedule(
     battery_capacity_kwh: float,
     current_soc_pct: float,
     now: datetime | None = None,
-    solar_forecast_wh: float | None = None,
+    mean_consumption_kw: float = 0.5,
+    estimated_charge_power_kw: float = 6.0,
+    charge_buffer_pct: float = 20.0,
+    solar_forecast_remaining_wh: float | None = None,
+    production_factor: float = 0.8,
+    dawn: datetime | None = None,
+    dusk: datetime | None = None,
     peak_gap_hours: float = 2.0,
     min_soc_pct: float = 10.0,
     max_soc_pct: float = 95.0,
@@ -105,13 +127,35 @@ def build_battery_schedule(
     Args:
         price_slots: List of dicts with "start" (datetime), "end" (datetime),
             "price" (float) keys.
-        charge_threshold: Price threshold in SEK/kWh -- charge when below.
-        discharge_threshold: Price threshold in SEK/kWh -- discharge when above.
-        max_charge_power_w: Maximum charging power in watts.
+        charge_threshold: Spread threshold in SEK/kWh -- a slot is a charge
+            candidate for a given peak when ``peak_max_price - price``
+            exceeds this value (BATT-15).
+        discharge_threshold: Spread threshold in SEK/kWh -- a slot discharges
+            when ``price - min_price`` exceeds this value (BATT-15). Callers
+            implementing the BATT-14 economics derivation should pass the
+            already-derived effective value here.
+        max_charge_power_w: Maximum charging power in watts (hard cap;
+            combined with estimated_charge_power_kw via min()).
         battery_capacity_kwh: Total battery capacity in kWh.
         current_soc_pct: Current state of charge (0-100).
         now: UTC-aware datetime for current time. Defaults to utcnow().
-        solar_forecast_wh: Expected daily solar production in Wh, or None.
+        mean_consumption_kw: Rolling average house consumption in kW, used
+            to size the energy needed to serve each peak and to pace
+            discharge. Defaults to a conservative 0.5 kW.
+        estimated_charge_power_kw: Assumed charge rate in kW used to size
+            how many slots are needed to cover a charge deficit. The actual
+            per-slot energy uses min(estimated_charge_power_kw,
+            max_charge_power_w / 1000).
+        charge_buffer_pct: Percentage buffer added on top of the raw charge
+            deficit (default 20%).
+        solar_forecast_remaining_wh: Estimated remaining solar production
+            for the rest of today, in Wh (already summed across all
+            configured Forecast.Solar sensors), or None.
+        production_factor: Multiplier applied to solar_forecast_remaining_wh
+            to account for forecast optimism (default 0.8).
+        dawn: The next_dawn datetime from sun.sun (NEXT occurrence -- may be
+            tomorrow's dawn if it is currently daytime), or None.
+        dusk: The next_dusk datetime from sun.sun (NEXT occurrence), or None.
         peak_gap_hours: Hours gap to separate peak groups.
         min_soc_pct: Minimum SOC to maintain (0-100).
         max_soc_pct: Maximum SOC target (0-100).
@@ -133,11 +177,12 @@ def build_battery_schedule(
 
     slots.sort(key=lambda s: s.start)
 
-    # Step 3: Initial classification by price thresholds
+    # Step 3: Classify discharge candidates by SPREAD against the period's
+    # minimum price (BATT-15). Charge candidates are peak-relative and are
+    # evaluated later, per-peak, inside _optimize_schedule.
+    min_price = min(s.price for s in slots)
     for slot in slots:
-        if slot.price <= charge_threshold:
-            slot.action = "charge"
-        elif slot.price >= discharge_threshold:
+        if slot.price - min_price > discharge_threshold:
             slot.action = "discharge"
         else:
             slot.action = "idle"
@@ -146,20 +191,28 @@ def build_battery_schedule(
     discharge_candidates = [s for s in slots if s.action == "discharge"]
     peaks = _group_into_peaks(discharge_candidates, peak_gap_hours)
 
-    # Step 5: Virtual energy tracking -- optimize charge/discharge allocation
+    # Step 5: Resolve the solar recharge rate (BATT-15a) and daylight window
+    daylight_window = _normalize_daylight_window(dawn, dusk)
+    solar_rate_kw = _estimate_solar_rate_kw(
+        solar_forecast_remaining_wh, production_factor, daylight_window
+    )
+
+    # Step 6: Virtual energy tracking -- optimize charge/discharge allocation
     _optimize_schedule(
         slots=slots,
         peaks=peaks,
         battery_capacity_kwh=battery_capacity_kwh,
         current_soc_pct=current_soc_pct,
+        charge_threshold=charge_threshold,
+        mean_consumption_kw=mean_consumption_kw,
+        estimated_charge_power_kw=estimated_charge_power_kw,
         max_charge_power_w=max_charge_power_w,
+        charge_buffer_pct=charge_buffer_pct,
+        solar_rate_kw=solar_rate_kw,
+        daylight_window=daylight_window,
         min_soc_pct=min_soc_pct,
         max_soc_pct=max_soc_pct,
     )
-
-    # Step 6: Apply solar forecast adjustment
-    if solar_forecast_wh is not None and solar_forecast_wh > 0:
-        _apply_solar_forecast(slots, solar_forecast_wh)
 
     # Step 7: Build the final schedule
     schedule = [
@@ -192,6 +245,36 @@ def build_battery_schedule(
         current_action=current_action,
         target_ems_mode=target_ems_mode,
     )
+
+
+def compute_effective_discharge_threshold(
+    discharge_threshold: float,
+    battery_cycle_cost: float,
+    grid_transfer_fee: float,
+) -> float:
+    """Derive the effective discharge spread threshold (BATT-14).
+
+    Parity with the live AppDaemon system's formula: when a battery cycle
+    cost is configured, discharging is only profitable once the price
+    spread covers the wear cost of a cycle net of the grid transfer fee
+    already saved by not importing -- this OVERRIDES the manually configured
+    discharge_threshold entity. When battery_cycle_cost is 0 (the default,
+    i.e. not configured), the manual discharge_threshold value is used
+    unchanged.
+
+    Args:
+        discharge_threshold: Manually configured discharge spread threshold
+            (SEK/kWh), used unchanged when battery_cycle_cost is 0.
+        battery_cycle_cost: Cost of one battery charge/discharge cycle
+            (SEK/kWh). 0 disables the derivation.
+        grid_transfer_fee: Grid transfer fee (SEK/kWh).
+
+    Returns:
+        The discharge spread threshold to use for scheduling.
+    """
+    if battery_cycle_cost > 0:
+        return battery_cycle_cost - grid_transfer_fee
+    return discharge_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -286,19 +369,87 @@ def _group_into_peaks(
     return peaks
 
 
-def _calculate_slot_energy_kwh(
-    max_power_w: float, duration_hours: float
-) -> float:
-    """Calculate the energy (kWh) that can be transferred in a slot.
+def _normalize_daylight_window(
+    dawn: datetime | None, dusk: datetime | None
+) -> tuple[datetime, datetime] | None:
+    """Resolve sun.sun's next_dawn/next_dusk into a single daylight window.
+
+    HA's sun.sun entity only exposes the NEXT occurrence of each event, so
+    the raw pair does not always describe the same calendar day: during
+    daytime (after dawn but before dusk) next_dawn has already rolled over
+    to tomorrow while next_dusk is still today's upcoming sunset, so
+    next_dawn ends up LATER than next_dusk. In that case the paired dawn for
+    the *current* daylight window is next_dawn shifted back by 24h. At
+    night, before dawn, next_dawn is already earlier than next_dusk and the
+    raw pair already describes one consistent upcoming window as-is.
 
     Args:
-        max_power_w: Maximum power in watts.
-        duration_hours: Slot duration in hours.
+        dawn: The next_dawn datetime (or None if unavailable).
+        dusk: The next_dusk datetime (or None if unavailable).
 
     Returns:
-        Energy in kWh.
+        (window_start, window_end) tuple with window_start < window_end,
+        or None if either input is missing or the window is degenerate.
     """
-    return (max_power_w / 1000.0) * duration_hours
+    if dawn is None or dusk is None:
+        return None
+
+    if dawn > dusk:
+        # Currently daytime: dusk is the upcoming one, dawn needs to roll
+        # back a day to describe the same daylight window.
+        window_start = dawn - timedelta(days=1)
+        window_end = dusk
+    else:
+        window_start = dawn
+        window_end = dusk
+
+    if window_end <= window_start:
+        return None
+
+    return window_start, window_end
+
+
+def _overlap_hours(
+    range_start: datetime,
+    range_end: datetime,
+    window_start: datetime,
+    window_end: datetime,
+) -> float:
+    """Return the overlap in hours between [range_start, range_end) and [window_start, window_end)."""
+    latest_start = max(range_start, window_start)
+    earliest_end = min(range_end, window_end)
+    overlap_seconds = (earliest_end - latest_start).total_seconds()
+    return max(0.0, overlap_seconds / 3600.0)
+
+
+def _estimate_solar_rate_kw(
+    solar_forecast_remaining_wh: float | None,
+    production_factor: float,
+    daylight_window: tuple[datetime, datetime] | None,
+) -> float:
+    """Estimate the solar recharge rate in kW (BATT-15a).
+
+    Args:
+        solar_forecast_remaining_wh: Estimated remaining production for the
+            rest of today in Wh, or None.
+        production_factor: Multiplier applied to the raw forecast reading.
+        daylight_window: Resolved (dawn, dusk) window, or None.
+
+    Returns:
+        Estimated average recharge rate in kW over the remaining daylight
+        hours, or 0.0 if inputs are missing/degenerate.
+    """
+    if not solar_forecast_remaining_wh or solar_forecast_remaining_wh <= 0:
+        return 0.0
+    if daylight_window is None:
+        return 0.0
+
+    daylight_hours = (daylight_window[1] - daylight_window[0]).total_seconds() / 3600.0
+    if daylight_hours <= 0:
+        return 0.0
+
+    estimated_remaining_kwh = (solar_forecast_remaining_wh / 1000.0) * production_factor
+    return estimated_remaining_kwh / daylight_hours
 
 
 def _optimize_schedule(
@@ -306,200 +457,143 @@ def _optimize_schedule(
     peaks: list[list[_SlotInfo]],
     battery_capacity_kwh: float,
     current_soc_pct: float,
+    charge_threshold: float,
+    mean_consumption_kw: float,
+    estimated_charge_power_kw: float,
     max_charge_power_w: float,
+    charge_buffer_pct: float,
+    solar_rate_kw: float,
+    daylight_window: tuple[datetime, datetime] | None,
     min_soc_pct: float,
     max_soc_pct: float,
 ) -> None:
-    """Optimize the schedule using virtual energy tracking.
+    """Optimize the schedule using virtual energy tracking (BATT-15).
 
-    Uses a two-phase approach:
-    1. For each discharge peak, determine how many slots the battery can
-       serve. Work backwards from the most expensive slots.
-    2. For charge slots before each peak, select the cheapest slots that
-       fill the battery sufficiently. Respect capacity limits.
-
-    The algorithm processes peaks chronologically, tracking a virtual
-    battery energy level that accounts for charging and discharging.
+    Processes peaks chronologically, tracking a virtual battery energy
+    level. For each peak: solar recharge accumulated in the gap before it is
+    added first (BATT-15a); energy is reserved for future, more expensive
+    peaks net of their own upcoming recharge (BATT-15b); a cheapest-first
+    charge deficit (with buffer, capped at the usable energy range) is
+    scheduled from peak-relative charge candidates; then discharge is
+    marked most-expensive-first while energy remains for each slot's own
+    house-consumption need. Charge slots inside the daylight window are
+    finally relabeled "solar_charge" (cosmetic only).
 
     Mutates slots in place, changing actions as needed.
     """
     min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
     max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
+    max_usable_energy_kwh = max(0.0, max_energy_kwh - min_energy_kwh)
     current_energy_kwh = (current_soc_pct / 100.0) * battery_capacity_kwh
 
     if not peaks:
-        # No discharge opportunities -- no point charging either
-        # (unless there would be future discharge in a later schedule update)
-        for s in slots:
-            if s.action == "charge":
-                s.action = "idle"
+        # No discharge opportunities -- nothing to charge for either.
         return
 
-    # Process peaks chronologically, tracking virtual battery energy
+    max_charge_power_kw = max_charge_power_w / 1000.0
+    charge_power_kw = min(estimated_charge_power_kw, max_charge_power_kw)
+
+    # Precompute each peak's max price and consumption-based energy need.
+    peak_max_price = [max(s.price for s in peak) for peak in peaks]
+    peak_energy_needed = [
+        sum(mean_consumption_kw * s.duration_hours for s in peak) for peak in peaks
+    ]
+
+    # Precompute each peak's pre-window (the charging gap before it) and the
+    # solar recharge expected to accumulate during that gap (BATT-15a).
+    window_bounds: list[tuple[datetime, datetime]] = []
+    peak_recharge: list[float] = []
+    for idx, peak in enumerate(peaks):
+        window_start = slots[0].start if idx == 0 else peaks[idx - 1][-1].end
+        window_end = peak[0].start
+        window_bounds.append((window_start, window_end))
+
+        if solar_rate_kw > 0 and daylight_window is not None:
+            overlap = _overlap_hours(
+                window_start, window_end, daylight_window[0], daylight_window[1]
+            )
+            peak_recharge.append(solar_rate_kw * overlap)
+        else:
+            peak_recharge.append(0.0)
+
     virtual_energy = current_energy_kwh
 
-    for peak_idx, peak in enumerate(peaks):
-        peak_start = peak[0].start
+    for idx, peak in enumerate(peaks):
+        window_start, window_end = window_bounds[idx]
 
-        # Determine window for charging before this peak
-        if peak_idx == 0:
-            window_start = slots[0].start
-        else:
-            window_start = peaks[peak_idx - 1][-1].end
+        # BATT-15a: add this peak's expected solar recharge before drawing
+        # down for it, capped at the battery's usable ceiling.
+        virtual_energy = min(virtual_energy + peak_recharge[idx], max_energy_kwh)
 
-        # Find charge candidate slots in the pre-peak window
-        charge_candidates = [
-            s for s in slots
-            if s.action == "charge"
-            and s.start >= window_start
-            and s.start < peak_start
-        ]
+        available = max(0.0, virtual_energy - min_energy_kwh)
 
-        # Calculate total peak discharge energy possible
-        peak_energy_total = sum(
-            _calculate_slot_energy_kwh(max_charge_power_w, s.duration_hours)
-            for s in peak
+        # BATT-15b: reserve energy for FUTURE, MORE EXPENSIVE peaks (net of
+        # their own upcoming solar recharge) so an early cheap peak cannot
+        # drain what a later, pricier peak needs.
+        reserved_for_future = sum(
+            max(0.0, peak_energy_needed[j] - peak_recharge[j])
+            for j in range(idx + 1, len(peaks))
+            if peak_max_price[j] > peak_max_price[idx]
         )
 
-        # How much energy we need to fully serve this peak
-        energy_needed_from_battery = peak_energy_total
-        energy_available = virtual_energy - min_energy_kwh
+        adjusted_available = available - reserved_for_future
+        energy_deficit = max(0.0, peak_energy_needed[idx] - adjusted_available)
+        energy_deficit *= 1 + (charge_buffer_pct / 100.0)
+        energy_deficit = min(energy_deficit, max_usable_energy_kwh)
 
-        # How much additional charging we need (and can fit)
-        energy_deficit = max(0, energy_needed_from_battery - energy_available)
-        room_in_battery = max(0, max_energy_kwh - virtual_energy)
+        room_in_battery = max(0.0, max_energy_kwh - virtual_energy)
         charge_target = min(energy_deficit, room_in_battery)
 
-        # But also charge to fill the battery if cheap slots available,
-        # even beyond what this peak needs (for future peaks)
-        total_future_discharge = sum(
-            _calculate_slot_energy_kwh(max_charge_power_w, s.duration_hours)
-            for future_peak in peaks[peak_idx:]
-            for s in future_peak
-        )
-        total_charge_desire = min(
-            total_future_discharge - energy_available + min_energy_kwh,
-            room_in_battery,
-        )
-        charge_target = max(charge_target, min(total_charge_desire, room_in_battery))
-
-        # Select cheapest charge slots to meet target
+        # Peak-relative charge candidates (BATT-15): idle, not-yet-assigned
+        # slots in the pre-peak window priced enough below this peak's max.
+        charge_candidates = [
+            s
+            for s in slots
+            if s.action == "idle"
+            and window_start <= s.start < window_end
+            and (peak_max_price[idx] - s.price) > charge_threshold
+        ]
         charge_candidates.sort(key=lambda s: s.price)
-        charged_energy = 0.0
 
+        charged_energy = 0.0
         for cslot in charge_candidates:
             if charged_energy >= charge_target:
-                # Enough charging scheduled -- mark rest as idle
-                cslot.action = "idle"
-                continue
-
-            slot_energy = _calculate_slot_energy_kwh(
-                max_charge_power_w, cslot.duration_hours
-            )
+                break
+            slot_energy = charge_power_kw * cslot.duration_hours
             remaining_room = max_energy_kwh - (virtual_energy + charged_energy)
-            actual = min(slot_energy, max(0, remaining_room))
-            if actual > 0:
-                charged_energy += actual
-                # Keep as "charge"
-            else:
-                cslot.action = "idle"
+            actual = min(slot_energy, max(0.0, remaining_room))
+            if actual <= 0:
+                break
+            cslot.action = "charge"
+            charged_energy += actual
 
-        virtual_energy += charged_energy
+        virtual_energy = min(virtual_energy + charged_energy, max_energy_kwh)
 
-        # Allocate discharge slots within this peak, limited by energy
-        # Sort peak slots by price descending (most expensive first) to
-        # prioritize the most profitable hours
+        # Discharge marking: most-expensive-first while energy remains for
+        # that slot's own house-consumption need.
         sorted_peak = sorted(peak, key=lambda s: s.price, reverse=True)
-        discharge_energy_remaining = virtual_energy - min_energy_kwh
+        remaining_energy = max(0.0, virtual_energy - min_energy_kwh)
+        discharged = 0.0
 
         for dslot in sorted_peak:
-            slot_energy = _calculate_slot_energy_kwh(
-                max_charge_power_w, dslot.duration_hours
-            )
-            if discharge_energy_remaining >= slot_energy:
-                # Keep as discharge
-                discharge_energy_remaining -= slot_energy
+            slot_need = mean_consumption_kw * dslot.duration_hours
+            if remaining_energy >= slot_need:
+                remaining_energy -= slot_need
+                discharged += slot_need
             else:
                 dslot.action = "idle"
 
-        # Update virtual energy after peak
-        discharged = (virtual_energy - min_energy_kwh) - discharge_energy_remaining
         virtual_energy -= discharged
 
-    # Any charge slots after the last peak have no discharge to serve
-    if peaks:
-        last_peak_end = peaks[-1][-1].end
+    # Charge slots that fall within the daylight window are relabeled
+    # solar_charge -- cosmetic only (EMS maps both to command_charging);
+    # communicates that the draw could be covered by PV rather than grid.
+    if daylight_window is not None:
         for s in slots:
-            if s.action == "charge" and s.start >= last_peak_end:
-                s.action = "idle"
-
-
-def _apply_solar_forecast(
-    slots: list[_SlotInfo],
-    solar_forecast_wh: float,
-) -> None:
-    """Apply solar forecast to reduce grid charging.
-
-    Distributes expected solar production across daylight hours (06:00-18:00
-    UTC+1, simplified as 05:00-17:00 UTC). During daylight hours with expected
-    solar, grid charge slots are converted to solar_charge.
-
-    Args:
-        slots: All slots in chronological order (mutated in place).
-        solar_forecast_wh: Total expected daily solar production in Wh.
-    """
-    solar_kwh = solar_forecast_wh / 1000.0
-
-    # Simplified daylight hours: 05:00-17:00 UTC (roughly 06:00-18:00 CET)
-    daylight_start_utc = 5
-    daylight_end_utc = 17
-
-    # Find charge slots during daylight hours
-    daylight_charge_slots = [
-        s for s in slots
-        if s.action == "charge"
-        and daylight_start_utc <= s.start.hour < daylight_end_utc
-    ]
-
-    if not daylight_charge_slots:
-        # No grid charge slots during daylight. Check if there are idle slots
-        # during daylight that could benefit from solar charging
-        daylight_idle_slots = [
-            s for s in slots
-            if s.action == "idle"
-            and daylight_start_utc <= s.start.hour < daylight_end_utc
-        ]
-        if not daylight_idle_slots:
-            return
-
-        # Use solar to add solar_charge slots for idle periods during daylight
-        daylight_hours = daylight_end_utc - daylight_start_utc
-        solar_per_hour_kwh = solar_kwh / daylight_hours
-        remaining_solar_kwh = solar_kwh
-
-        for slot in daylight_idle_slots:
-            if remaining_solar_kwh <= 0:
-                break
-            slot_solar = solar_per_hour_kwh * slot.duration_hours
-            if remaining_solar_kwh >= slot_solar * 0.5:
-                slot.action = "solar_charge"
-                remaining_solar_kwh -= slot_solar
-        return
-
-    # Distribute solar energy across daylight hours evenly
-    daylight_hours = daylight_end_utc - daylight_start_utc
-    solar_per_hour_kwh = solar_kwh / daylight_hours
-    remaining_solar_kwh = solar_kwh
-
-    # Convert grid charge slots to solar_charge where solar covers the need
-    for slot in daylight_charge_slots:
-        if remaining_solar_kwh <= 0:
-            break
-
-        slot_solar = solar_per_hour_kwh * slot.duration_hours
-        if remaining_solar_kwh >= slot_solar * 0.5:
-            slot.action = "solar_charge"
-            remaining_solar_kwh -= slot_solar
+            if s.action == "charge" and _overlap_hours(
+                s.start, s.end, daylight_window[0], daylight_window[1]
+            ) > 0:
+                s.action = "solar_charge"
 
 
 def _find_current_action(schedule: list[ScheduleSlot], now: datetime) -> str:

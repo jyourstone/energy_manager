@@ -72,6 +72,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
     CONF_CAR_NAME,
+    CONF_CHARGE_BUFFER_PCT,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_DEVICE_ID,
@@ -81,6 +82,7 @@ from .const import (
     CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
+    CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EV_ENABLED,
     CONF_EXCLUDED_POWER_ENTITIES,
     CONF_FORECAST_SOLAR_ENTITY,
@@ -99,8 +101,10 @@ from .const import (
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_NOTIFY_SERVICE,
+    CONF_PEAK_GAP_HOURS,
     CONF_PHASE_CAPABILITY,
     CONF_PHASE_SWITCH_THRESHOLD_KW,
+    CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
@@ -113,15 +117,19 @@ from .const import (
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_SOC_GATE_PCT,
+    DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+    DEFAULT_ESTIMATED_CHARGE_POWER_KW,
     DEFAULT_FUSE_RATING_AMPS,
     DEFAULT_MAX_CHARGE_AMPS,
     DEFAULT_MAX_ESS_CHARGE_AMPS,
     DEFAULT_MAX_GRID_CHARGE_POWER_KW,
     DEFAULT_MIN_CHARGE_AMPS,
+    DEFAULT_PEAK_GAP_HOURS,
     DEFAULT_PHASE_CAPABILITY,
     DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
+    DEFAULT_PRODUCTION_FACTOR,
     DEFAULT_SAFETY_BUFFER_AMPS,
     DEFAULT_SENSOR_FAIL_BEHAVIOR,
     DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
@@ -132,28 +140,36 @@ from .const import (
     MAX_AMP_INCREASE_DELAY_SECONDS,
     MAX_ASSUMED_LOAD_AMPS,
     MAX_BATTERY_SOC_GATE_PCT,
+    MAX_CHARGE_BUFFER_PCT,
     MAX_EMERGENCY_MARGIN_AMPS,
     MAX_ESS_INCREASE_DELAY_SECONDS,
+    MAX_ESTIMATED_CHARGE_POWER_KW,
     MAX_FUSE_RATING_AMPS,
     MAX_MAX_CHARGE_AMPS,
     MAX_MAX_ESS_CHARGE_AMPS,
     MAX_MAX_GRID_CHARGE_POWER_KW,
     MAX_MIN_CHARGE_AMPS,
+    MAX_PEAK_GAP_HOURS,
     MAX_PHASE_SWITCH_THRESHOLD_KW,
+    MAX_PRODUCTION_FACTOR,
     MAX_SAFETY_BUFFER_AMPS,
     MAX_SOLAR_DELAY_SECONDS,
     MAX_SOLAR_START_THRESHOLD_KW,
     MIN_AMP_DELAY_SECONDS,
     MIN_ASSUMED_LOAD_AMPS,
     MIN_BATTERY_SOC_GATE_PCT,
+    MIN_CHARGE_BUFFER_PCT,
     MIN_EMERGENCY_MARGIN_AMPS,
     MIN_ESS_INCREASE_DELAY_SECONDS,
+    MIN_ESTIMATED_CHARGE_POWER_KW,
     MIN_FUSE_RATING_AMPS,
     MIN_MAX_CHARGE_AMPS,
     MIN_MAX_ESS_CHARGE_AMPS,
     MIN_MAX_GRID_CHARGE_POWER_KW,
     MIN_MIN_CHARGE_AMPS,
+    MIN_PEAK_GAP_HOURS,
     MIN_PHASE_SWITCH_THRESHOLD_KW,
+    MIN_PRODUCTION_FACTOR,
     MIN_SAFETY_BUFFER_AMPS,
     MIN_SOLAR_DELAY_SECONDS,
     MIN_SOLAR_START_THRESHOLD_KW,
@@ -319,7 +335,19 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_BATTERY_CAPACITY_KWH, 10.0
             )
             self._data[CONF_FORECAST_SOLAR_ENTITY] = user_input.get(
-                CONF_FORECAST_SOLAR_ENTITY, ""
+                CONF_FORECAST_SOLAR_ENTITY, []
+            )
+            self._data[CONF_CHARGE_BUFFER_PCT] = user_input.get(
+                CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
+            )
+            self._data[CONF_PRODUCTION_FACTOR] = user_input.get(
+                CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
+            )
+            self._data[CONF_ESTIMATED_CHARGE_POWER_KW] = user_input.get(
+                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
+            )
+            self._data[CONF_PEAK_GAP_HOURS] = user_input.get(
+                CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
             )
 
             # Route to EMS step (battery is enabled, so EMS config is relevant)
@@ -344,7 +372,47 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                     )
                 ),
                 vol.Optional(CONF_FORECAST_SOLAR_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
+                    EntitySelectorConfig(domain="sensor", multiple=True)
+                ),
+                vol.Optional(
+                    CONF_CHARGE_BUFFER_PCT, default=DEFAULT_CHARGE_BUFFER_PCT
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_CHARGE_BUFFER_PCT,
+                        max=MAX_CHARGE_BUFFER_PCT,
+                        step=1,
+                        unit_of_measurement="%",
+                    )
+                ),
+                vol.Optional(
+                    CONF_PRODUCTION_FACTOR, default=DEFAULT_PRODUCTION_FACTOR
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_PRODUCTION_FACTOR,
+                        max=MAX_PRODUCTION_FACTOR,
+                        step=0.05,
+                    )
+                ),
+                vol.Optional(
+                    CONF_ESTIMATED_CHARGE_POWER_KW,
+                    default=DEFAULT_ESTIMATED_CHARGE_POWER_KW,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_ESTIMATED_CHARGE_POWER_KW,
+                        max=MAX_ESTIMATED_CHARGE_POWER_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                vol.Optional(
+                    CONF_PEAK_GAP_HOURS, default=DEFAULT_PEAK_GAP_HOURS
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_PEAK_GAP_HOURS,
+                        max=MAX_PEAK_GAP_HOURS,
+                        step=0.5,
+                        unit_of_measurement="h",
+                    )
                 ),
             }
         )
@@ -754,7 +822,19 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_BATTERY_CAPACITY_KWH, 10.0
             ),
             CONF_FORECAST_SOLAR_ENTITY: self._data.get(
-                CONF_FORECAST_SOLAR_ENTITY, ""
+                CONF_FORECAST_SOLAR_ENTITY, []
+            ),
+            CONF_CHARGE_BUFFER_PCT: self._data.get(
+                CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
+            ),
+            CONF_PRODUCTION_FACTOR: self._data.get(
+                CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
+            ),
+            CONF_ESTIMATED_CHARGE_POWER_KW: self._data.get(
+                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
+            ),
+            CONF_PEAK_GAP_HOURS: self._data.get(
+                CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
             ),
             CONF_FUSE_RATING_AMPS: self._data.get(
                 CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
@@ -961,7 +1041,19 @@ class EnergyManagerOptionsFlow(OptionsFlowWithReload):
                 CONF_BATTERY_CAPACITY_KWH, 10.0
             )
             self._options[CONF_FORECAST_SOLAR_ENTITY] = user_input.get(
-                CONF_FORECAST_SOLAR_ENTITY, ""
+                CONF_FORECAST_SOLAR_ENTITY, []
+            )
+            self._options[CONF_CHARGE_BUFFER_PCT] = user_input.get(
+                CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
+            )
+            self._options[CONF_PRODUCTION_FACTOR] = user_input.get(
+                CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
+            )
+            self._options[CONF_ESTIMATED_CHARGE_POWER_KW] = user_input.get(
+                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
+            )
+            self._options[CONF_PEAK_GAP_HOURS] = user_input.get(
+                CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
             )
 
             # Route to EMS step (battery is enabled, so EMS config is relevant)
@@ -990,7 +1082,59 @@ class EnergyManagerOptionsFlow(OptionsFlowWithReload):
                     )
                 ),
                 vol.Optional(CONF_FORECAST_SOLAR_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
+                    EntitySelectorConfig(domain="sensor", multiple=True)
+                ),
+                vol.Optional(
+                    CONF_CHARGE_BUFFER_PCT,
+                    default=self._options.get(
+                        CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_CHARGE_BUFFER_PCT,
+                        max=MAX_CHARGE_BUFFER_PCT,
+                        step=1,
+                        unit_of_measurement="%",
+                    )
+                ),
+                vol.Optional(
+                    CONF_PRODUCTION_FACTOR,
+                    default=self._options.get(
+                        CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_PRODUCTION_FACTOR,
+                        max=MAX_PRODUCTION_FACTOR,
+                        step=0.05,
+                    )
+                ),
+                vol.Optional(
+                    CONF_ESTIMATED_CHARGE_POWER_KW,
+                    default=self._options.get(
+                        CONF_ESTIMATED_CHARGE_POWER_KW,
+                        DEFAULT_ESTIMATED_CHARGE_POWER_KW,
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_ESTIMATED_CHARGE_POWER_KW,
+                        max=MAX_ESTIMATED_CHARGE_POWER_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                vol.Optional(
+                    CONF_PEAK_GAP_HOURS,
+                    default=self._options.get(
+                        CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
+                    ),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_PEAK_GAP_HOURS,
+                        max=MAX_PEAK_GAP_HOURS,
+                        step=0.5,
+                        unit_of_measurement="h",
+                    )
                 ),
             }
         )
