@@ -346,6 +346,10 @@ class BatteryScheduleData:
         target_ems_mode: EMS mode string for Phase 3.
         last_calculated: UTC timestamp of last calculation.
         solar_forecast_used: Whether solar forecast was incorporated.
+        mean_consumption_kw: BATT-15 rolling-average house consumption (kW)
+            used to size the schedule's energy needs.
+        consumption_sample_count: Number of samples currently in the BATT-15
+            rolling window (see BatteryScheduleCoordinator._consumption_samples).
     """
 
     current_state: str
@@ -357,6 +361,8 @@ class BatteryScheduleData:
     target_ems_mode: str
     last_calculated: datetime
     solar_forecast_used: bool
+    mean_consumption_kw: float
+    consumption_sample_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,6 +533,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
 
         # 6. Sample house consumption into the rolling average (BATT-15)
         mean_consumption_kw = self._sample_and_get_mean_consumption_kw()
+        consumption_sample_count = len(self._consumption_samples)
 
         # 7. Read dawn/dusk from sun.sun (BATT-15a)
         dawn, dusk = _read_sun_dawn_dusk(self.hass)
@@ -584,6 +591,8 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             target_ems_mode=result.target_ems_mode,
             last_calculated=dt_util.utcnow(),
             solar_forecast_used=solar_forecast_remaining_wh is not None,
+            mean_consumption_kw=mean_consumption_kw,
+            consumption_sample_count=consumption_sample_count,
         )
 
     def _read_soc(self) -> float:
@@ -867,6 +876,39 @@ def _read_power_kw(hass: HomeAssistant, entity_id: str) -> float:
         if uom == "kW":
             return power
     return power / 1000.0
+
+
+def _read_net_house_consumption_kw(
+    hass: HomeAssistant,
+    house_consumption_entity: str,
+    excluded_power_entities: list[str],
+) -> float:
+    """Read house consumption minus configured excluded-power entities (EMS-13).
+
+    Shared by EaseeCoordinator._read_solar_surplus_kw() (EV-09's live
+    solar-surplus formula) and the "House load" diagnostic sensor (CORE-11)
+    so the filtered-consumption reads exist in one place.
+
+    Args:
+        hass: Home Assistant instance.
+        house_consumption_entity: Total house power consumption entity ID.
+        excluded_power_entities: Power entities to subtract (e.g. a
+            separately-managed water heater).
+
+    Returns:
+        Net house consumption in kW, or 0.0 if house_consumption_entity is
+        not configured.
+    """
+    if not house_consumption_entity:
+        return 0.0
+
+    house_consumption_kw = _read_power_kw(hass, house_consumption_entity)
+    excluded_power_kw = sum(
+        _read_power_kw(hass, entity_id)
+        for entity_id in excluded_power_entities
+        if entity_id
+    )
+    return house_consumption_kw - excluded_power_kw
 
 
 class FuseSensorReader:
@@ -2055,6 +2097,12 @@ class EaseeData:
         charger_power_kw: Measured charger power draw in kW.
         fuse_headroom_amps: Available fuse headroom in amps from the
             charger's point of view (own draw added back). Informational.
+        house_consumption_kw: Net house consumption (house consumption minus
+            excluded-power entities) -- the "House load" diagnostic sensor's
+            value (CORE-11, see _read_net_house_consumption_kw()).
+        solar_surplus_kw: Raw (unclamped) solar surplus computed this tick
+            via compute_solar_surplus_kw() -- the "Solar surplus" diagnostic
+            sensor's value (CORE-11, EV-09).
     """
 
     mode: str
@@ -2069,6 +2117,8 @@ class EaseeData:
     charger_status: str
     charger_power_kw: float
     fuse_headroom_amps: float
+    house_consumption_kw: float
+    solar_surplus_kw: float
 
 
 class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
@@ -2249,6 +2299,12 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             if self._soc_entity
             else 100.0
         )
+        net_house_consumption_kw = _read_net_house_consumption_kw(
+            self.hass, self._house_consumption_entity, self._excluded_power_entities
+        )
+        solar_surplus_kw = self._read_solar_surplus_kw(
+            charger_power_kw, net_house_consumption_kw
+        )
 
         inputs = ChargerInputs(
             charger_status=charger_status,
@@ -2256,7 +2312,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             measured_worst_case_signed_amps=0.0 if sensor_blocked else l_current,
             current_dynamic_limit_amps=current_dynamic_limit_amps,
             force_charging=self._is_force_charging(),
-            solar_surplus_kw=self._read_solar_surplus_kw(charger_power_kw),
+            solar_surplus_kw=solar_surplus_kw,
             battery_soc_pct=battery_soc,
             current_phase_mode=current_phase_mode,
             now=now,
@@ -2313,6 +2369,8 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             charger_status=charger_status,
             charger_power_kw=charger_power_kw,
             fuse_headroom_amps=fuse_headroom_amps,
+            house_consumption_kw=net_house_consumption_kw,
+            solar_surplus_kw=solar_surplus_kw,
         )
 
     def _is_control_enabled(self) -> bool:
@@ -2323,11 +2381,12 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         """Return the "Force grid charging" switch state (EASE-03)."""
         return _read_force_charging(self.config_entry)
 
-    def _read_solar_surplus_kw(self, charger_power_kw: float) -> float:
+    def _read_solar_surplus_kw(
+        self, charger_power_kw: float, net_house_consumption_kw: float
+    ) -> float:
         """Compute the live solar surplus available for the charger (EV-09).
 
-        Reads the configured pv/house-consumption/battery power entities and
-        each excluded-power entity (EMS-13), then calls the pure
+        Reads the configured pv/battery power entities and calls the pure
         compute_solar_surplus_kw(). Requires both the PV and house
         consumption entities to be configured -- otherwise there is no
         meaningful surplus to compute and solar mode simply never activates
@@ -2343,6 +2402,10 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             charger_power_kw: This tick's measured charger power draw,
                 already read by the caller -- added back since the house
                 consumption reading already includes the charger's draw.
+            net_house_consumption_kw: House consumption minus excluded-power
+                entities, already read by the caller via the shared
+                _read_net_house_consumption_kw() helper (CORE-11: also the
+                "House load" diagnostic sensor's value).
 
         Returns:
             Signed solar surplus in kW (0.0 if pv/house consumption entities
@@ -2352,20 +2415,14 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             return 0.0
 
         pv_power_kw = _read_power_kw(self.hass, self._pv_power_entity)
-        house_consumption_kw = _read_power_kw(self.hass, self._house_consumption_entity)
         battery_power_kw = _read_power_kw(self.hass, self._battery_power_entity)
-        excluded_power_kw = sum(
-            _read_power_kw(self.hass, entity_id)
-            for entity_id in self._excluded_power_entities
-            if entity_id
-        )
 
         return compute_solar_surplus_kw(
             pv_power_kw=pv_power_kw,
-            house_consumption_kw=house_consumption_kw,
+            house_consumption_kw=net_house_consumption_kw,
             battery_power_kw=battery_power_kw,
             charger_power_kw=charger_power_kw,
-            excluded_power_kw=excluded_power_kw,
+            excluded_power_kw=0.0,
         )
 
     def _read_charger_status(self) -> str:

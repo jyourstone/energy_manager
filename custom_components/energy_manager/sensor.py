@@ -17,8 +17,10 @@ from typing import Any
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorStateClass,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
@@ -73,6 +75,14 @@ async def async_setup_entry(
     easee_coordinator = entry.runtime_data.easee_coordinator
     if easee_coordinator is not None:
         entities.append(EaseeChargerStatusSensor(easee_coordinator, entry))
+
+        # House load + Solar surplus diagnostic sensors (CORE-11): both
+        # derive from the Easee coordinator's solar-surplus inputs, so both
+        # are only created when it exists.
+        entities.append(
+            HouseLoadSensor(easee_coordinator, battery_coordinator, entry)
+        )
+        entities.append(SolarSurplusSensor(easee_coordinator, entry))
 
     async_add_entities(entities)
 
@@ -475,6 +485,102 @@ class EaseeChargerStatusSensor(EnergyManagerEntity, SensorEntity):
             "dry_run": data.dry_run,
             "last_suppressed_command": data.last_suppressed_command,
         }
+
+
+class HouseLoadSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor showing filtered house load (CORE-11).
+
+    State is house consumption minus configured excluded-power entities --
+    the same net_house_consumption_kw the EaseeCoordinator computes as the
+    solar-surplus formula's consumption term (EV-09/EMS-13, see
+    coordinator._read_net_house_consumption_kw()). Attribute exposes the
+    BatteryScheduleCoordinator's BATT-15 rolling mean consumption, when that
+    coordinator exists.
+    """
+
+    _attr_translation_key = "house_load"
+    _attr_icon = "mdi:home-lightning-bolt"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "kW"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        battery_coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the house load sensor.
+
+        Args:
+            coordinator: The EaseeCoordinator providing house_consumption_kw.
+            battery_coordinator: The BatteryScheduleCoordinator providing the
+                mean_consumption_kw attribute, or None if the battery
+                module is disabled.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._battery_coordinator = battery_coordinator
+        self._attr_unique_id = f"{entry.entry_id}_house_load"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the filtered (net) house consumption in kW."""
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return None
+        return data.house_consumption_kw
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the BATT-15 rolling mean consumption, when available."""
+        if self._battery_coordinator is None:
+            return {}
+        battery_data: BatteryScheduleData | None = self._battery_coordinator.data
+        if battery_data is None:
+            return {}
+        return {"mean_consumption_kw": round(battery_data.mean_consumption_kw, 2)}
+
+
+class SolarSurplusSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor showing computed live solar surplus (CORE-11, EV-09).
+
+    State is the raw (unclamped) solar_surplus_kw the EaseeCoordinator
+    computes each tick via compute_solar_surplus_kw() -- before the charger
+    controller's own safety-buffer/start-threshold gating is applied.
+    """
+
+    _attr_translation_key = "solar_surplus"
+    _attr_icon = "mdi:solar-power-variant"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "kW"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the solar surplus sensor.
+
+        Args:
+            coordinator: The EaseeCoordinator providing solar_surplus_kw.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_solar_surplus"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the raw computed solar surplus in kW."""
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return None
+        return data.solar_surplus_kw
 
 
 class CarScheduleSensor(CarEntity, SensorEntity):

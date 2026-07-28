@@ -110,6 +110,8 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
 | Charger Status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
+| House Load *(diagnostic)* | Filtered house consumption (house consumption minus excluded power entities), with the BATT-15 rolling mean consumption as an attribute |
+| Solar Surplus *(diagnostic)* | Raw computed solar surplus (PV minus house load minus battery charging plus charger draw) before the charger's own activation gating |
 
 ### Switches
 
@@ -138,6 +140,10 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Car Departure Time *(per car)* | Deadline used to compute that car's charging schedule |
 
 All number entities persist their value across Home Assistant restarts.
+
+## Diagnostics
+
+Settings > Devices & Services > Energy Manager > Download diagnostics gives a full snapshot of the config entry (data/options), every active coordinator's current state, and the runtime control flags (device control, force charging, forwarded platforms) — useful when reporting a bug.
 
 ## Disclaimer
 

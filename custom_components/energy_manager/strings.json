@@ -354,6 +354,12 @@
       },
       "actual_electricity_price": {
         "name": "Actual Electricity Price"
+      },
+      "house_load": {
+        "name": "House Load"
+      },
+      "solar_surplus": {
+        "name": "Solar Surplus"
       }
     },
     "number": {

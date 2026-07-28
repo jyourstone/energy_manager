@@ -354,6 +354,12 @@
       },
       "actual_electricity_price": {
         "name": "Faktiskt elpris"
+      },
+      "house_load": {
+        "name": "Husets belastning"
+      },
+      "solar_surplus": {
+        "name": "Solöverskott"
       }
     },
     "number": {
