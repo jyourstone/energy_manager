@@ -46,6 +46,21 @@ def _make_24h_slots(prices: list[float], day: int = 15) -> list[dict]:
     return [_make_slot(h, p, day) for h, p in enumerate(prices)]
 
 
+def _make_quarter_slot(quarter_index: int, price: float, day: int = 15) -> dict:
+    """Create a 15-minute price slot dict; quarter_index counts 15-min blocks
+    from midnight on 2026-02-{day}."""
+    start = datetime(2026, 2, day, 0, 0, 0, tzinfo=UTC) + timedelta(
+        minutes=15 * quarter_index
+    )
+    end = start + timedelta(minutes=15)
+    return {"start": start, "end": end, "price": price}
+
+
+def _make_quarter_slots(prices: list[tuple[int, float]], day: int = 15) -> list[dict]:
+    """Create 15-minute price slot dicts from (quarter_index, price) tuples."""
+    return [_make_quarter_slot(q, price, day) for q, price in prices]
+
+
 # ---------------------------------------------------------------------------
 # Common test parameters
 # ---------------------------------------------------------------------------
@@ -669,3 +684,187 @@ class TestEmptyPriceSlots:
         assert result.schedule == []
         assert result.charging_slot_count == 0
         assert result.current_action == "idle"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: Slot-duration awareness (15-minute Nordpool slots)
+#
+# BUG: the scheduler used to assume hourly slots (slots_needed =
+# ceil(hours_needed), then take that many *slots*). Live Nordpool now
+# delivers 15-minute slots (96/day), so the old code booked ~25% of the
+# needed charging time. The fix must select cheapest slots by price,
+# accumulating actual deliverable energy (slot_duration_hours *
+# max_charge_power_kw) until the energy needed is met -- regardless of
+# slot duration.
+# ---------------------------------------------------------------------------
+
+
+class TestQuarterHourSlots:
+    """15-minute slots must deliver the same total energy as hourly slots,
+    needing proportionally more (shorter) slots."""
+
+    def test_15_minute_slots_need_4x_hourly_slot_count_for_same_energy(self):
+        """energy_needed=44kWh at 11kW = exactly 4 hours (a slot boundary
+        for hourly slots, and a slot boundary for 15-min slots too since
+        4h = 16 quarter-slots). Hourly needs 4 slots; 15-min needs 16 slots
+        -- exactly 4x, with no overshoot in either case."""
+        # Hourly: 10 available slots, distinct prices, energy needs 4 of them.
+        hourly_prices = [(h, 0.10 * (h + 1)) for h in range(10)]
+        hourly_slots = _make_slots(hourly_prices)
+        hourly_departure = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+        hourly_result = build_car_charging_schedule(
+            price_slots=hourly_slots,
+            departure_time_utc=hourly_departure,
+            current_soc_pct=0.0,
+            target_soc_pct=44.0,
+            battery_capacity_kwh=100.0,
+            max_charge_power_kw=11.0,
+            now=now,
+        )
+        assert hourly_result.energy_needed_kwh == pytest.approx(44.0)
+        assert hourly_result.charging_slot_count == 4
+
+        # 15-minute: 40 available quarter-slots (10 hours), distinct prices,
+        # same 44 kWh energy need -> should need 16 quarter-slots (4x).
+        quarter_prices = [(q, 0.10 * (q + 1)) for q in range(40)]
+        quarter_slots = _make_quarter_slots(quarter_prices)
+        quarter_departure = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
+
+        quarter_result = build_car_charging_schedule(
+            price_slots=quarter_slots,
+            departure_time_utc=quarter_departure,
+            current_soc_pct=0.0,
+            target_soc_pct=44.0,
+            battery_capacity_kwh=100.0,
+            max_charge_power_kw=11.0,
+            now=now,
+        )
+        assert quarter_result.energy_needed_kwh == pytest.approx(44.0)
+        assert quarter_result.charging_slot_count == 16
+        assert quarter_result.charging_slot_count == 4 * hourly_result.charging_slot_count
+
+    def test_partial_quarter_slot_energy_rounds_up_to_whole_slot(self):
+        """energy_needed just over 16 quarter-slots' worth (44.0 kWh) must
+        round up to a 17th slot, not stop at 16 (which would under-deliver)."""
+        # 16 quarter-slots deliver exactly 44.0 kWh (16 * 0.25h * 11kW).
+        # Ask for 44.1 kWh -- must round up to 17 slots.
+        quarter_prices = [(q, 0.10 * (q + 1)) for q in range(20)]
+        slots = _make_quarter_slots(quarter_prices)
+        departure = datetime(2026, 2, 15, 5, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=0.0,
+            target_soc_pct=44.1,
+            battery_capacity_kwh=100.0,
+            max_charge_power_kw=11.0,
+            now=now,
+        )
+
+        assert result.energy_needed_kwh == pytest.approx(44.1)
+        assert result.charging_slot_count == 17
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Mixed-duration slot lists (hourly today + 15-min tomorrow)
+#
+# This happens during Nordpool MTU transitions: today's already-published
+# prices are hourly, tomorrow's newly-published prices are 15-minute.
+# ---------------------------------------------------------------------------
+
+
+class TestMixedDurationSlots:
+    """Cheapest-first selection must work across a slot list mixing hourly
+    and 15-minute durations, using each slot's own deliverable energy."""
+
+    def test_mixed_hourly_and_quarter_slots_selected_by_price(self):
+        """4 cheap 15-min slots (tomorrow) + 3 expensive hourly slots
+        (today) + 4 very expensive 15-min slots (tomorrow, never reached).
+        energy_needed=16.5 kWh (1.5h at 11kW): the 4 cheap quarter-slots
+        deliver 11 kWh, leaving 5.5 kWh -- not enough for a whole quarter
+        slot's worth of remaining need on their own, so the next cheapest
+        slot (one of the 1.0-priced hourly slots, delivering 11 kWh) must
+        be selected too. Total: 5 slots (4 quarter + 1 hourly)."""
+        today = _make_slots([(0, 1.0), (1, 1.0), (2, 1.0)], day=15)
+        tomorrow_cheap = _make_quarter_slots(
+            [(0, 0.10), (1, 0.10), (2, 0.10), (3, 0.10)], day=16
+        )
+        tomorrow_expensive = _make_quarter_slots(
+            [(4, 2.0), (5, 2.0), (6, 2.0), (7, 2.0)], day=16
+        )
+        slots = today + tomorrow_cheap + tomorrow_expensive
+
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+        departure = datetime(2026, 2, 16, 2, 0, 0, tzinfo=UTC)
+
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=0.0,
+            target_soc_pct=16.5,
+            battery_capacity_kwh=100.0,
+            max_charge_power_kw=11.0,
+            now=now,
+        )
+
+        assert result.energy_needed_kwh == pytest.approx(16.5)
+        assert result.charging_slot_count == 5
+
+        charge_slots = [s for s in result.schedule if s.action == "charge"]
+        quarter_charge = [
+            s for s in charge_slots if (s.end - s.start) == timedelta(minutes=15)
+        ]
+        hourly_charge = [
+            s for s in charge_slots if (s.end - s.start) == timedelta(hours=1)
+        ]
+        assert len(quarter_charge) == 4
+        assert len(hourly_charge) == 1
+        assert all(s.price == pytest.approx(0.10) for s in quarter_charge)
+        assert all(s.price == pytest.approx(1.0) for s in hourly_charge)
+
+        # The expensive quarter-slots (2.0 SEK/kWh) must never be selected.
+        expensive_slots = [s for s in result.schedule if s.price == pytest.approx(2.0)]
+        assert all(s.action == "idle" for s in expensive_slots)
+
+
+# ---------------------------------------------------------------------------
+# Test 15: Fallback mode with 15-minute slots
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackModeQuarterSlots:
+    """fallback_mode must be duration-aware: 'cheapest half' means half of
+    the total deliverable energy, not half of the raw slot count divided
+    blindly (which happens to coincide for a uniform-duration list, but the
+    computation must be based on each slot's actual duration)."""
+
+    def test_fallback_selects_half_of_quarter_slots_by_deliverable_energy(self):
+        """40 quarter-slots, distinct ascending prices -> fallback should
+        select the cheapest 20 (half of total deliverable energy, which
+        for a uniform-duration list is also half of the slot count)."""
+        quarter_prices = [(q, 0.10 * (q + 1)) for q in range(40)]
+        slots = _make_quarter_slots(quarter_prices)
+        departure = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=20.0,
+            target_soc_pct=80.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=DEFAULT_CHARGE_POWER,
+            now=now,
+            fallback_mode=True,
+        )
+
+        assert result.charging_slot_count == 20
+
+        charge_slots = [s for s in result.schedule if s.action == "charge"]
+        charge_prices = sorted(s.price for s in charge_slots)
+        expected = [round(0.10 * (q + 1), 2) for q in range(20)]
+        assert charge_prices == pytest.approx(expected)
