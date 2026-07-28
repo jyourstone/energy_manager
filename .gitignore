@@ -25,3 +25,6 @@ dist/
 
 # Dev environment - HA generates these in dev/config/
 dev/config/*
+
+# Session memory (never commit)
+primer.md

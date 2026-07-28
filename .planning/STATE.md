@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 
 ## Current Position
 
-Phase: 4.1 of 6 (Correctness + Safety Fixes and HACS Packaging)
+Phase: 4.1 of 6 (Correctness + Safety Fixes and HACS Packaging) -- COMPLETE except CORE-15 checkbox pending human glance at Swedish strings
 Plan: parallel-agent execution (no numbered plans)
-Status: In progress -- slot-duration fix, signed fuse math, sensor-fail option, battery add-back, asymmetric timing, car-priority wiring, packaging, sv translations
-Last activity: 2026-07-28 -- Full-system audit (8-agent workflow) + 12 owner decisions folded into REQUIREMENTS/ROADMAP; live HA formulas extracted and verified
+Status: Complete -- slot-duration fix (7ecdd41), signed fuse math + fail-behavior + battery add-back + asymmetric timing + car-priority wiring (886844a), HACS packaging (a8313d2), sv translations + selector labels (351263f). 103 tests green, ruff clean
+Last activity: 2026-07-28 -- Phase 4.1 executed via parallel agents; Phase 5 research written (05-RESEARCH.md, b9613cb)
 
 Progress: [########=.] 80%
 
