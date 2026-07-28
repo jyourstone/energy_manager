@@ -706,15 +706,43 @@ class TestEffectiveDischargeThresholdDerivation:
         )
         assert result == 0.30
 
-    def test_cycle_cost_can_produce_negative_threshold(self):
-        """A transfer fee larger than the cycle cost yields a negative
-        threshold -- discharging becomes worthwhile at almost any spread."""
+    def test_cycle_cost_below_transfer_fee_clamps_to_zero(self):
+        """A transfer fee larger than the cycle cost would mathematically
+        yield a negative threshold, but that must be clamped to 0.0 --
+        otherwise the period's cheapest slot (spread 0) would still clear a
+        negative threshold and get classified as "discharge", emptying
+        charge_candidates and blocking all grid charging."""
         result = compute_effective_discharge_threshold(
             discharge_threshold=0.75,
             battery_cycle_cost=0.20,
             grid_transfer_fee=0.50,
         )
-        assert result == -0.30
+        assert result == 0.0
+
+    def test_clamped_threshold_still_allows_charge_slots_to_be_scheduled(self):
+        """Scheduler-level regression: with cycle_cost < transfer_fee, the
+        clamped (0.0) effective threshold must not swallow the cheapest
+        slot into "discharge", so charging can still be scheduled ahead of
+        the peak."""
+        effective_threshold = compute_effective_discharge_threshold(
+            discharge_threshold=1.00,
+            battery_cycle_cost=0.20,
+            grid_transfer_fee=0.50,
+        )
+        assert effective_threshold == 0.0
+
+        prices = [0.30] * 6 + [0.80] * 6 + [2.50] * 6 + [0.70] * 6
+        slots = _make_24h_slots(prices)
+
+        result = _build(
+            slots, discharge_threshold=effective_threshold, current_soc_pct=10.0
+        )
+
+        # The period minimum must stay eligible to charge, not be swallowed
+        # into "discharge" by a would-be-negative threshold.
+        min_price_slots = [s for s in result.schedule if s.price == 0.30]
+        assert all(s.action != "discharge" for s in min_price_slots)
+        assert result.charging_slot_count > 0
 
 
 # ---------------------------------------------------------------------------

@@ -146,6 +146,7 @@ from .const import (
     FALLBACK_STALE_THRESHOLD_MINUTES,
     MAX_CHARGE_LIMIT_KW,
     MEAN_CONSUMPTION_WINDOW_HOURS,
+    MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES,
     PRICE_UPDATE_INTERVAL_MINUTES,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
     WATTS_TO_AMPS_3PHASE_DIVISOR,
@@ -680,7 +681,15 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             self.hass, house_consumption_entity
         ):
             current_kw = _read_power_kw(self.hass, house_consumption_entity)
-            self._consumption_samples.append((now, current_kw))
+            last_sample_at = (
+                self._consumption_samples[-1][0]
+                if self._consumption_samples
+                else None
+            )
+            if _should_sample_consumption(
+                last_sample_at, now, MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES
+            ):
+                self._consumption_samples.append((now, current_kw))
 
         self._consumption_samples = _prune_samples(
             self._consumption_samples, now, MEAN_CONSUMPTION_WINDOW_HOURS
@@ -727,6 +736,23 @@ def _prune_samples(
     """
     cutoff = now - timedelta(hours=window_hours)
     return [(t, v) for t, v in samples if t >= cutoff]
+
+
+def _should_sample_consumption(
+    last_sample_at: datetime | None, now: datetime, min_interval_minutes: float
+) -> bool:
+    """Return True if enough time has passed to record a new consumption sample.
+
+    Refreshes are event-driven (SOC/price/Forecast.Solar updates), not
+    fixed-cadence, so without this gate the rolling mean would be skewed
+    toward however often those entities happen to change (a chatty sensor
+    dominates the average) and the sample list could grow far faster than
+    _prune_samples()'s time-window pruning intends. Pure and HA-free so it
+    can be unit tested directly.
+    """
+    if last_sample_at is None:
+        return True
+    return (now - last_sample_at).total_seconds() >= min_interval_minutes * 60
 
 
 def _read_sun_dawn_dusk(hass: HomeAssistant) -> tuple[datetime | None, datetime | None]:
@@ -1232,7 +1258,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # 2. Read real-time sensor values (signed: positive = import, negative = export)
         l_current, sensor_blocked = self._fuse_reader.read_grid_current_amps()
-        pv_power_w = self._read_float_state(self._pv_power_entity, 0.0)
+        pv_power_w = _read_power_kw(self.hass, self._pv_power_entity) * 1000.0
         battery_soc = self._read_float_state(self._soc_entity, 50.0)
         battery_own_amps = self._read_battery_own_amps()
 
@@ -1286,11 +1312,12 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # 8. Safe command ordering (Research Pitfall 3)
         mode_sent = False
+        limit_sent = False
         if mode_changed or limit_changed:
             if result.target_mode == "command_charging":
                 # Switching TO command_charging: send limit FIRST, then mode
                 if limit_changed:
-                    await self._send_charge_limit(result.charge_limit_kw)
+                    limit_sent = await self._send_charge_limit(result.charge_limit_kw)
                 if mode_changed:
                     mode_sent = await self._send_ems_mode(result.target_mode)
             else:
@@ -1299,7 +1326,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 if mode_changed:
                     mode_sent = await self._send_ems_mode(result.target_mode)
                 if limit_changed:
-                    await self._send_charge_limit(result.charge_limit_kw)
+                    limit_sent = await self._send_charge_limit(result.charge_limit_kw)
 
         # 9. Schedule verification if mode changed and actually sent -- skip
         # when suppressed by observe-only mode (CORE-14), otherwise the
@@ -1311,9 +1338,14 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     self._ems_select_entity, mapped_option
                 )
 
-        # 10. Update change detection state
-        self._last_sent_mode = result.target_mode
-        self._last_charge_limit = result.charge_limit_kw
+        # 10. Update change detection state -- only record what was actually
+        # sent. A suppressed (observe-only) or failed command must NOT be
+        # recorded as sent, otherwise it is never retried once control is
+        # enabled or the entity recovers (CodeRabbit/Greptile PR #1 review).
+        if mode_sent:
+            self._last_sent_mode = result.target_mode
+        if limit_sent:
+            self._last_charge_limit = result.charge_limit_kw
 
         # 11. Check pending verification
         command_verified = self._check_verification()
@@ -1812,8 +1844,11 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
 
         try:
             soc = float(state.state)
-            # Update staleness tracker on successful read
-            self._soc_last_updated = dt_util.utcnow()
+            # Track when the sensor itself last produced a value, not when
+            # we happened to read it -- a frozen sensor (integration gone
+            # offline but still reporting its last state) must still look
+            # stale to _detect_fallback_needed().
+            self._soc_last_updated = state.last_updated
             return soc
         except (ValueError, TypeError):
             return 50.0

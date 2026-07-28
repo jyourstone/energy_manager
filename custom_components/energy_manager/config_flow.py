@@ -305,7 +305,9 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             if self._data[CONF_BATTERY_ENABLED]:
                 return await self.async_step_battery()
             if self._data[CONF_EV_ENABLED]:
-                return await self.async_step_ev()
+                # EV control also needs the shared fuse/grid-sensor config
+                # from the EMS step, not just the battery module.
+                return await self.async_step_ems()
             return self._create_entry()
 
         schema = vol.Schema(
@@ -431,8 +433,10 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Step 3b: EMS Control Config — fuse rating and control entity selection.
 
-        Appears after the battery step and before the EV step.
-        Auto-detects SigenStor EMS control entities.
+        Appears whenever battery or EV control is enabled (fuse rating,
+        safety buffer and grid sensors feed the shared fuse-headroom
+        arbitration used by both), before the EV step. Auto-detects
+        SigenStor EMS control entities.
         """
         if user_input is not None:
             self._data[CONF_FUSE_RATING_AMPS] = user_input.get(
@@ -1007,7 +1011,9 @@ class EnergyManagerOptionsFlow(OptionsFlowWithReload):
             if self._options[CONF_BATTERY_ENABLED]:
                 return await self.async_step_battery()
             if self._options[CONF_EV_ENABLED]:
-                return await self.async_step_ev()
+                # EV control also needs the shared fuse/grid-sensor config
+                # from the EMS step, not just the battery module.
+                return await self.async_step_ems()
             return self.async_create_entry(data=self._options)
 
         schema = vol.Schema(
@@ -1152,7 +1158,9 @@ class EnergyManagerOptionsFlow(OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         """Step 3b: EMS Control Config — fuse rating and control entity selection.
 
-        Appears after the battery step. Auto-detects SigenStor EMS control
+        Appears whenever battery or EV control is enabled (fuse rating,
+        safety buffer and grid sensors feed the shared fuse-headroom
+        arbitration used by both). Auto-detects SigenStor EMS control
         entities for fields that are not already configured.
         """
         if user_input is not None:

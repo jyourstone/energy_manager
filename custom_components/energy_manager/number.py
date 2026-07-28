@@ -11,7 +11,9 @@ When the EV module is enabled, also provides per-car number entities:
 
 Values persist across restarts via RestoreNumber. Each entity updates
 its corresponding attribute on the appropriate coordinator and
-triggers a schedule recalculation on value change.
+triggers a schedule recalculation both on value change and on restore
+(so a restored non-default value takes effect immediately rather than
+waiting for the next natural update).
 """
 
 from __future__ import annotations
@@ -124,6 +126,7 @@ class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.charge_threshold = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the charge threshold and trigger schedule recalculation.
@@ -173,6 +176,7 @@ class BatteryDischargeThreshold(EnergyManagerEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.discharge_threshold = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the discharge threshold and trigger schedule recalculation.
@@ -222,6 +226,7 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.max_charge_power_w = self._attr_native_value * 1000
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the max charge power and trigger schedule recalculation.
@@ -274,6 +279,7 @@ class BatteryCycleCost(EnergyManagerEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.battery_cycle_cost = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the battery cycle cost and trigger schedule recalculation.
@@ -324,6 +330,7 @@ class GridTransferFee(EnergyManagerEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.grid_transfer_fee = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the grid transfer fee and trigger schedule recalculation.
@@ -374,6 +381,7 @@ class ElectricityCompanyFee(EnergyManagerEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.electricity_company_fee = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the electricity company fee and trigger a sensor refresh.
@@ -431,6 +439,7 @@ class CarTargetSOC(CarEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.target_soc = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the target SOC and trigger schedule recalculation.
@@ -488,6 +497,7 @@ class CarMaxChargePower(CarEntity, RestoreNumber):
         else:
             self._attr_native_value = self._default_value
         self.coordinator.max_charge_power_kw = self._attr_native_value
+        await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the max charge power and trigger schedule recalculation.

@@ -8,6 +8,9 @@ BATT-15 (house-consumption rolling average, sun.sun dawn/dusk reading):
 - sum_solar_forecast_wh(): kWh/Wh-aware summing across multiple
   Forecast.Solar sensor readings.
 - _prune_samples(): time-window pruning for the rolling consumption average.
+- _should_sample_consumption(): minimum-interval gate for the rolling
+  consumption average (event-driven refreshes must not append a sample on
+  every tick).
 - _read_sun_dawn_dusk(): reads sun.sun's next_dawn/next_dusk attributes.
 """
 
@@ -19,6 +22,7 @@ from unittest.mock import MagicMock
 from custom_components.energy_manager.coordinator import (
     _prune_samples,
     _read_sun_dawn_dusk,
+    _should_sample_consumption,
     sum_solar_forecast_wh,
 )
 
@@ -95,6 +99,34 @@ def test_prune_samples_keeps_all_when_within_window() -> None:
 def test_prune_samples_empty_input() -> None:
     now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
     assert _prune_samples([], now, window_hours=48.0) == []
+
+
+# ---------------------------------------------------------------------------
+# _should_sample_consumption() -- minimum sample interval gate
+# ---------------------------------------------------------------------------
+
+
+def test_should_sample_consumption_no_prior_sample() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    assert _should_sample_consumption(None, now, min_interval_minutes=1.0) is True
+
+
+def test_should_sample_consumption_rejects_within_interval() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    last_sample_at = now - timedelta(seconds=30)
+    assert (
+        _should_sample_consumption(last_sample_at, now, min_interval_minutes=1.0)
+        is False
+    )
+
+
+def test_should_sample_consumption_allows_after_interval() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    last_sample_at = now - timedelta(minutes=1)
+    assert (
+        _should_sample_consumption(last_sample_at, now, min_interval_minutes=1.0)
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -273,7 +273,10 @@ def compute_effective_discharge_threshold(
         The discharge spread threshold to use for scheduling.
     """
     if battery_cycle_cost > 0:
-        return battery_cycle_cost - grid_transfer_fee
+        # Clamp at 0.0: a transfer fee larger than the cycle cost must never
+        # produce a negative threshold, which would classify the period's
+        # cheapest slot as "discharge" and empty charge_candidates entirely.
+        return max(0.0, battery_cycle_cost - grid_transfer_fee)
     return discharge_threshold
 
 

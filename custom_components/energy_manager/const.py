@@ -111,6 +111,10 @@ MAX_ESTIMATED_CHARGE_POWER_KW = 22.0
 # Rolling house-consumption average used to size BATT-15 energy needs
 MEAN_CONSUMPTION_WINDOW_HOURS = 48.0
 DEFAULT_MEAN_CONSUMPTION_KW = 0.5
+# Minimum gap between samples -- refreshes are event-driven (SOC/price/
+# Forecast.Solar updates), not fixed-cadence, so without this the rolling
+# mean is skewed toward chatty sensors and the sample list grows unbounded.
+MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES = 1.0
 
 # --- BATT-14 economics number entities (RestoreNumber, hub-level) ---
 # Reuses MIN_PRICE_THRESHOLD/MAX_PRICE_THRESHOLD/PRICE_THRESHOLD_STEP above

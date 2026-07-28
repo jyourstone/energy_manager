@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.abc
 import importlib.machinery
+import importlib.util
 import sys
 import types
 from unittest.mock import MagicMock
@@ -56,6 +57,11 @@ class _HAStubFinder(importlib.abc.MetaPathFinder):
         return None
 
 
-# Install the finder once, before any collection
-if not any(isinstance(f, _HAStubFinder) for f in sys.meta_path):
+# Install the finder once, before any collection -- but never shadow a real
+# homeassistant install (e.g. present in a contributor's venv), which would
+# silently mask compatibility checks against the actual HA API.
+if (
+    importlib.util.find_spec("homeassistant") is None
+    and not any(isinstance(f, _HAStubFinder) for f in sys.meta_path)
+):
     sys.meta_path.insert(0, _HAStubFinder())

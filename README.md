@@ -29,10 +29,7 @@ Energy Manager is under active development and has not reached a stable 1.0 yet.
 - Per-car charging schedule computation (cheapest slots under a deadline + target SOC)
 - PV opportunistic charging with hysteresis
 - Easee charger actuation implemented, gated behind the observe-only "Device control" switch; being validated in parallel with the legacy system
-
-Not yet implemented:
-
-- **Full options flow** — most settings are configured once via the setup wizard; a complete "Configure" flow for changing them afterwards is still in development
+- Full options flow — every setting can be changed later via **Configure**, no re-adding needed
 
 Expect rough edges, and expect entities/config to change before 1.0.
 
@@ -60,7 +57,7 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 
 ## Requirements
 
-- Home Assistant 2024.12.0 or newer
+- Home Assistant 2025.3.0 or newer (config subentry support)
 - A Nordpool sensor (native or HACS integration), configured and providing prices
 - Optional: a SigenStor battery inverter for home battery scheduling + EMS control
 - Optional: an Easee charger and/or a supported car integration (Skoda Connect, VW We Connect) for EV charging
