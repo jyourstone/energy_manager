@@ -642,6 +642,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # Rate-limit the sensor-unavailable warning to once per state change
         self._sensor_warned: bool = False
 
+        # Rate-limit the charge-limit-entity-wrong-domain error (logged once)
+        self._charge_limit_domain_warned: bool = False
+
         # Change detection for command deduplication
         self._last_sent_mode: str | None = None
         self._last_charge_limit: float | None = None
@@ -1089,6 +1092,20 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             _LOGGER.debug(
                 "Charge limit entity not configured, skipping limit command"
             )
+            return False
+
+        # Defense in depth: the configured entity must be a writable number.*
+        # setpoint. A sensor-domain "rated_*" capability entity would fail
+        # number.set_value (see phase41 UAT bug 2) -- refuse to call it.
+        if not self._charge_limit_entity.startswith("number."):
+            if not self._charge_limit_domain_warned:
+                _LOGGER.error(
+                    "Charge limit entity %s is not in the 'number' domain -- "
+                    "skipping command. Reconfigure the charge limit entity to "
+                    "a writable number.* setpoint.",
+                    self._charge_limit_entity,
+                )
+                self._charge_limit_domain_warned = True
             return False
 
         # Check entity availability

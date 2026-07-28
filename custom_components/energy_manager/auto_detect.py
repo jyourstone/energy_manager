@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
@@ -141,6 +142,13 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
         if "sigen" in entry.domain.lower()
     ]
 
+    # Charge/discharge limit candidates by preference tier -- these MUST be
+    # writable number-domain setpoints (e.g. number.sigen_plant_ess_max_charging_limit).
+    # sensor-domain "rated_*" entities are read-only capabilities, not setpoints,
+    # and must never be selected here (see phase41 UAT bug 2).
+    charge_limit_candidates: dict[str, str] = {}
+    discharge_limit_candidates: dict[str, str] = {}
+
     for config_entry in sigen_entries:
         entity_entries = er.async_entries_for_config_entry(
             registry, config_entry.entry_id
@@ -171,47 +179,51 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     entity_entry.entity_id,
                 )
 
-            # Look for max charging limit entity (number or sensor domain)
-            if (
-                entity_entry.domain in ("number", "sensor")
-                and CONF_CHARGE_LIMIT_ENTITY not in result
-                and (
+            # Look for charging/discharging limit setpoints -- number domain
+            # ONLY (never sensor). Preference order: max_charging_limit /
+            # max_discharging_limit, then charging_limit / discharging_limit,
+            # then ess_rated_charging / ess_rated_discharging (some firmware
+            # may expose these as number-domain entities).
+            if entity_entry.domain == "number":
+                if (
                     "max_charging_limit" in entity_id_lower
                     or "max_charging_limit" in unique_id_lower
-                    or "ess_max_charging" in entity_id_lower
-                    or "ess_max_charging" in unique_id_lower
-                    or "ess_rated_charging" in entity_id_lower
+                ):
+                    charge_limit_candidates.setdefault("max", entity_entry.entity_id)
+                elif (
+                    "charging_limit" in entity_id_lower
+                    or "charging_limit" in unique_id_lower
+                ):
+                    charge_limit_candidates.setdefault("mid", entity_entry.entity_id)
+                elif (
+                    "ess_rated_charging" in entity_id_lower
                     or "ess_rated_charging" in unique_id_lower
-                    or "rated_charging_power" in entity_id_lower
-                    or "rated_charging_power" in unique_id_lower
-                )
-            ):
-                result[CONF_CHARGE_LIMIT_ENTITY] = entity_entry.entity_id
-                _LOGGER.debug(
-                    "Found SigenStor charge limit entity: %s",
-                    entity_entry.entity_id,
-                )
+                ):
+                    charge_limit_candidates.setdefault(
+                        "rated", entity_entry.entity_id
+                    )
 
-            # Look for max discharging limit entity (number or sensor domain)
-            if (
-                entity_entry.domain in ("number", "sensor")
-                and CONF_DISCHARGE_LIMIT_ENTITY not in result
-                and (
+                if (
                     "max_discharging_limit" in entity_id_lower
                     or "max_discharging_limit" in unique_id_lower
-                    or "ess_max_discharging" in entity_id_lower
-                    or "ess_max_discharging" in unique_id_lower
-                    or "ess_rated_discharging" in entity_id_lower
+                ):
+                    discharge_limit_candidates.setdefault(
+                        "max", entity_entry.entity_id
+                    )
+                elif (
+                    "discharging_limit" in entity_id_lower
+                    or "discharging_limit" in unique_id_lower
+                ):
+                    discharge_limit_candidates.setdefault(
+                        "mid", entity_entry.entity_id
+                    )
+                elif (
+                    "ess_rated_discharging" in entity_id_lower
                     or "ess_rated_discharging" in unique_id_lower
-                    or "rated_discharging_power" in entity_id_lower
-                    or "rated_discharging_power" in unique_id_lower
-                )
-            ):
-                result[CONF_DISCHARGE_LIMIT_ENTITY] = entity_entry.entity_id
-                _LOGGER.debug(
-                    "Found SigenStor discharge limit entity: %s",
-                    entity_entry.entity_id,
-                )
+                ):
+                    discharge_limit_candidates.setdefault(
+                        "rated", entity_entry.entity_id
+                    )
 
             # Look for grid power sensor (for fuse headroom calculation)
             if (
@@ -293,6 +305,29 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                     "Found SigenStor PV power entity: %s",
                     entity_entry.entity_id,
                 )
+
+    # Resolve charge/discharge limit candidates by preference tier
+    for tier in ("max", "mid", "rated"):
+        if CONF_CHARGE_LIMIT_ENTITY not in result and tier in charge_limit_candidates:
+            result[CONF_CHARGE_LIMIT_ENTITY] = charge_limit_candidates[tier]
+            _LOGGER.debug(
+                "Found SigenStor charge limit entity (tier=%s): %s",
+                tier,
+                charge_limit_candidates[tier],
+            )
+            break
+    for tier in ("max", "mid", "rated"):
+        if (
+            CONF_DISCHARGE_LIMIT_ENTITY not in result
+            and tier in discharge_limit_candidates
+        ):
+            result[CONF_DISCHARGE_LIMIT_ENTITY] = discharge_limit_candidates[tier]
+            _LOGGER.debug(
+                "Found SigenStor discharge limit entity (tier=%s): %s",
+                tier,
+                discharge_limit_candidates[tier],
+            )
+            break
 
     # Fallback: scan ALL entities for per-phase grid power sensors
     phase_keys = [
@@ -449,6 +484,7 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
         Returns empty list if none found.
     """
     registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
     cars: list[dict[str, str]] = []
 
     # Define platform patterns to search for
@@ -488,16 +524,30 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
                     entity_id_lower = entity_entry.entity_id.lower()
                     unique_id_lower = (entity_entry.unique_id or "").lower()
 
+                    # Exclude target/goal SOC entities (e.g. mySkoda's
+                    # "target_battery_percentage") -- the ACTUAL SOC entity
+                    # must win when both exist on the same device. "mal_" is
+                    # the localized (Swedish "mål") entity_id form.
+                    is_target_soc = (
+                        "target" in entity_id_lower
+                        or "target" in unique_id_lower
+                        or "mal_" in entity_id_lower
+                    )
+
                     # Look for battery level / SOC sensor
-                    if entity_entry.domain == "sensor" and (
-                        "battery_level" in entity_id_lower
-                        or "battery_level" in unique_id_lower
-                        or "state_of_charge" in entity_id_lower
-                        or "state_of_charge" in unique_id_lower
-                        or "battery_percentage" in entity_id_lower
-                        or "battery_percentage" in unique_id_lower
-                        or "charging_level" in entity_id_lower
-                        or "charging_level" in unique_id_lower
+                    if (
+                        not is_target_soc
+                        and entity_entry.domain == "sensor"
+                        and (
+                            "battery_level" in entity_id_lower
+                            or "battery_level" in unique_id_lower
+                            or "state_of_charge" in entity_id_lower
+                            or "state_of_charge" in unique_id_lower
+                            or "battery_percentage" in entity_id_lower
+                            or "battery_percentage" in unique_id_lower
+                            or "charging_level" in entity_id_lower
+                            or "charging_level" in unique_id_lower
+                        )
                     ):
                         battery_level_entity = entity_entry.entity_id
 
@@ -523,8 +573,19 @@ def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
                         car_name = entity_entry.original_name.split(" ")[0]
 
                 if battery_level_entity is not None:
-                    # Use config entry title as fallback name
-                    if car_name is None:
+                    # Prefer the car DEVICE's registry name (e.g. "Skoda
+                    # Enyaq") over the matched sensor's friendly name --
+                    # falls back to the sensor-derived/config-entry name
+                    # only when no device name is available.
+                    device_name = None
+                    if device_id:
+                        device = device_registry.async_get(device_id)
+                        if device:
+                            device_name = device.name_by_user or device.name
+
+                    if device_name:
+                        car_name = device_name
+                    elif car_name is None:
                         car_name = config_entry.title or platform_name.capitalize()
 
                     car_info = {

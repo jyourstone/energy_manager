@@ -1,7 +1,13 @@
 """Regression tests for EMS entity auto-detection in find_sigenstor_ems_entities().
 
 Tests verify:
-- Charge/discharge limit detection with sensor domain
+- Charge/discharge limit detection: number domain ONLY, with preference order
+  max_charging_limit/max_discharging_limit > charging_limit/discharging_limit >
+  ess_rated_charging/ess_rated_discharging. Sensor-domain entities (e.g.
+  "rated_*" capability sensors) must NEVER be selected -- this is a deliberate
+  semantic change from the 03-04-era tests, which asserted sensor-domain
+  acceptance based on a misdiagnosis (see phase41 UAT bug 2: rated_* sensors
+  are read-only capabilities, not writable setpoints).
 - Grid power detection for fuse headroom (replaces L-current)
 - PV power global fallback scan with plant-over-inverter preference
 - Disabled entity filtering (entities disabled by integration are skipped)
@@ -113,33 +119,92 @@ def _run_detect(
 
 
 class TestChargeLimit:
-    """Charge limit entity with sensor domain and ess_rated_charging pattern."""
+    """Charge limit entity: number domain ONLY, preference-ordered patterns.
 
-    def test_detects_charge_limit_sensor_domain(self):
-        """sensor.sigen_battery_ess_rated_charging_power should be detected."""
+    NOTE: semantic change from the 03-04-era tests. Sensor-domain
+    "ess_rated_charging_power" entities are READ-ONLY capabilities, not
+    writable setpoints, and must never be selected (phase41 UAT bug 2).
+    """
+
+    def test_detects_max_charging_limit_number_domain(self):
+        """number.sigen_plant_ess_max_charging_limit should be detected (top tier)."""
+        entity = FakeEntityEntry(
+            entity_id="number.sigen_plant_ess_max_charging_limit",
+            domain="number",
+            unique_id="sigen_plant_ess_max_charging_limit",
+        )
+        result = _run_detect([entity])
+        assert CONF_CHARGE_LIMIT_ENTITY in result
+        assert result[CONF_CHARGE_LIMIT_ENTITY] == entity.entity_id
+
+    def test_prefers_max_charging_limit_over_rated(self):
+        """When both max_charging_limit and a rated number entity exist, prefer max."""
+        rated = FakeEntityEntry(
+            entity_id="number.sigen_battery_ess_rated_charging_power",
+            domain="number",
+            unique_id="sigen_battery_ess_rated_charging_power",
+        )
+        max_entity = FakeEntityEntry(
+            entity_id="number.sigen_plant_ess_max_charging_limit",
+            domain="number",
+            unique_id="sigen_plant_ess_max_charging_limit",
+        )
+        result = _run_detect([rated, max_entity])
+        assert result[CONF_CHARGE_LIMIT_ENTITY] == max_entity.entity_id
+
+    def test_never_selects_sensor_domain_rated_charging(self):
+        """sensor.sigen_battery_ess_rated_charging_power must NOT be selected --
+        it is a read-only capability sensor, not a writable setpoint."""
         entity = FakeEntityEntry(
             entity_id="sensor.sigen_battery_ess_rated_charging_power",
             domain="sensor",
             unique_id="sigen_battery_ess_rated_charging_power",
         )
         result = _run_detect([entity])
-        assert CONF_CHARGE_LIMIT_ENTITY in result
-        assert result[CONF_CHARGE_LIMIT_ENTITY] == entity.entity_id
+        assert CONF_CHARGE_LIMIT_ENTITY not in result
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Discharge limit detected with sensor domain
+# Test 2: Discharge limit detected -- number domain only, preference order
 # ---------------------------------------------------------------------------
 
 
 class TestDischargeLimit:
-    """Discharge limit entity with sensor domain and ess_rated_discharging pattern."""
+    """Discharge limit entity: number domain ONLY, preference-ordered patterns.
 
-    def test_detects_discharge_limit_sensor_domain(self):
-        """sensor.sigen_plant_ess_rated_discharging_power should be detected."""
+    NOTE: semantic change from the 03-04-era tests. Sensor-domain
+    "ess_rated_discharging_power" entities are READ-ONLY capabilities, not
+    writable setpoints, and must never be selected (phase41 UAT bug 2).
+    """
+
+    def test_detects_max_discharging_limit_number_domain(self):
+        """number.sigen_plant_ess_max_discharging_limit should be detected (top tier)."""
+        entity = FakeEntityEntry(
+            entity_id="number.sigen_plant_ess_max_discharging_limit",
+            domain="number",
+            unique_id="sigen_plant_ess_max_discharging_limit",
+        )
+        result = _run_detect([entity])
+        assert CONF_DISCHARGE_LIMIT_ENTITY in result
+        assert result[CONF_DISCHARGE_LIMIT_ENTITY] == entity.entity_id
+
+    def test_never_selects_sensor_domain_rated_discharging(self):
+        """sensor.sigen_plant_ess_rated_discharging_power must NOT be selected --
+        it is a read-only capability sensor, not a writable setpoint."""
         entity = FakeEntityEntry(
             entity_id="sensor.sigen_plant_ess_rated_discharging_power",
             domain="sensor",
+            unique_id="sigen_plant_ess_rated_discharging_power",
+        )
+        result = _run_detect([entity])
+        assert CONF_DISCHARGE_LIMIT_ENTITY not in result
+
+    def test_falls_back_to_rated_when_number_domain(self):
+        """ess_rated_discharging as a number-domain entity (rare firmware) is
+        accepted as the last-resort tier when no better pattern exists."""
+        entity = FakeEntityEntry(
+            entity_id="number.sigen_plant_ess_rated_discharging_power",
+            domain="number",
             unique_id="sigen_plant_ess_rated_discharging_power",
         )
         result = _run_detect([entity])

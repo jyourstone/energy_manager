@@ -112,7 +112,19 @@ async def async_setup_entry(
     if platforms:
         await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
+    # Reload the entry whenever it (or a subentry, e.g. adding/editing/
+    # removing a car) is updated -- otherwise newly added subentries create
+    # no entities until HA is restarted.
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     return True
+
+
+async def _async_update_listener(
+    hass: HomeAssistant, entry: EnergyManagerConfigEntry
+) -> None:
+    """Reload the config entry when it or one of its subentries is updated."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
