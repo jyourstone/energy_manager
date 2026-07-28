@@ -50,6 +50,12 @@ CONF_HOME_PLUGGED_ENTITY = "home_plugged_entity"
 CONF_CHARGER_CONNECTED_ENTITY = "charger_connected_entity"
 CONF_LOCATION_ENTITY = "location_entity"
 
+# Per-car phase capability (EV-12): how many phases this car actually draws
+# on when the charger is in 3-phase mode. Stored as a string ("1"/"2"/"3")
+# since it is a SelectSelector option value.
+CONF_PHASE_CAPABILITY = "phase_capability"
+DEFAULT_PHASE_CAPABILITY = "3"
+
 # --- Battery schedule configuration ---
 
 # Config keys for battery schedule
@@ -168,3 +174,88 @@ CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES = 5
 
 # Fallback charging detection: SOC stale threshold (minutes)
 FALLBACK_STALE_THRESHOLD_MINUTES = 60
+
+# --- Easee charger control configuration (Phase 5) ---
+
+# Charger addressing: the HA device_id (device registry, NOT the raw Easee
+# charger_id) that easee.* service calls target via their "device_id" field.
+# Auto-detected from the configured charger_status_entity's entity registry
+# entry; this key stores the manual/auto-filled text override.
+CONF_CHARGER_DEVICE_ID = "charger_device_id"
+
+# EMS-13 solar-surplus inputs (EV-09, wired in Wave C)
+CONF_HOUSE_CONSUMPTION_ENTITY = "house_consumption_entity"
+CONF_EXCLUDED_POWER_ENTITIES = "excluded_power_entities"
+
+# EASE-08 safety notifications
+CONF_NOTIFY_SERVICE = "notify_service"
+
+# Charger amp limits (Easee minimum is 6A per phase)
+CONF_MIN_CHARGE_AMPS = "min_charge_amps"
+CONF_MAX_CHARGE_AMPS = "max_charge_amps"
+DEFAULT_MIN_CHARGE_AMPS = 6.0
+DEFAULT_MAX_CHARGE_AMPS = 16.0
+MIN_MIN_CHARGE_AMPS = 6
+MAX_MIN_CHARGE_AMPS = 32
+MIN_MAX_CHARGE_AMPS = 6
+MAX_MAX_CHARGE_AMPS = 32
+
+# Grid charging power ceiling
+CONF_MAX_GRID_CHARGE_POWER_KW = "max_grid_charge_power_kw"
+DEFAULT_MAX_GRID_CHARGE_POWER_KW = 12.0
+MIN_MAX_GRID_CHARGE_POWER_KW = 1.0
+MAX_MAX_GRID_CHARGE_POWER_KW = 22.0
+
+# Amp hysteresis: asymmetric increase/decrease delays (decrease must never
+# be lengthened -- it is a safety property, not a tuning preference)
+CONF_AMP_INCREASE_DELAY = "amp_increase_delay"
+CONF_AMP_DECREASE_DELAY = "amp_decrease_delay"
+DEFAULT_AMP_INCREASE_DELAY_SECONDS = 120.0
+DEFAULT_AMP_DECREASE_DELAY_SECONDS = 5.0
+MIN_AMP_DELAY_SECONDS = 0
+MAX_AMP_INCREASE_DELAY_SECONDS = 3600
+MAX_AMP_DECREASE_DELAY_SECONDS = 600
+
+# 1/3-phase switching threshold (3 * 6A * 230V)
+CONF_PHASE_SWITCH_THRESHOLD_KW = "phase_switch_threshold_kw"
+DEFAULT_PHASE_SWITCH_THRESHOLD_KW = 4.1
+MIN_PHASE_SWITCH_THRESHOLD_KW = 0.0
+MAX_PHASE_SWITCH_THRESHOLD_KW = 20.0
+
+# Solar-surplus opportunistic charging (EV-09, wave C)
+CONF_SOLAR_START_THRESHOLD_KW = "solar_start_threshold_kw"
+DEFAULT_SOLAR_START_THRESHOLD_KW = 1.5
+MIN_SOLAR_START_THRESHOLD_KW = 0.0
+MAX_SOLAR_START_THRESHOLD_KW = 10.0
+
+CONF_SOLAR_ACTIVATION_DELAY = "solar_activation_delay"
+CONF_SOLAR_DEACTIVATION_DELAY = "solar_deactivation_delay"
+DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS = 300.0
+DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS = 60.0
+MIN_SOLAR_DELAY_SECONDS = 0
+MAX_SOLAR_DELAY_SECONDS = 3600
+
+CONF_BATTERY_SOC_GATE_PCT = "battery_soc_gate_pct"
+DEFAULT_BATTERY_SOC_GATE_PCT = 100.0
+MIN_BATTERY_SOC_GATE_PCT = 0.0
+MAX_BATTERY_SOC_GATE_PCT = 100.0
+
+# Fuse Layer 1: emergency overload pause margin
+CONF_EMERGENCY_MARGIN_AMPS = "emergency_margin_amps"
+DEFAULT_EMERGENCY_MARGIN_AMPS = 2.0
+MIN_EMERGENCY_MARGIN_AMPS = 0
+MAX_EMERGENCY_MARGIN_AMPS = 20
+
+# Tuned constants not exposed as options (passed explicitly, never relying
+# on the ChargerInputs dataclass fallbacks -- see 05-EXECUTION.md Wave B)
+DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE = 4.3
+DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE = 2.5
+DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE = 1.45
+DEFAULT_GRID_POWER_SAFETY_BUFFER_KW = 0.5
+DEFAULT_SOLAR_SAFETY_BUFFER_KW = 0.5
+DEFAULT_SOC_ROUND_UP = True
+DEFAULT_PHASE_SEQUENCE_STEP_TIMEOUT_SECONDS = 15.0
+DEFAULT_COMMAND_STUCK_TIMEOUT_SECONDS = 60.0
+
+# Easee coordinator update interval (seconds)
+EASEE_UPDATE_INTERVAL_SECONDS = 30

@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import (
     CONF_BATTERY_ENABLED,
+    CONF_CHARGER_STATUS_ENTITY,
     CONF_EV_ENABLED,
     CONFIG_VERSION,
     DOMAIN,
@@ -26,6 +27,7 @@ from .const import (
 from .coordinator import (
     BatteryScheduleCoordinator,
     CarChargingCoordinator,
+    EaseeCoordinator,
     EMSCoordinator,
     EnergyManagerConfigEntry,
     EnergyManagerData,
@@ -84,12 +86,22 @@ async def async_setup_entry(
                 await car_coordinator.async_config_entry_first_refresh()
                 car_coordinators[subentry_id] = car_coordinator
 
+    # Phase 5: Easee charger coordinator (EV module enabled AND a charger
+    # status entity configured)
+    easee_coordinator: EaseeCoordinator | None = None
+    if entry.options.get(CONF_EV_ENABLED) and entry.options.get(
+        CONF_CHARGER_STATUS_ENTITY
+    ):
+        easee_coordinator = EaseeCoordinator(hass, entry)
+        await easee_coordinator.async_config_entry_first_refresh()
+
     # Store typed runtime data on the config entry
     entry.runtime_data = EnergyManagerData(
         price_coordinator=price_coordinator,
         battery_coordinator=battery_coordinator,
         ems_coordinator=ems_coordinator,
         car_coordinators=car_coordinators,
+        easee_coordinator=easee_coordinator,
         modules_enabled={
             MODULE_BATTERY: entry.options.get(CONF_BATTERY_ENABLED, False),
             MODULE_EV: entry.options.get(CONF_EV_ENABLED, False),

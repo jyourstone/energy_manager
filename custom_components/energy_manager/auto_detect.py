@@ -27,6 +27,7 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_PV_POWER_ENTITY,
     CONF_SOC_ENTITY,
 )
@@ -495,6 +496,119 @@ def find_easee_entities(hass: HomeAssistant) -> dict[str, str]:
 
     if not result:
         _LOGGER.debug("Easee integration found but no matching entities")
+
+    return result
+
+
+def derive_charger_device_id(
+    charger_status_device_id: str | None,
+    fallback_device_ids: list[str],
+) -> str | None:
+    """Pick the Easee charger's HA device_id for easee.* service addressing.
+
+    Pure decision (no HA access): prefers the device_id of the already
+    (auto-)detected charger status entity -- ground truth, since it is the
+    exact charger the user pointed at -- falling back to the first
+    candidate found among the Easee integration's own device registry
+    entries when the status entity isn't registered to a device yet.
+
+    Args:
+        charger_status_device_id: device_id of the configured
+            charger_status_entity's entity registry entry, or None.
+        fallback_device_ids: Candidate device_ids from Easee config entries,
+            used only when charger_status_device_id is None.
+
+    Returns:
+        The device_id to use, or None if nothing was found.
+    """
+    if charger_status_device_id:
+        return charger_status_device_id
+    return fallback_device_ids[0] if fallback_device_ids else None
+
+
+def find_easee_charger_device_id(
+    hass: HomeAssistant, charger_status_entity: str
+) -> str | None:
+    """Auto-detect the Easee charger's HA device_id for service-call addressing.
+
+    Easee's own services (action_command, set_charger_dynamic_limit,
+    set_charger_phase_mode) accept a device_id field addressing the HA
+    device registry entry. Looks up the device_id of the configured
+    charger_status_entity first (ground truth); falls back to scanning the
+    Easee integration's device registry entries if the entity isn't
+    registered yet.
+
+    Args:
+        hass: Home Assistant instance.
+        charger_status_entity: The (auto-detected or user-selected) charger
+            status sensor entity ID, or "".
+
+    Returns:
+        The device_id string, or None if it could not be determined.
+    """
+    registry = er.async_get(hass)
+    entity_device_id: str | None = None
+    if charger_status_entity:
+        entity_entry = registry.async_get(charger_status_entity)
+        if entity_entry is not None:
+            entity_device_id = entity_entry.device_id
+
+    fallback_device_ids: list[str] = []
+    if entity_device_id is None:
+        device_registry = dr.async_get(hass)
+        for config_entry in hass.config_entries.async_entries("easee"):
+            fallback_device_ids.extend(
+                device.id
+                for device in dr.async_entries_for_config_entry(
+                    device_registry, config_entry.entry_id
+                )
+            )
+
+    return derive_charger_device_id(entity_device_id, fallback_device_ids)
+
+
+def find_house_consumption_entity(hass: HomeAssistant) -> dict[str, str]:
+    """Scan for a SigenStor house/plant consumed-power sensor (EMS-13).
+
+    Looks for config entries with domain containing "sigen" and scans their
+    entities for a "consumed_power" pattern, used as the house-consumption
+    input for the solar-surplus calculation (EV-09, wired in Wave C).
+
+    Returns:
+        Dict with CONF_HOUSE_CONSUMPTION_ENTITY key if found, empty dict
+        otherwise.
+    """
+    registry = er.async_get(hass)
+    result: dict[str, str] = {}
+
+    sigen_entries = [
+        entry
+        for entry in hass.config_entries.async_entries()
+        if "sigen" in entry.domain.lower()
+    ]
+
+    for config_entry in sigen_entries:
+        entity_entries = er.async_entries_for_config_entry(
+            registry, config_entry.entry_id
+        )
+
+        for entity_entry in entity_entries:
+            if entity_entry.domain != "sensor":
+                continue
+
+            entity_id_lower = entity_entry.entity_id.lower()
+            unique_id_lower = (entity_entry.unique_id or "").lower()
+
+            if "consumed_power" in entity_id_lower or "consumed_power" in unique_id_lower:
+                result[CONF_HOUSE_CONSUMPTION_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor house consumption entity: %s",
+                    entity_entry.entity_id,
+                )
+                return result
+
+    if not result:
+        _LOGGER.debug("No SigenStor house consumption entity found")
 
     return result
 

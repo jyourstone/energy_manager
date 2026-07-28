@@ -80,11 +80,41 @@
         "description": "Configure your EV charger. Entities are auto-detected from Easee.",
         "data": {
           "charger_status_entity": "Charger status sensor",
-          "charger_power_entity": "Charger power sensor"
+          "charger_power_entity": "Charger power sensor",
+          "charger_device_id": "Charger device ID",
+          "house_consumption_entity": "House consumption sensor",
+          "excluded_power_entities": "Excluded power sensors",
+          "notify_service": "Notification service",
+          "min_charge_amps": "Minimum charging current (A)",
+          "max_charge_amps": "Maximum charging current (A)",
+          "max_grid_charge_power_kw": "Maximum grid charging power (kW)",
+          "amp_increase_delay": "Charging current increase delay (s)",
+          "amp_decrease_delay": "Charging current decrease delay (s)",
+          "phase_switch_threshold_kw": "3-phase switch threshold (kW)",
+          "solar_start_threshold_kw": "Solar charging start threshold (kW)",
+          "solar_activation_delay": "Solar charging activation delay (s)",
+          "solar_deactivation_delay": "Solar charging deactivation delay (s)",
+          "battery_soc_gate_pct": "Battery SOC gate for solar charging (%)",
+          "emergency_margin_amps": "Emergency overload margin (A)"
         },
         "data_description": {
           "charger_status_entity": "Sensor showing charger connection status.",
-          "charger_power_entity": "Sensor showing charger power output (W)."
+          "charger_power_entity": "Sensor showing charger power output (W).",
+          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong.",
+          "house_consumption_entity": "Sensor showing total house power consumption, used for solar-surplus charging. Auto-detected from SigenStor.",
+          "excluded_power_entities": "Optional: power sensors to subtract from house consumption (e.g. a separately-managed water heater) before computing solar surplus.",
+          "notify_service": "Optional notify service (e.g. 'notify.mobile_app_x') for safety notifications. Leave empty to disable notifications.",
+          "min_charge_amps": "Advanced: the lowest current the charger will ever be set to (Easee minimum is 6A).",
+          "max_charge_amps": "Advanced: the highest current the charger will ever be set to.",
+          "max_grid_charge_power_kw": "Advanced: absolute grid charging power ceiling.",
+          "amp_increase_delay": "Advanced: how long a higher charging current must stay stable before it is applied.",
+          "amp_decrease_delay": "Advanced: how long a lower charging current must stay stable before it is applied. Always much shorter than the increase delay -- this is a safety property.",
+          "phase_switch_threshold_kw": "Advanced: available power below which the charger switches to single-phase charging.",
+          "solar_start_threshold_kw": "Advanced: minimum net solar surplus to start opportunistic solar charging.",
+          "solar_activation_delay": "Advanced: how long solar surplus must be continuously available before solar charging activates.",
+          "solar_deactivation_delay": "Advanced: how long solar surplus must be continuously unavailable before solar charging deactivates.",
+          "battery_soc_gate_pct": "Advanced: minimum house battery charge level before solar charging is allowed to divert surplus to the car.",
+          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
         }
       }
     },
@@ -110,14 +140,16 @@
             "battery_capacity": "Battery capacity (kWh)",
             "battery_level_entity": "Battery level sensor",
             "charger_connected_entity": "Car charger connected sensor",
-            "location_entity": "Car location tracker"
+            "location_entity": "Car location tracker",
+            "phase_capability": "Charger phases used by this car"
           },
           "data_description": {
             "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
             "battery_capacity": "Total battery capacity of the car in kWh.",
             "battery_level_entity": "Sensor showing the car's battery level (%).",
             "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
-            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home."
+            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home.",
+            "phase_capability": "How many of the charger's phases this car actually draws on when it is in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2."
           }
         },
         "reconfigure": {
@@ -128,14 +160,16 @@
             "battery_capacity": "Battery capacity (kWh)",
             "battery_level_entity": "Battery level sensor",
             "charger_connected_entity": "Car charger connected sensor",
-            "location_entity": "Car location tracker"
+            "location_entity": "Car location tracker",
+            "phase_capability": "Charger phases used by this car"
           },
           "data_description": {
             "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
             "battery_capacity": "Total battery capacity of the car in kWh.",
             "battery_level_entity": "Sensor showing the car's battery level (%).",
             "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
-            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home."
+            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home.",
+            "phase_capability": "How many of the charger's phases this car actually draws on when it is in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2."
           }
         }
       }
@@ -154,6 +188,13 @@
       "options": {
         "assume_load": "Assume a fixed load (recommended)",
         "block": "Block charging until sensors recover"
+      }
+    },
+    "phase_capability": {
+      "options": {
+        "1": "1 phase",
+        "2": "2 phases",
+        "3": "3 phases"
       }
     }
   },

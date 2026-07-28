@@ -51,27 +51,35 @@ from homeassistant.helpers.selector import (
 
 from .auto_detect import (
     find_car_integrations,
+    find_easee_charger_device_id,
     find_easee_entities,
     find_forecast_solar_entities,
+    find_house_consumption_entity,
     find_sigenstor_ems_entities,
     find_sigenstor_entities,
 )
 from .const import (
+    CONF_AMP_DECREASE_DELAY,
+    CONF_AMP_INCREASE_DELAY,
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
+    CONF_BATTERY_SOC_GATE_PCT,
     CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_CONNECTED_ENTITY,
+    CONF_CHARGER_DEVICE_ID,
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
     CONF_EV_ENABLED,
+    CONF_EXCLUDED_POWER_ENTITIES,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
     CONF_FUSE_SAFETY_BUFFER_AMPS,
@@ -79,32 +87,73 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_LOCATION_ENTITY,
+    CONF_MAX_CHARGE_AMPS,
     CONF_MAX_ESS_CHARGE_AMPS,
+    CONF_MAX_GRID_CHARGE_POWER_KW,
+    CONF_MIN_CHARGE_AMPS,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
+    CONF_NOTIFY_SERVICE,
+    CONF_PHASE_CAPABILITY,
+    CONF_PHASE_SWITCH_THRESHOLD_KW,
     CONF_PV_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
+    CONF_SOLAR_ACTIVATION_DELAY,
+    CONF_SOLAR_DEACTIVATION_DELAY,
+    CONF_SOLAR_START_THRESHOLD_KW,
     CONFIG_MINOR_VERSION,
     CONFIG_VERSION,
+    DEFAULT_AMP_DECREASE_DELAY_SECONDS,
+    DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_ASSUMED_LOAD_AMPS,
+    DEFAULT_BATTERY_SOC_GATE_PCT,
+    DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
     DEFAULT_FUSE_RATING_AMPS,
+    DEFAULT_MAX_CHARGE_AMPS,
     DEFAULT_MAX_ESS_CHARGE_AMPS,
+    DEFAULT_MAX_GRID_CHARGE_POWER_KW,
+    DEFAULT_MIN_CHARGE_AMPS,
+    DEFAULT_PHASE_CAPABILITY,
+    DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
     DEFAULT_SAFETY_BUFFER_AMPS,
     DEFAULT_SENSOR_FAIL_BEHAVIOR,
+    DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
+    DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+    DEFAULT_SOLAR_START_THRESHOLD_KW,
     DOMAIN,
+    MAX_AMP_DECREASE_DELAY_SECONDS,
+    MAX_AMP_INCREASE_DELAY_SECONDS,
     MAX_ASSUMED_LOAD_AMPS,
+    MAX_BATTERY_SOC_GATE_PCT,
+    MAX_EMERGENCY_MARGIN_AMPS,
     MAX_ESS_INCREASE_DELAY_SECONDS,
     MAX_FUSE_RATING_AMPS,
+    MAX_MAX_CHARGE_AMPS,
     MAX_MAX_ESS_CHARGE_AMPS,
+    MAX_MAX_GRID_CHARGE_POWER_KW,
+    MAX_MIN_CHARGE_AMPS,
+    MAX_PHASE_SWITCH_THRESHOLD_KW,
     MAX_SAFETY_BUFFER_AMPS,
+    MAX_SOLAR_DELAY_SECONDS,
+    MAX_SOLAR_START_THRESHOLD_KW,
+    MIN_AMP_DELAY_SECONDS,
     MIN_ASSUMED_LOAD_AMPS,
+    MIN_BATTERY_SOC_GATE_PCT,
+    MIN_EMERGENCY_MARGIN_AMPS,
     MIN_ESS_INCREASE_DELAY_SECONDS,
     MIN_FUSE_RATING_AMPS,
+    MIN_MAX_CHARGE_AMPS,
     MIN_MAX_ESS_CHARGE_AMPS,
+    MIN_MAX_GRID_CHARGE_POWER_KW,
+    MIN_MIN_CHARGE_AMPS,
+    MIN_PHASE_SWITCH_THRESHOLD_KW,
     MIN_SAFETY_BUFFER_AMPS,
+    MIN_SOLAR_DELAY_SECONDS,
+    MIN_SOLAR_START_THRESHOLD_KW,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
     SENSOR_FAIL_BEHAVIOR_BLOCK,
     SUBENTRY_TYPE_CAR,
@@ -475,10 +524,62 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_CHARGER_POWER_ENTITY] = user_input.get(
                 CONF_CHARGER_POWER_ENTITY, ""
             )
+            self._data[CONF_CHARGER_DEVICE_ID] = user_input.get(
+                CONF_CHARGER_DEVICE_ID, ""
+            )
+            self._data[CONF_HOUSE_CONSUMPTION_ENTITY] = user_input.get(
+                CONF_HOUSE_CONSUMPTION_ENTITY, ""
+            )
+            self._data[CONF_EXCLUDED_POWER_ENTITIES] = user_input.get(
+                CONF_EXCLUDED_POWER_ENTITIES, []
+            )
+            self._data[CONF_NOTIFY_SERVICE] = user_input.get(
+                CONF_NOTIFY_SERVICE, ""
+            )
+            self._data[CONF_MIN_CHARGE_AMPS] = user_input.get(
+                CONF_MIN_CHARGE_AMPS, DEFAULT_MIN_CHARGE_AMPS
+            )
+            self._data[CONF_MAX_CHARGE_AMPS] = user_input.get(
+                CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS
+            )
+            self._data[CONF_MAX_GRID_CHARGE_POWER_KW] = user_input.get(
+                CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
+            )
+            self._data[CONF_PHASE_SWITCH_THRESHOLD_KW] = user_input.get(
+                CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
+            )
+            self._data[CONF_SOLAR_START_THRESHOLD_KW] = user_input.get(
+                CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
+            )
+            self._data[CONF_BATTERY_SOC_GATE_PCT] = user_input.get(
+                CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
+            )
+            self._data[CONF_AMP_INCREASE_DELAY] = user_input.get(
+                CONF_AMP_INCREASE_DELAY, DEFAULT_AMP_INCREASE_DELAY_SECONDS
+            )
+            self._data[CONF_AMP_DECREASE_DELAY] = user_input.get(
+                CONF_AMP_DECREASE_DELAY, DEFAULT_AMP_DECREASE_DELAY_SECONDS
+            )
+            self._data[CONF_SOLAR_ACTIVATION_DELAY] = user_input.get(
+                CONF_SOLAR_ACTIVATION_DELAY, DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS
+            )
+            self._data[CONF_SOLAR_DEACTIVATION_DELAY] = user_input.get(
+                CONF_SOLAR_DEACTIVATION_DELAY, DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS
+            )
+            self._data[CONF_EMERGENCY_MARGIN_AMPS] = user_input.get(
+                CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
+            )
             return self._create_entry()
 
-        # Auto-detect Easee entities
+        # Auto-detect Easee entities + charger device_id + house consumption
         detected = find_easee_entities(self.hass)
+        detected.update(find_house_consumption_entity(self.hass))
+        if detected.get(CONF_CHARGER_STATUS_ENTITY):
+            charger_device_id = find_easee_charger_device_id(
+                self.hass, detected[CONF_CHARGER_STATUS_ENTITY]
+            )
+            if charger_device_id:
+                detected[CONF_CHARGER_DEVICE_ID] = charger_device_id
 
         schema = vol.Schema(
             {
@@ -487,6 +588,134 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Optional(CONF_CHARGER_POWER_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_CHARGER_DEVICE_ID): TextSelector(),
+                vol.Optional(CONF_HOUSE_CONSUMPTION_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Optional(CONF_EXCLUDED_POWER_ENTITIES): EntitySelector(
+                    EntitySelectorConfig(domain="sensor", multiple=True)
+                ),
+                vol.Optional(CONF_NOTIFY_SERVICE): TextSelector(),
+                vol.Optional(
+                    CONF_MIN_CHARGE_AMPS, default=DEFAULT_MIN_CHARGE_AMPS
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MIN_CHARGE_AMPS,
+                        max=MAX_MIN_CHARGE_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_CHARGE_AMPS, default=DEFAULT_MAX_CHARGE_AMPS
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_CHARGE_AMPS,
+                        max=MAX_MAX_CHARGE_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_GRID_CHARGE_POWER_KW,
+                    default=DEFAULT_MAX_GRID_CHARGE_POWER_KW,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_MAX_GRID_CHARGE_POWER_KW,
+                        max=MAX_MAX_GRID_CHARGE_POWER_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                # -- Advanced (mirrors the EMS step's grouping) --
+                vol.Optional(
+                    CONF_AMP_INCREASE_DELAY,
+                    default=DEFAULT_AMP_INCREASE_DELAY_SECONDS,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_AMP_DELAY_SECONDS,
+                        max=MAX_AMP_INCREASE_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_AMP_DECREASE_DELAY,
+                    default=DEFAULT_AMP_DECREASE_DELAY_SECONDS,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_AMP_DELAY_SECONDS,
+                        max=MAX_AMP_DECREASE_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_PHASE_SWITCH_THRESHOLD_KW,
+                    default=DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_PHASE_SWITCH_THRESHOLD_KW,
+                        max=MAX_PHASE_SWITCH_THRESHOLD_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_START_THRESHOLD_KW,
+                    default=DEFAULT_SOLAR_START_THRESHOLD_KW,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SOLAR_START_THRESHOLD_KW,
+                        max=MAX_SOLAR_START_THRESHOLD_KW,
+                        step=0.1,
+                        unit_of_measurement="kW",
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_ACTIVATION_DELAY,
+                    default=DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SOLAR_DELAY_SECONDS,
+                        max=MAX_SOLAR_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_SOLAR_DEACTIVATION_DELAY,
+                    default=DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SOLAR_DELAY_SECONDS,
+                        max=MAX_SOLAR_DELAY_SECONDS,
+                        step=1,
+                        unit_of_measurement="s",
+                    )
+                ),
+                vol.Optional(
+                    CONF_BATTERY_SOC_GATE_PCT,
+                    default=DEFAULT_BATTERY_SOC_GATE_PCT,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_BATTERY_SOC_GATE_PCT,
+                        max=MAX_BATTERY_SOC_GATE_PCT,
+                        step=1,
+                        unit_of_measurement="%",
+                    )
+                ),
+                vol.Optional(
+                    CONF_EMERGENCY_MARGIN_AMPS,
+                    default=DEFAULT_EMERGENCY_MARGIN_AMPS,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_EMERGENCY_MARGIN_AMPS,
+                        max=MAX_EMERGENCY_MARGIN_AMPS,
+                        step=1,
+                        unit_of_measurement="A",
+                    )
                 ),
             }
         )
@@ -559,6 +788,48 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_CHARGER_POWER_ENTITY: self._data.get(
                 CONF_CHARGER_POWER_ENTITY, ""
             ),
+            CONF_CHARGER_DEVICE_ID: self._data.get(CONF_CHARGER_DEVICE_ID, ""),
+            CONF_HOUSE_CONSUMPTION_ENTITY: self._data.get(
+                CONF_HOUSE_CONSUMPTION_ENTITY, ""
+            ),
+            CONF_EXCLUDED_POWER_ENTITIES: self._data.get(
+                CONF_EXCLUDED_POWER_ENTITIES, []
+            ),
+            CONF_NOTIFY_SERVICE: self._data.get(CONF_NOTIFY_SERVICE, ""),
+            CONF_MIN_CHARGE_AMPS: self._data.get(
+                CONF_MIN_CHARGE_AMPS, DEFAULT_MIN_CHARGE_AMPS
+            ),
+            CONF_MAX_CHARGE_AMPS: self._data.get(
+                CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS
+            ),
+            CONF_MAX_GRID_CHARGE_POWER_KW: self._data.get(
+                CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
+            ),
+            CONF_PHASE_SWITCH_THRESHOLD_KW: self._data.get(
+                CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
+            ),
+            CONF_SOLAR_START_THRESHOLD_KW: self._data.get(
+                CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
+            ),
+            CONF_BATTERY_SOC_GATE_PCT: self._data.get(
+                CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
+            ),
+            CONF_AMP_INCREASE_DELAY: self._data.get(
+                CONF_AMP_INCREASE_DELAY, DEFAULT_AMP_INCREASE_DELAY_SECONDS
+            ),
+            CONF_AMP_DECREASE_DELAY: self._data.get(
+                CONF_AMP_DECREASE_DELAY, DEFAULT_AMP_DECREASE_DELAY_SECONDS
+            ),
+            CONF_SOLAR_ACTIVATION_DELAY: self._data.get(
+                CONF_SOLAR_ACTIVATION_DELAY, DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS
+            ),
+            CONF_SOLAR_DEACTIVATION_DELAY: self._data.get(
+                CONF_SOLAR_DEACTIVATION_DELAY,
+                DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+            ),
+            CONF_EMERGENCY_MARGIN_AMPS: self._data.get(
+                CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
+            ),
         }
         return self.async_create_entry(
             title="Energy Manager",
@@ -619,6 +890,14 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
                 vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="device_tracker")
                 ),
+                vol.Optional(
+                    CONF_PHASE_CAPABILITY, default=DEFAULT_PHASE_CAPABILITY
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=["1", "2", "3"],
+                        translation_key="phase_capability",
+                    )
+                ),
             }
         )
 
@@ -675,6 +954,14 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
                 ),
                 vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="device_tracker")
+                ),
+                vol.Optional(
+                    CONF_PHASE_CAPABILITY, default=DEFAULT_PHASE_CAPABILITY
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=["1", "2", "3"],
+                        translation_key="phase_capability",
+                    )
                 ),
             }
         )

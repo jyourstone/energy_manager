@@ -24,10 +24,11 @@ Energy Manager is under active development and has not reached a stable 1.0 yet.
 - EMS mode control of a SigenStor inverter, including per-phase fuse protection
 - Per-car charging schedule computation (cheapest slots under a deadline + target SOC)
 - PV opportunistic charging with hysteresis
+- Easee charger control (mode arbitration, dynamic amp limits, 1/3-phase switching, fuse protection) — implemented internally and gated behind the same observe-only "Device control" switch as the battery EMS; no dedicated charger status/force-charging entities yet
 
 Not yet implemented:
 
-- **Easee charger actuation** — car charging schedules are computed but not yet sent to the Easee charger (planned)
+- **Charger status/control entities and solar-surplus charging** — the charger control engine runs and can send commands, but the status sensor, force-grid-charging switch, and solar-surplus wiring are still in development
 - **Full options flow** — most settings are configured once via the setup wizard; a complete "Configure" flow for changing them afterwards is still in development
 
 Expect rough edges, and expect entities/config to change before 1.0.
@@ -91,9 +92,9 @@ Click the button above, or add it manually via **Settings** -> **Devices & Servi
 
 **Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, a Forecast.Solar entity for solar-aware scheduling. Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
 
-**Step 4 — EV Charging** *(if enabled)*: Charger status and power entities, auto-detected from an Easee integration if present.
+**Step 4 — EV Charging** *(if enabled)*: Charger status and power entities, auto-detected from an Easee integration if present, plus the charger's device ID (auto-detected) used to address the Easee control services. Also configures charger amp limits, grid charging power cap, phase-switch and solar-charging thresholds, and an optional notify service for charger safety alerts — all pre-filled with tuned defaults and grouped with the advanced options at the end of the step.
 
-After setup, each car is added separately as a **subentry** on the Energy Manager device: give it a name, battery capacity, and optionally battery-level, charger-connected, and location entities (auto-detected from Skoda Connect or VW We Connect if present).
+After setup, each car is added separately as a **subentry** on the Energy Manager device: give it a name, battery capacity, optionally battery-level, charger-connected, and location entities (auto-detected from Skoda Connect or VW We Connect if present), and how many charger phases it actually uses (1/2/3, default 3).
 
 ## Entities created
 

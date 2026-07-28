@@ -37,21 +37,34 @@ from homeassistant.util import dt as dt_util
 
 from .battery_scheduler import BatteryScheduleResult, build_battery_schedule
 from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
+from .charger_state_machine import (
+    CarDemand,
+    ChargerCommand,
+    ChargerController,
+    ChargerInputs,
+)
 from .const import (
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
     CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES,
+    CONF_AMP_DECREASE_DELAY,
+    CONF_AMP_INCREASE_DELAY,
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
+    CONF_BATTERY_SOC_GATE_PCT,
     CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_CONNECTED_ENTITY,
+    CONF_CHARGER_DEVICE_ID,
+    CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
+    CONF_EXCLUDED_POWER_ENTITIES,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
     CONF_FUSE_SAFETY_BUFFER_AMPS,
@@ -59,28 +72,59 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_LOCATION_ENTITY,
+    CONF_MAX_CHARGE_AMPS,
     CONF_MAX_ESS_CHARGE_AMPS,
+    CONF_MAX_GRID_CHARGE_POWER_KW,
+    CONF_MIN_CHARGE_AMPS,
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
+    CONF_NOTIFY_SERVICE,
+    CONF_PHASE_CAPABILITY,
+    CONF_PHASE_SWITCH_THRESHOLD_KW,
     CONF_PV_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
+    CONF_SOLAR_ACTIVATION_DELAY,
+    CONF_SOLAR_DEACTIVATION_DELAY,
+    CONF_SOLAR_START_THRESHOLD_KW,
+    DEFAULT_AMP_DECREASE_DELAY_SECONDS,
+    DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_BATTERY_SOC_GATE_PCT,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CHARGE_THRESHOLD,
+    DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
+    DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
+    DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
+    DEFAULT_COMMAND_STUCK_TIMEOUT_SECONDS,
     DEFAULT_DISCHARGE_THRESHOLD,
+    DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
     DEFAULT_FUSE_RATING_AMPS,
+    DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
+    DEFAULT_MAX_CHARGE_AMPS,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_ESS_CHARGE_AMPS,
+    DEFAULT_MAX_GRID_CHARGE_POWER_KW,
     DEFAULT_MAX_SOC_PCT,
+    DEFAULT_MIN_CHARGE_AMPS,
     DEFAULT_MIN_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
+    DEFAULT_PHASE_CAPABILITY,
+    DEFAULT_PHASE_SEQUENCE_STEP_TIMEOUT_SECONDS,
+    DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
     DEFAULT_SAFETY_BUFFER_AMPS,
     DEFAULT_SENSOR_FAIL_BEHAVIOR,
+    DEFAULT_SOC_ROUND_UP,
+    DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
+    DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+    DEFAULT_SOLAR_SAFETY_BUFFER_KW,
+    DEFAULT_SOLAR_START_THRESHOLD_KW,
     DEFAULT_TARGET_SOC_PCT,
+    EASEE_UPDATE_INTERVAL_SECONDS,
     EMS_MODE_MAP,
     EMS_UPDATE_INTERVAL_SECONDS,
     FALLBACK_STALE_THRESHOLD_MINUTES,
@@ -548,6 +592,177 @@ def _serialize_slot(slot) -> dict | None:
     }
 
 
+def _read_entity_float(hass: HomeAssistant, entity_id: str, default: float) -> float:
+    """Read a sensor state and return as float, with safe fallback.
+
+    Shared by EMSCoordinator and EaseeCoordinator (Phase 5 "shared fuse
+    arbiter" -- see 05-RESEARCH.md) so the read logic exists in one place.
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: The entity ID to read.
+        default: Default value if entity is unavailable or unparseable.
+
+    Returns:
+        Float value of the entity state, or default.
+    """
+    if not entity_id:
+        return default
+
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unavailable", "unknown"):
+        return default
+
+    try:
+        return float(state.state)
+    except (ValueError, TypeError):
+        return default
+
+
+def _entity_has_value(hass: HomeAssistant, entity_id: str) -> bool:
+    """Return True if entity_id is configured and has a valid numeric state."""
+    if not entity_id:
+        return False
+    state = hass.states.get(entity_id)
+    return state is not None and state.state not in ("unavailable", "unknown")
+
+
+def _read_control_enabled(config_entry: ConfigEntry) -> bool:
+    """Return the master "Device control" switch state (CORE-14).
+
+    Shared by EMSCoordinator and EaseeCoordinator -- both gate outgoing
+    device commands behind this single fail-safe read of
+    runtime_data.control_enabled (defaults to False/observe-only if
+    runtime_data isn't set yet or the switch hasn't initialized).
+
+    Args:
+        config_entry: The config entry to read runtime_data from.
+
+    Returns:
+        True if device control is enabled, False (observe-only) otherwise.
+    """
+    runtime_data = getattr(config_entry, "runtime_data", None)
+    return bool(getattr(runtime_data, "control_enabled", False))
+
+
+class FuseSensorReader:
+    """Shared grid-current sensor read + fallback logic.
+
+    Both EMSCoordinator (battery) and EaseeCoordinator (charger) need the
+    identical signed worst-case phase current reading and sensor-fail
+    fallback behavior -- extracted here so the formula and fallback policy
+    exist in exactly one place (Phase 5 "shared fuse arbiter", see
+    05-RESEARCH.md: "one module, two views, no duplicated formulas"). Each
+    coordinator owns its own instance (independent rate-limited warning
+    state); the read/fallback logic itself is identical.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        grid_phase_a_entity: str,
+        grid_phase_b_entity: str,
+        grid_phase_c_entity: str,
+        grid_power_entity: str,
+        sensor_fail_behavior: str,
+        assumed_load_amps: float,
+    ) -> None:
+        """Initialize the reader with its sensor configuration.
+
+        Args:
+            hass: Home Assistant instance.
+            grid_phase_a_entity: Per-phase grid power sensor for phase A.
+            grid_phase_b_entity: Per-phase grid power sensor for phase B.
+            grid_phase_c_entity: Per-phase grid power sensor for phase C.
+            grid_power_entity: Fallback total grid power sensor.
+            sensor_fail_behavior: CONF_SENSOR_FAIL_BEHAVIOR value.
+            assumed_load_amps: Amps to assume when fail_behavior is
+                "assume_load".
+        """
+        self._hass = hass
+        self._grid_phase_a_entity = grid_phase_a_entity
+        self._grid_phase_b_entity = grid_phase_b_entity
+        self._grid_phase_c_entity = grid_phase_c_entity
+        self._grid_power_entity = grid_power_entity
+        self._sensor_fail_behavior = sensor_fail_behavior
+        self._assumed_load_amps = assumed_load_amps
+        self._sensor_warned = False
+
+    def read_grid_current_amps(self) -> tuple[float, bool]:
+        """Read grid power and return (signed worst-case phase current, sensor_blocked).
+
+        Sign convention: positive = import (load on the fuse), negative =
+        export (adds headroom). If per-phase sensors are configured and all
+        available, returns the worst-case (highest, signed) phase current.
+        Falls back to the single total grid power sensor (signed,
+        balanced-load estimate) if per-phase sensors are not configured.
+
+        If the required sensors are unavailable, unknown, or unconfigured,
+        applies the configured fail-behavior instead of silently assuming
+        0A load (see resolve_current_sensor_fallback()).
+
+        Returns:
+            Tuple of (current_l_amps, sensor_blocked). sensor_blocked is
+            True only when the sensors failed and the fail-behavior is
+            "block".
+        """
+        phase_entities = [
+            self._grid_phase_a_entity,
+            self._grid_phase_b_entity,
+            self._grid_phase_c_entity,
+        ]
+
+        if all(phase_entities):
+            if all(_entity_has_value(self._hass, e) for e in phase_entities):
+                amps = [self._read_signed_power_amps(e, 230.0) for e in phase_entities]
+                self._sensor_warned = False
+                return worst_case_signed_amps(amps), False
+            return self._apply_fallback("grid phase current sensors")
+
+        if self._grid_power_entity:
+            if _entity_has_value(self._hass, self._grid_power_entity):
+                amps = self._read_signed_power_amps(self._grid_power_entity, 3.0 * 230.0)
+                self._sensor_warned = False
+                return amps, False
+            return self._apply_fallback("grid power sensor")
+
+        return self._apply_fallback("grid power sensor (not configured)")
+
+    def _read_signed_power_amps(self, entity_id: str, divisor: float) -> float:
+        """Read a power sensor and convert to signed amps.
+
+        Sign convention: positive = import (load on the fuse), negative =
+        export (adds headroom).
+        """
+        power = _read_entity_float(self._hass, entity_id, 0.0)
+        state = self._hass.states.get(entity_id)
+        if state is not None:
+            uom = state.attributes.get("unit_of_measurement", "")
+            if uom == "kW":
+                power *= 1000.0
+        return power / divisor
+
+    def _apply_fallback(self, sensor_description: str) -> tuple[float, bool]:
+        """Apply the configured fail-behavior and log a rate-limited warning."""
+        result = resolve_current_sensor_fallback(
+            fail_behavior=self._sensor_fail_behavior,
+            assumed_load_amps=self._assumed_load_amps,
+        )
+        if not self._sensor_warned:
+            _LOGGER.warning(
+                "Fuse protection: %s unavailable -- applying '%s' fallback (%s). "
+                "Configure the grid sensors in the EMS options to restore "
+                "accurate fuse protection.",
+                sensor_description,
+                self._sensor_fail_behavior,
+                f"assuming {self._assumed_load_amps}A load"
+                if self._sensor_fail_behavior == SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD
+                else "blocking charge authorization",
+            )
+            self._sensor_warned = True
+        return result.effective_amps, result.force_zero_headroom
+
+
 class EMSCoordinator(DataUpdateCoordinator[EMSData]):
     """Coordinator that orchestrates real-time EMS control.
 
@@ -630,6 +845,18 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             CONF_CHARGER_STATUS_ENTITY, ""
         )
 
+        # Shared fuse arbiter (Phase 5): identical grid-sensor read/fallback
+        # logic reused by EaseeCoordinator -- see FuseSensorReader.
+        self._fuse_reader = FuseSensorReader(
+            hass=hass,
+            grid_phase_a_entity=self._grid_phase_a_entity,
+            grid_phase_b_entity=self._grid_phase_b_entity,
+            grid_phase_c_entity=self._grid_phase_c_entity,
+            grid_power_entity=self._grid_power_entity,
+            sensor_fail_behavior=self._sensor_fail_behavior,
+            assumed_load_amps=self._assumed_load_amps,
+        )
+
         # PV hysteresis tracker for oscillation prevention
         self._pv_tracker = PVHysteresisTracker()
 
@@ -638,9 +865,6 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._ess_limiter = ESSLimitRateLimiter(
             increase_delay_seconds=self._ess_increase_delay_seconds
         )
-
-        # Rate-limit the sensor-unavailable warning to once per state change
-        self._sensor_warned: bool = False
 
         # Rate-limit the charge-limit-entity-wrong-domain error (logged once)
         self._charge_limit_domain_warned: bool = False
@@ -741,7 +965,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             )
 
         # 2. Read real-time sensor values (signed: positive = import, negative = export)
-        l_current, sensor_blocked = self._read_grid_current_amps()
+        l_current, sensor_blocked = self._fuse_reader.read_grid_current_amps()
         pv_power_w = self._read_float_state(self._pv_power_entity, 0.0)
         battery_soc = self._read_float_state(self._soc_entity, 50.0)
         battery_own_amps = self._read_battery_own_amps()
@@ -846,12 +1070,10 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
     def _is_control_enabled(self) -> bool:
         """Return the master "Device control" switch state (CORE-14).
 
-        Reads runtime_data.control_enabled, defaulting to False (observe-only)
-        if runtime_data isn't set yet or the switch hasn't initialized --
-        fail-safe: this must never default to enabled.
+        Fail-safe: this must never default to enabled. See
+        _read_control_enabled() (shared with EaseeCoordinator).
         """
-        runtime_data = getattr(self.config_entry, "runtime_data", None)
-        return bool(getattr(runtime_data, "control_enabled", False))
+        return _read_control_enabled(self.config_entry)
 
     def _read_float_state(self, entity_id: str, default: float) -> float:
         """Read a sensor state and return as float, with safe fallback.
@@ -863,107 +1085,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         Returns:
             Float value of the entity state, or default.
         """
-        if not entity_id:
-            return default
-
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unavailable", "unknown"):
-            return default
-
-        try:
-            return float(state.state)
-        except (ValueError, TypeError):
-            return default
-
-    def _is_sensor_available(self, entity_id: str) -> bool:
-        """Return True if entity_id is configured and has a valid numeric state."""
-        if not entity_id:
-            return False
-        state = self.hass.states.get(entity_id)
-        return state is not None and state.state not in ("unavailable", "unknown")
-
-    def _read_signed_power_amps(self, entity_id: str, divisor: float) -> float:
-        """Read a power sensor and convert to signed amps.
-
-        Sign convention: positive = import (load on the fuse), negative =
-        export (adds headroom) -- matches the live grid phase sensors.
-
-        Args:
-            entity_id: Power sensor entity (W or kW).
-            divisor: Voltage (per-phase reading) or 3*voltage (total-power
-                balanced-load estimate) to convert W -> A.
-        """
-        power = self._read_float_state(entity_id, 0.0)
-        state = self.hass.states.get(entity_id)
-        if state is not None:
-            uom = state.attributes.get("unit_of_measurement", "")
-            if uom == "kW":
-                power *= 1000.0
-        return power / divisor
-
-    def _read_grid_current_amps(self) -> tuple[float, bool]:
-        """Read grid power and return (signed worst-case phase current, sensor_blocked).
-
-        Sign convention: positive = import (load on the fuse), negative =
-        export (adds headroom). If per-phase sensors are configured and all
-        available, returns the worst-case (highest, signed) phase current --
-        an exporting or lightly loaded phase never masks an overloaded one.
-        Falls back to the single total grid power sensor (signed,
-        balanced-load estimate) if per-phase sensors are not configured.
-
-        If the required sensors are unavailable, unknown, or unconfigured,
-        applies the configured CONF_SENSOR_FAIL_BEHAVIOR instead of silently
-        assuming 0A load (see resolve_current_sensor_fallback()).
-
-        Returns:
-            Tuple of (current_l_amps, sensor_blocked). sensor_blocked is True
-            only when the sensors failed and the fail-behavior is "block".
-        """
-        phase_entities = [
-            self._grid_phase_a_entity,
-            self._grid_phase_b_entity,
-            self._grid_phase_c_entity,
-        ]
-
-        if all(phase_entities):
-            if all(self._is_sensor_available(e) for e in phase_entities):
-                amps = [
-                    self._read_signed_power_amps(e, 230.0) for e in phase_entities
-                ]
-                self._sensor_warned = False
-                return worst_case_signed_amps(amps), False
-            return self._apply_sensor_fallback("grid phase current sensors")
-
-        if self._grid_power_entity:
-            if self._is_sensor_available(self._grid_power_entity):
-                amps = self._read_signed_power_amps(
-                    self._grid_power_entity, 3.0 * 230.0
-                )
-                self._sensor_warned = False
-                return amps, False
-            return self._apply_sensor_fallback("grid power sensor")
-
-        return self._apply_sensor_fallback("grid power sensor (not configured)")
-
-    def _apply_sensor_fallback(self, sensor_description: str) -> tuple[float, bool]:
-        """Apply the configured fail-behavior and log a rate-limited warning."""
-        result = resolve_current_sensor_fallback(
-            fail_behavior=self._sensor_fail_behavior,
-            assumed_load_amps=self._assumed_load_amps,
-        )
-        if not self._sensor_warned:
-            _LOGGER.warning(
-                "Fuse protection: %s unavailable -- applying '%s' fallback (%s). "
-                "Configure the grid sensors in the EMS options to restore "
-                "accurate fuse protection.",
-                sensor_description,
-                self._sensor_fail_behavior,
-                f"assuming {self._assumed_load_amps}A load"
-                if self._sensor_fail_behavior == SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD
-                else "blocking charge authorization",
-            )
-            self._sensor_warned = True
-        return result.effective_amps, result.force_zero_headroom
+        return _read_entity_float(self.hass, entity_id, default)
 
     def _read_battery_own_amps(self) -> float:
         """Read the battery's own charging draw in amps (self-consumption add-back).
@@ -1220,6 +1342,12 @@ class CarChargingData:
         last_calculated: UTC timestamp of last calculation.
         home_and_plugged: Whether the car is currently home and plugged in
             (see CarChargingCoordinator._is_home_and_plugged_in()).
+        phase_capability: How many phases this car draws on when the
+            charger is in 3-phase mode (1, 2, or 3; EV-12). Consumed by
+            EaseeCoordinator to build a CarDemand.
+        max_charge_power_kw: The car's own maximum charge power in kW
+            (mutable, set by the per-car number entity). Consumed by
+            EaseeCoordinator to build a CarDemand.
     """
 
     current_action: str
@@ -1233,6 +1361,8 @@ class CarChargingData:
     target_soc: float
     last_calculated: datetime
     home_and_plugged: bool
+    phase_capability: int
+    max_charge_power_kw: float
 
 
 class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
@@ -1285,6 +1415,9 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         )
         self._location_entity: str = subentry.data.get(
             CONF_LOCATION_ENTITY, ""
+        )
+        self._phase_capability: int = int(
+            subentry.data.get(CONF_PHASE_CAPABILITY, DEFAULT_PHASE_CAPABILITY)
         )
 
         # Charger status entity from main entry options (shared across all cars)
@@ -1393,6 +1526,8 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             target_soc=self.target_soc,
             last_calculated=dt_util.utcnow(),
             home_and_plugged=self._is_home_and_plugged_in(),
+            phase_capability=self._phase_capability,
+            max_charge_power_kw=self.max_charge_power_kw,
         )
 
     def _read_car_soc(self) -> float:
@@ -1526,6 +1661,531 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         return True
 
 
+# ---------------------------------------------------------------------------
+# Easee charger control (Phase 5 Wave B)
+# ---------------------------------------------------------------------------
+
+#: ChargerCommand actions sent via the easee.action_command service, whose
+#: "action_command" field takes exactly these values (see
+#: dev/config/custom_components/easee/services.py ACTIONS).
+EASEE_ACTION_COMMANDS = frozenset({"start", "pause", "resume", "stop"})
+
+#: Maps ChargerInputs/ChargerDecision phase mode vocabulary ("single"/
+#: "three" -- deliberately the same strings the Easee "phase_mode" sensor
+#: reports, see dev/config/custom_components/easee/const.py PM_SINGLE/
+#: PM_THREE) to the easee.set_charger_phase_mode service's phase_mode enum.
+EASEE_PHASE_MODE_MAP = {"single": "1_phase", "three": "3_phase"}
+
+#: Easee's config.phaseMode raw values (1/2/3), see
+#: dev/config/custom_components/easee/const.py PHASE_MODE_STATUS.
+_EASEE_RAW_PHASE_MODE_SINGLE = 1
+
+
+def build_easee_service_call(
+    command: ChargerCommand, device_id: str
+) -> tuple[str, str, dict]:
+    """Map one ChargerCommand to an easee.* service call.
+
+    Pure translation, no I/O -- exact service names/fields verified against
+    dev/config/custom_components/easee/services.yaml and services.py:
+        - start/pause/resume/stop -> easee.action_command
+          (fields: device_id, action_command=<action>)
+        - set_dynamic_limit -> easee.set_charger_dynamic_limit
+          (fields: device_id, current=<amps>)
+        - set_phase_mode -> easee.set_charger_phase_mode
+          (fields: device_id, phase_mode="1_phase"|"3_phase")
+
+    Args:
+        command: The command to translate.
+        device_id: The Easee charger's HA device_id (CONF_CHARGER_DEVICE_ID).
+
+    Returns:
+        Tuple of (service_domain, service_name, service_data).
+
+    Raises:
+        ValueError: If command.action is not a known action.
+    """
+    if command.action in EASEE_ACTION_COMMANDS:
+        return (
+            "easee",
+            "action_command",
+            {"device_id": device_id, "action_command": command.action},
+        )
+    if command.action == "set_dynamic_limit":
+        return (
+            "easee",
+            "set_charger_dynamic_limit",
+            {"device_id": device_id, "current": command.value},
+        )
+    if command.action == "set_phase_mode":
+        phase_mode = EASEE_PHASE_MODE_MAP.get(str(command.value), command.value)
+        return (
+            "easee",
+            "set_charger_phase_mode",
+            {"device_id": device_id, "phase_mode": phase_mode},
+        )
+    raise ValueError(f"Unknown charger command action: {command.action!r}")
+
+
+def _derive_phase_mode(raw_config_phase_mode: object) -> str:
+    """Map the charger status entity's raw config_phaseMode attribute to single/three.
+
+    The Easee "status" sensor exposes "config.phaseMode" as an extra_state_
+    attribute ("config_phaseMode", raw int 1/2/3 -- NOT yet translated to
+    the "single"/"auto"/"three" strings the dedicated "phase_mode" sensor
+    reports, since attribute values bypass convert_units_func). 2 ("auto")
+    is treated as "three" -- Energy Manager itself only ever requests
+    "1_phase" or "3_phase", never "auto_phase", so an observed auto reading
+    only occurs from external configuration; three-phase is the safe
+    default since a 1-phase-only installation reports 1, not 2. Missing or
+    unparseable values also default to "three".
+
+    Args:
+        raw_config_phase_mode: The raw attribute value (expected int-like).
+
+    Returns:
+        "single" or "three".
+    """
+    try:
+        value = int(raw_config_phase_mode)
+    except (TypeError, ValueError):
+        return "three"
+    return "single" if value == _EASEE_RAW_PHASE_MODE_SINGLE else "three"
+
+
+def _estimate_charger_current_amps(
+    charger_power_kw: float,
+    current_phase_mode: str,
+    conversion_factor_1phase: float,
+    conversion_factor_3phase: float,
+) -> float:
+    """Estimate the charger's own current draw in amps from its measured power.
+
+    Used as the ChargerInputs.current_dynamic_limit_amps add-back proxy --
+    the configured Easee entities do not include a ground-truth dynamic
+    limit sensor, so the charger's actual measured power is converted to an
+    equivalent amps figure using the conversion factor for whichever phase
+    mode the charger currently reports (per Wave B instructions: "The
+    charger's own current for the add-back comes from the charger
+    power/current reading").
+
+    Args:
+        charger_power_kw: Measured charger power draw in kW.
+        current_phase_mode: The charger's actual reported phase mode,
+            "single" or "three".
+        conversion_factor_1phase: A/kW conversion factor for 1-phase.
+        conversion_factor_3phase: A/kW conversion factor for 3-phase.
+
+    Returns:
+        Estimated amps, never negative.
+    """
+    factor = (
+        conversion_factor_1phase
+        if current_phase_mode == "single"
+        else conversion_factor_3phase
+    )
+    return max(0.0, charger_power_kw) * factor
+
+
+@dataclass(frozen=True, slots=True)
+class EaseeData:
+    """Output of the Easee charger coordinator.
+
+    Attributes:
+        mode: Active charger mode -- "forced", "scheduled", "solar", or "idle".
+        target_amps: This tick's computed amp target.
+        target_phase_mode: Desired charger phase mode ("single"/"three").
+        sequence_state: Phase-switch sequence state ("idle", "pausing",
+            "set_phase", "resuming", or "set_limit").
+        stuck: True when a command was issued but showed no observable
+            effect within its timeout.
+        dry_run: True when the master "Device control" switch is OFF
+            (observe-only) -- commands are computed but not sent (CORE-14).
+        last_suppressed_command: Human-readable description of the most
+            recently suppressed command, or None if none has been suppressed.
+        notification_count: Number of safety notifications generated this
+            tick (see ChargerDecision.notifications).
+        override_reason: Why behavior is notable this tick, or None.
+        charger_status: Raw Easee charger status string.
+        charger_power_kw: Measured charger power draw in kW.
+        fuse_headroom_amps: Available fuse headroom in amps from the
+            charger's point of view (own draw added back). Informational.
+    """
+
+    mode: str
+    target_amps: float
+    target_phase_mode: str
+    sequence_state: str
+    stuck: bool
+    dry_run: bool
+    last_suppressed_command: str | None
+    notification_count: int
+    override_reason: str | None
+    charger_status: str
+    charger_power_kw: float
+    fuse_headroom_amps: float
+
+
+class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
+    """Coordinator that orchestrates real-time Easee charger control.
+
+    ~30s poll + state-change listeners on the charger status/power
+    entities. Builds a ChargerInputs snapshot each tick (reusing the shared
+    FuseSensorReader -- same grid-sensor formula as EMSCoordinator, see
+    05-RESEARCH.md "shared fuse arbiter"), calls the pure ChargerController,
+    and executes the returned commands via the easee.* services through the
+    same build_command_decision observe-only choke point used by
+    EMSCoordinator. Force-charging and solar-surplus are Wave C
+    (force_charging=False, solar_surplus_kw=0.0 for now).
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the Easee coordinator.
+
+        Args:
+            hass: Home Assistant instance.
+            entry: The config entry for this integration.
+        """
+        super().__init__(
+            hass,
+            _LOGGER,
+            name="Energy Manager Easee Charger",
+            config_entry=entry,
+            update_interval=timedelta(seconds=EASEE_UPDATE_INTERVAL_SECONDS),
+            always_update=False,
+        )
+        self._controller = ChargerController()
+
+        # -- Entities --
+        self._charger_status_entity: str = entry.options.get(
+            CONF_CHARGER_STATUS_ENTITY, ""
+        )
+        self._charger_power_entity: str = entry.options.get(
+            CONF_CHARGER_POWER_ENTITY, ""
+        )
+        self._charger_device_id: str = entry.options.get(
+            CONF_CHARGER_DEVICE_ID, ""
+        )
+        self._soc_entity: str = entry.options.get(CONF_SOC_ENTITY, "")
+        self._notify_service: str = entry.options.get(CONF_NOTIFY_SERVICE, "")
+        # TODO(wave-c): wired into the solar-surplus calc (EV-09/EMS-13).
+        self._house_consumption_entity: str = entry.options.get(
+            CONF_HOUSE_CONSUMPTION_ENTITY, ""
+        )
+        self._excluded_power_entities: list[str] = list(
+            entry.options.get(CONF_EXCLUDED_POWER_ENTITIES, []) or []
+        )
+
+        # -- Fuse config (shared top-level EMS options) --
+        self._fuse_rating_amps: float = float(
+            entry.options.get(CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS)
+        )
+        self._safety_buffer_amps: float = float(
+            entry.options.get(CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS)
+        )
+        self._fuse_reader = FuseSensorReader(
+            hass=hass,
+            grid_phase_a_entity=entry.options.get(CONF_GRID_PHASE_A_ENTITY, ""),
+            grid_phase_b_entity=entry.options.get(CONF_GRID_PHASE_B_ENTITY, ""),
+            grid_phase_c_entity=entry.options.get(CONF_GRID_PHASE_C_ENTITY, ""),
+            grid_power_entity=entry.options.get(CONF_GRID_POWER_ENTITY, ""),
+            sensor_fail_behavior=entry.options.get(
+                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+            ),
+            assumed_load_amps=float(
+                entry.options.get(CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS)
+            ),
+        )
+
+        # -- Charger tuning options (Phase-5 defaults, ALL explicit -- never
+        # rely on the ChargerInputs dataclass fallbacks) --
+        self._min_amps: float = float(
+            entry.options.get(CONF_MIN_CHARGE_AMPS, DEFAULT_MIN_CHARGE_AMPS)
+        )
+        self._max_amps: float = float(
+            entry.options.get(CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS)
+        )
+        self._grid_power_cap_kw: float = float(
+            entry.options.get(
+                CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
+            )
+        )
+        self._amp_increase_delay_s: float = float(
+            entry.options.get(
+                CONF_AMP_INCREASE_DELAY, DEFAULT_AMP_INCREASE_DELAY_SECONDS
+            )
+        )
+        self._amp_decrease_delay_s: float = float(
+            entry.options.get(
+                CONF_AMP_DECREASE_DELAY, DEFAULT_AMP_DECREASE_DELAY_SECONDS
+            )
+        )
+        self._phase_switch_threshold_kw: float = float(
+            entry.options.get(
+                CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
+            )
+        )
+        self._solar_start_threshold_kw: float = float(
+            entry.options.get(
+                CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
+            )
+        )
+        self._solar_activation_delay_s: float = float(
+            entry.options.get(
+                CONF_SOLAR_ACTIVATION_DELAY, DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS
+            )
+        )
+        self._solar_deactivation_delay_s: float = float(
+            entry.options.get(
+                CONF_SOLAR_DEACTIVATION_DELAY, DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS
+            )
+        )
+        self._battery_soc_gate_pct: float = float(
+            entry.options.get(
+                CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
+            )
+        )
+        self._emergency_margin_amps: float = float(
+            entry.options.get(
+                CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
+            )
+        )
+
+        # Observe-only mode (CORE-14): most recently suppressed dry-run command
+        self._last_suppressed_command: str | None = None
+
+    async def _async_setup(self) -> None:
+        """Register listeners for immediate response to charger state changes.
+
+        Called once during async_config_entry_first_refresh. Force-charging
+        and master-switch toggles cannot be listened for here (they are
+        plain flags in runtime_data, not entities) -- Wave C's switch
+        entities call async_request_refresh() directly instead.
+        """
+        entities = [e for e in (self._charger_status_entity, self._charger_power_entity) if e]
+        if entities:
+            self.config_entry.async_on_unload(
+                async_track_state_change_event(
+                    self.hass, entities, self._handle_charger_update
+                )
+            )
+
+    @callback
+    def _handle_charger_update(self, event) -> None:
+        """Handle charger status/power state changes for immediate response."""
+        self.hass.async_create_task(self.async_request_refresh())
+
+    async def _async_update_data(self) -> EaseeData:
+        """Build ChargerInputs, call the pure controller, execute, and return EaseeData.
+
+        Returns:
+            EaseeData with the current charger state and control information.
+        """
+        now = dt_util.utcnow()
+        charger_status = self._read_charger_status()
+        charger_power_kw = self._read_charger_power_kw()
+        current_phase_mode = self._read_current_phase_mode()
+        l_current, sensor_blocked = self._fuse_reader.read_grid_current_amps()
+        current_dynamic_limit_amps = _estimate_charger_current_amps(
+            charger_power_kw,
+            current_phase_mode,
+            DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
+            DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
+        )
+        battery_soc = (
+            _read_entity_float(self.hass, self._soc_entity, 100.0)
+            if self._soc_entity
+            else 100.0
+        )
+
+        inputs = ChargerInputs(
+            charger_status=charger_status,
+            charger_power_kw=charger_power_kw,
+            measured_worst_case_signed_amps=0.0 if sensor_blocked else l_current,
+            current_dynamic_limit_amps=current_dynamic_limit_amps,
+            # TODO(wave-c): wired to the force-charging switch entity (EASE-03).
+            force_charging=False,
+            # TODO(wave-c): wired to the EV-09 solar-surplus calc (EMS-13).
+            solar_surplus_kw=0.0,
+            battery_soc_pct=battery_soc,
+            current_phase_mode=current_phase_mode,
+            now=now,
+            fuse_rating_amps=self._fuse_rating_amps,
+            cars=self._build_car_demands(),
+            safety_buffer_amps=self._safety_buffer_amps,
+            min_amps=self._min_amps,
+            max_amps=self._max_amps,
+            conversion_factor_1phase=DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
+            conversion_factor_2phase=DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
+            conversion_factor_3phase=DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
+            grid_power_cap_kw=self._grid_power_cap_kw,
+            grid_power_safety_buffer_kw=DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
+            phase_switch_threshold_kw=self._phase_switch_threshold_kw,
+            solar_start_threshold_kw=self._solar_start_threshold_kw,
+            solar_safety_buffer_kw=DEFAULT_SOLAR_SAFETY_BUFFER_KW,
+            solar_activation_delay_s=self._solar_activation_delay_s,
+            solar_deactivation_delay_s=self._solar_deactivation_delay_s,
+            battery_soc_gate_pct=self._battery_soc_gate_pct,
+            soc_round_up=DEFAULT_SOC_ROUND_UP,
+            emergency_margin_amps=self._emergency_margin_amps,
+            amp_increase_delay_s=self._amp_increase_delay_s,
+            amp_decrease_delay_s=self._amp_decrease_delay_s,
+            phase_sequence_step_timeout_s=DEFAULT_PHASE_SEQUENCE_STEP_TIMEOUT_SECONDS,
+            command_stuck_timeout_s=DEFAULT_COMMAND_STUCK_TIMEOUT_SECONDS,
+        )
+
+        decision = self._controller.decide(inputs)
+        await self._execute_commands(decision.commands)
+        await self._send_notifications(decision.notifications)
+
+        fuse_headroom_amps = (
+            0.0
+            if sensor_blocked
+            else compute_available_ess_amps(
+                fuse_rating_amps=self._fuse_rating_amps,
+                safety_buffer_amps=self._safety_buffer_amps,
+                worst_phase_amps=l_current,
+                battery_own_amps=current_dynamic_limit_amps,
+                max_ess_charge_amps=None,
+            )
+        )
+
+        return EaseeData(
+            mode=decision.mode,
+            target_amps=decision.target_amps,
+            target_phase_mode=decision.target_phase_mode,
+            sequence_state=decision.sequence_state,
+            stuck=decision.stuck,
+            dry_run=not self._is_control_enabled(),
+            last_suppressed_command=self._last_suppressed_command,
+            notification_count=len(decision.notifications),
+            override_reason=decision.override_reason,
+            charger_status=charger_status,
+            charger_power_kw=charger_power_kw,
+            fuse_headroom_amps=fuse_headroom_amps,
+        )
+
+    def _is_control_enabled(self) -> bool:
+        """Return the master "Device control" switch state (CORE-14)."""
+        return _read_control_enabled(self.config_entry)
+
+    def _read_charger_status(self) -> str:
+        """Read the charger status entity, defaulting to "disconnected"."""
+        if not self._charger_status_entity:
+            return "disconnected"
+        state = self.hass.states.get(self._charger_status_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return "disconnected"
+        return state.state
+
+    def _read_charger_power_kw(self) -> float:
+        """Read the charger power entity in kW (Easee reports kW natively)."""
+        if not self._charger_power_entity:
+            return 0.0
+        power = _read_entity_float(self.hass, self._charger_power_entity, 0.0)
+        state = self.hass.states.get(self._charger_power_entity)
+        if state is not None:
+            uom = state.attributes.get("unit_of_measurement", "")
+            if uom == "W":
+                power /= 1000.0
+        return power
+
+    def _read_current_phase_mode(self) -> str:
+        """Read the charger's actual phase mode from the status entity's attribute."""
+        if not self._charger_status_entity:
+            return "three"
+        state = self.hass.states.get(self._charger_status_entity)
+        if state is None:
+            return "three"
+        return _derive_phase_mode(state.attributes.get("config_phaseMode"))
+
+    def _build_car_demands(self) -> tuple[CarDemand, ...]:
+        """Build CarDemand snapshots from the car charging coordinators.
+
+        Mirrors EMSCoordinator._check_car_priority()'s defensive read of
+        runtime_data -- tolerates runtime_data not being set yet (first
+        refresh, during async_setup_entry, happens before it is assigned).
+        """
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        car_coordinators = getattr(runtime_data, "car_coordinators", None) or {}
+
+        demands: list[CarDemand] = []
+        for car_coordinator in car_coordinators.values():
+            data = car_coordinator.data
+            if data is None:
+                continue
+            demands.append(
+                CarDemand(
+                    active_slot=data.current_action in ("charge", "solar_charge"),
+                    home_and_plugged=data.home_and_plugged,
+                    phase_capability=data.phase_capability,
+                    max_charge_kw=data.max_charge_power_kw,
+                )
+            )
+        return tuple(demands)
+
+    async def _execute_commands(self, commands: tuple[ChargerCommand, ...]) -> None:
+        """Execute each ChargerCommand through the observe-only choke point."""
+        for command in commands:
+            await self._execute_one_command(command)
+
+    async def _execute_one_command(self, command: ChargerCommand) -> None:
+        """Translate and send (or suppress) one ChargerCommand."""
+        if not self._charger_device_id:
+            _LOGGER.warning(
+                "Charger device ID not configured -- skipping Easee command %s",
+                command.action,
+            )
+            return
+
+        domain, service, service_data = build_easee_service_call(
+            command, self._charger_device_id
+        )
+
+        # Choke point (CORE-14): suppress the command when observe-only.
+        decision = build_command_decision(
+            control_enabled=self._is_control_enabled(),
+            service_domain=domain,
+            service_name=service,
+            entity_id=self._charger_device_id,
+            value=command.value if command.value is not None else command.action,
+        )
+        if not decision.should_send:
+            _LOGGER.info(decision.dry_run_message)
+            self._last_suppressed_command = decision.dry_run_message
+            return
+
+        _LOGGER.info("Sending Easee command: %s.%s %s", domain, service, service_data)
+        await self.hass.services.async_call(domain, service, service_data, blocking=True)
+
+    async def _send_notifications(self, notifications: tuple[str, ...]) -> None:
+        """Send safety notifications via the configured notify service.
+
+        ALWAYS sent even in observe-only mode (they report real measured
+        conditions, e.g. an emergency fuse overload) -- prefixed with
+        "[observe-only] " when device control is disabled (EASE-08).
+        """
+        if not notifications or not self._notify_service:
+            return
+
+        domain, _, service = self._notify_service.partition(".")
+        if not domain or not service:
+            _LOGGER.warning(
+                "Invalid notify_service '%s' -- expected 'notify.<service>'",
+                self._notify_service,
+            )
+            return
+
+        prefix = "" if self._is_control_enabled() else "[observe-only] "
+        for message in notifications:
+            await self.hass.services.async_call(
+                domain,
+                service,
+                {"message": f"{prefix}{message}"},
+                blocking=True,
+            )
+
+
 @dataclass
 class EnergyManagerData:
     """Runtime data stored on the config entry.
@@ -1537,6 +2197,7 @@ class EnergyManagerData:
     battery_coordinator: BatteryScheduleCoordinator | None = None
     ems_coordinator: EMSCoordinator | None = None
     car_coordinators: dict[str, CarChargingCoordinator] = field(default_factory=dict)
+    easee_coordinator: EaseeCoordinator | None = None
     modules_enabled: dict[str, bool] = field(default_factory=dict)
     # Master "Device control" switch state (CORE-14). False = observe-only:
     # coordinators still compute and publish decisions, but no outgoing
