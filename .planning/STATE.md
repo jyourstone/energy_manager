@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 4.1 (INSERTED) -- correctness + safety fixes from the 2026-07-28 full-system audit, plus HACS packaging pass
+**Current focus:** Phase 5 EXECUTED (charger control, observe-only verified locally) -- next: live parallel-run UAT per 05-CUTOVER.md, then Phase 6
 
 ## Current Position
 
-Phase: 4.1 of 6 (Correctness + Safety Fixes and HACS Packaging) -- COMPLETE except CORE-15 checkbox pending human glance at Swedish strings
+Phase: 5 of 6 (Easee Charger Control) -- EXECUTED, observe-only verified in dev; live parallel-run UAT pending (05-CUTOVER.md)
 Plan: parallel-agent execution (no numbered plans)
-Status: Complete -- slot-duration fix (7ecdd41), signed fuse math + fail-behavior + battery add-back + asymmetric timing + car-priority wiring (886844a), HACS packaging (a8313d2), sv translations + selector labels (351263f). 103 tests green, ruff clean
-Last activity: 2026-07-28 -- Phase 4.1 executed via parallel agents; Phase 5 research written (05-RESEARCH.md, b9613cb)
+Status: Phase 5 waves A/B/C landed (124d0a7, 7df81e8, 9f5d7bb): charger_state_machine.py (111 tests), EaseeCoordinator + options + observe-only command gating, charger entities + solar surplus. 287 tests green, ruff clean. Dev verification: laddarstatus sensor computing, dry_run true, zero easee calls, shared fuse arbiter (16.3A both sensors)
+Last activity: 2026-07-28 -- Phase 5 executed via 3 sequential agent waves + headless dev verification; cutover checklist written (05-CUTOVER.md)
 
-Progress: [########=.] 80%
+Progress: [#########.] 90%
 
 ## Performance Metrics
 

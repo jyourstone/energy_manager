@@ -16,8 +16,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Home Battery Schedule** - Multi-cycle charge/discharge scheduling based on electricity prices and solar production
 - [x] **Phase 3: EMS Controller** - Real-time battery mode execution with fuse protection and safety guards
 - [ ] **Phase 4: Car Charging** - Per-car price-optimized charging schedules with departure constraints (executed; human UAT re-run pending)
-- [ ] **Phase 4.1: Correctness + Safety Fixes and HACS Packaging** (INSERTED) - Cross-cutting fixes found in the 2026-07-28 full-system audit, plus repo packaging for HACS compliance
-- [ ] **Phase 5: Easee Charger Control** - Physical charger control with state machine, solar charging, fuse limiting, and observe-only mode
+- [x] **Phase 4.1: Correctness + Safety Fixes and HACS Packaging** (INSERTED) - Cross-cutting fixes found in the 2026-07-28 full-system audit, plus repo packaging for HACS compliance
+- [x] **Phase 5: Easee Charger Control** - Physical charger control with state machine, solar charging, fuse limiting, and observe-only mode
 - [ ] **Phase 6: Polish + Release** - Options flow, diagnostics, helper/template internalization, economics model, algorithm improvements, test coverage, and HACS publication
 
 ## Phase Details
@@ -126,11 +126,11 @@ Plans:
 **Plans**: 5 planned (see 05-RESEARCH.md)
 
 Plans:
-- [ ] 05-01-PLAN.md -- TDD: charger_state_machine.py pure module (arbitration, amp calc, conversion factors, hysteresis, fuse layers, unauthorized-charge detection)
-- [ ] 05-02-PLAN.md -- TDD: phase-switch + start/stop sequence states, stuck-state timeouts, power cross-checks
-- [ ] 05-03-PLAN.md -- EaseeCoordinator, command executor, observe-only master switch, config flow step, shared fuse arbiter
-- [ ] 05-04-PLAN.md -- Charger entities (status sensor, force switch, master switch), EN+SV translations, solar-surplus wiring (EV-09)
-- [ ] 05-05-PLAN.md -- UAT prep: observe-only parallel-run checklist, cutover checklist
+- [x] 05-01 (Wave A) -- TDD: charger_state_machine.py pure module (arbitration, amp calc, conversion factors, hysteresis, fuse layers, unauthorized-charge detection)
+- [x] 05-02 (Wave A) -- TDD: phase-switch + start/stop sequence states, stuck-state timeouts, power cross-checks
+- [x] 05-03 (Wave B) -- EaseeCoordinator, command executor, observe-only master switch, config flow step, shared fuse arbiter
+- [x] 05-04 (Wave C) -- Charger entities (status sensor, force switch, master switch), EN+SV translations, solar-surplus wiring (EV-09)
+- [x] 05-05 -- UAT prep: observe-only parallel-run checklist, cutover checklist
 
 ### Phase 6: Polish + Release
 **Goal**: The integration is self-contained with zero external helper dependencies, fully configurable via options flow, comprehensively tested, and ready for HACS publication
@@ -161,8 +161,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 4.1 -> 5 -> 6
 | 2. Home Battery Schedule | 5/5 | Complete | 2026-02-16 |
 | 3. EMS Controller | 5/5 | Complete | 2026-02-23 |
 | 4. Car Charging | 4/4 | Executed -- human UAT re-run pending (8/10 tests) | - |
-| 4.1 Correctness + Safety Fixes and HACS Packaging | - | In progress | - |
-| 5. Easee Charger Control | 0/0 | Not started | - |
+| 4.1 Correctness + Safety Fixes and HACS Packaging | - | Complete (incl. local UAT + bug fixes) | 2026-07-28 |
+| 5. Easee Charger Control | 3 waves | Executed + observe-only verified locally -- live parallel-run UAT pending | 2026-07-28 |
 | 6. Polish + Release | 0/0 | Not started | - |
 
 ---

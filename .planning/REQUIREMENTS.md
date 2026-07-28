@@ -24,8 +24,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **CORE-11**: ALL manual HA helpers AND template sensors are replaced -- inputs become integration-owned entities (number, switch, select, datetime), derived values (fuse headroom, filtered house load, solar surplus, actual price incl. fees) are computed internally and exposed as diagnostic sensors; zero Jinja templates required
 - [x] **CORE-12**: Integration modules (Home Battery, EV Charging) can be enabled/disabled independently
 - [x] **CORE-13**: Each module works standalone without requiring other modules to be enabled
-- [ ] **CORE-14**: Observe-only (dry-run) mode plus master enable switch -- integration computes and logs all decisions without sending any device commands, for safe parallel running next to a legacy system
-- [ ] **CORE-15**: English and Swedish translations for all UI text (extends CORE-09)
+- [x] **CORE-14**: Observe-only (dry-run) mode plus master enable switch -- integration computes and logs all decisions without sending any device commands, for safe parallel running next to a legacy system
+- [x] **CORE-15**: English and Swedish translations for all UI text (extends CORE-09)
 
 ### Home Battery
 
@@ -55,11 +55,11 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **EMS-06**: Fuse rating is a required config field with validation
 - [x] **EMS-07**: User can view EMS status sensor showing current mode and fuse headroom
 - [x] **EMS-08**: PV-based opportunistic charging activates when sufficient solar power detected and battery not full
-- [ ] **EMS-09**: Fuse math uses SIGNED phase currents (import positive, export negative) -- PV export increases available headroom; fuse rating (default 20 A) and safety buffer (default 1 A) are advanced config options
-- [ ] **EMS-10**: Sensor-unavailable behavior is configurable: degrade with assumed load (default, 10 A configurable) or block charging -- never a silent 0 A assumption
-- [ ] **EMS-11**: Battery's own charging draw is added back when computing available ESS headroom (no self-ratcheting limit)
-- [ ] **EMS-12**: ESS charge-limit changes use asymmetric timing -- decreases apply immediately, increases only after a configurable stability delay (default 180 s)
-- [ ] **EMS-13**: User can exclude specific power sensors (e.g. a separately-managed water heater) from the house consumption calculation
+- [x] **EMS-09**: Fuse math uses SIGNED phase currents (import positive, export negative) -- PV export increases available headroom; fuse rating (default 20 A) and safety buffer (default 1 A) are advanced config options
+- [x] **EMS-10**: Sensor-unavailable behavior is configurable: degrade with assumed load (default, 10 A configurable) or block charging -- never a silent 0 A assumption
+- [x] **EMS-11**: Battery's own charging draw is added back when computing available ESS headroom (no self-ratcheting limit)
+- [x] **EMS-12**: ESS charge-limit changes use asymmetric timing -- decreases apply immediately, increases only after a configurable stability delay (default 180 s)
+- [x] **EMS-13**: User can exclude specific power sensors (e.g. a separately-managed water heater) from the house consumption calculation
 
 ### EV Charging
 
@@ -71,22 +71,22 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **EV-06**: User can manually add cars with custom entity mappings
 - [x] **EV-07**: Schedule considers car battery capacity and current SOC to calculate energy needed
 - [x] **EV-08**: Fallback charging activates for unrecognized connected vehicles during off-peak hours (window configurable, default 00:00-06:00)
-- [ ] **EV-09**: Solar-surplus EV charging routes excess PV power to charger with hysteresis to prevent cycling
-- [ ] **EV-10**: Dynamic phase switching between 1-phase and 3-phase based on available power
+- [x] **EV-09**: Solar-surplus EV charging routes excess PV power to charger with hysteresis to prevent cycling
+- [x] **EV-10**: Dynamic phase switching between 1-phase and 3-phase based on available power
 - [x] **EV-11**: Schedule sensor exposes current state with full schedule in attributes
-- [ ] **EV-12**: Per-car phase capability option (1, 2 or 3 phases, default 3) with matching amp/kW conversion factors -- supports cars that charge on fewer phases (e.g. VW ID.3 on 2)
+- [x] **EV-12**: Per-car phase capability option (1, 2 or 3 phases, default 3) with matching amp/kW conversion factors -- supports cars that charge on fewer phases (e.g. VW ID.3 on 2)
 
 ### Easee Charger Control
 
-- [ ] **EASE-01**: Integration controls Easee charger dynamic amp limit based on schedule and conditions
-- [ ] **EASE-02**: Start/stop charging sequences use formal state machine with defined states and transitions
-- [ ] **EASE-03**: User can force grid charging via switch entity (replaces input_boolean.easee_force_charging)
-- [ ] **EASE-04**: Solar charging mode sets charger limit based on available PV power after home consumption
-- [ ] **EASE-05**: Fuse protection limits charger amps based on current phase load and safety buffer
-- [ ] **EASE-06**: State machine handles stuck states with timeout detection and recovery
-- [ ] **EASE-07**: Battery SOC check prevents solar EV charging until battery is full (configurable threshold, default 100%)
-- [ ] **EASE-08**: Safety events (fuse emergency pause, 0A safety stop, command verification failure) send push notifications to a user-configurable notify target
-- [ ] **EASE-09**: All tuned control constants are config options with production-proven defaults: amp increase delay 120 s / decrease delay 5 s, phase switch threshold 4.1 kW, max grid charge power 12 kW, solar start threshold 1.5 kW with 300 s activation delay and configurable deactivation delay, min/max charge amps 6/16 A
+- [x] **EASE-01**: Integration controls Easee charger dynamic amp limit based on schedule and conditions
+- [x] **EASE-02**: Start/stop charging sequences use formal state machine with defined states and transitions
+- [x] **EASE-03**: User can force grid charging via switch entity (replaces input_boolean.easee_force_charging)
+- [x] **EASE-04**: Solar charging mode sets charger limit based on available PV power after home consumption
+- [x] **EASE-05**: Fuse protection limits charger amps based on current phase load and safety buffer
+- [x] **EASE-06**: State machine handles stuck states with timeout detection and recovery
+- [x] **EASE-07**: Battery SOC check prevents solar EV charging until battery is full (configurable threshold, default 100%)
+- [x] **EASE-08**: Safety events (fuse emergency pause, 0A safety stop, command verification failure) send push notifications to a user-configurable notify target
+- [x] **EASE-09**: All tuned control constants are config options with production-proven defaults: amp increase delay 120 s / decrease delay 5 s, phase switch threshold 4.1 kW, max grid charge power 12 kW, solar start threshold 1.5 kW with 300 s activation delay and configurable deactivation delay, min/max charge amps 6/16 A
 
 ### Quality & Testing
 
@@ -153,8 +153,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CORE-11 | Phase 6 | Pending |
 | CORE-12 | Phase 1 | Complete |
 | CORE-13 | Phase 1 | Complete |
-| CORE-14 | Phase 5 | Pending |
-| CORE-15 | Phase 4.1 | Pending |
+| CORE-14 | Phase 5 | Complete |
+| CORE-15 | Phase 4.1 | Complete |
 | BATT-01 | Phase 2 | Complete |
 | BATT-02 | Phase 2 | Complete |
 | BATT-03 | Phase 2 | Complete |
@@ -178,11 +178,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EMS-06 | Phase 3 | Complete |
 | EMS-07 | Phase 3 | Complete |
 | EMS-08 | Phase 3 | Complete |
-| EMS-09 | Phase 4.1 | Pending |
-| EMS-10 | Phase 4.1 | Pending |
-| EMS-11 | Phase 4.1 | Pending |
-| EMS-12 | Phase 4.1 | Pending |
-| EMS-13 | Phase 5 | Pending |
+| EMS-09 | Phase 4.1 | Complete |
+| EMS-10 | Phase 4.1 | Complete |
+| EMS-11 | Phase 4.1 | Complete |
+| EMS-12 | Phase 4.1 | Complete |
+| EMS-13 | Phase 5 | Complete |
 | EV-01 | Phase 4 | Complete |
 | EV-02 | Phase 4 | Complete |
 | EV-03 | Phase 4 | Complete |
@@ -191,19 +191,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EV-06 | Phase 4 | Complete |
 | EV-07 | Phase 4 | Complete |
 | EV-08 | Phase 4 | Complete |
-| EV-09 | Phase 5 | Pending |
-| EV-10 | Phase 5 | Pending |
+| EV-09 | Phase 5 | Complete |
+| EV-10 | Phase 5 | Complete |
 | EV-11 | Phase 4 | Complete |
-| EV-12 | Phase 5 | Pending |
-| EASE-01 | Phase 5 | Pending |
-| EASE-02 | Phase 5 | Pending |
-| EASE-03 | Phase 5 | Pending |
-| EASE-04 | Phase 5 | Pending |
-| EASE-05 | Phase 5 | Pending |
-| EASE-06 | Phase 5 | Pending |
-| EASE-07 | Phase 5 | Pending |
-| EASE-08 | Phase 5 | Pending |
-| EASE-09 | Phase 5 | Pending |
+| EV-12 | Phase 5 | Complete |
+| EASE-01 | Phase 5 | Complete |
+| EASE-02 | Phase 5 | Complete |
+| EASE-03 | Phase 5 | Complete |
+| EASE-04 | Phase 5 | Complete |
+| EASE-05 | Phase 5 | Complete |
+| EASE-06 | Phase 5 | Complete |
+| EASE-07 | Phase 5 | Complete |
+| EASE-08 | Phase 5 | Complete |
+| EASE-09 | Phase 5 | Complete |
 | QUAL-01 | Phase 6 | Pending |
 | QUAL-02 | Phase 6 | Pending |
 | QUAL-03 | Phase 6 | Pending |
@@ -217,4 +217,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2025-02-15*
-*Last updated: 2026-07-28 (owner decisions folded in: 13 new requirements CORE-14/15, BATT-13..15, EMS-09..13, EV-12, EASE-08/09; Phase 1-3 requirements marked Complete per verified phases; Phase 4.1 inserted)*
+*Last updated: 2026-07-28 (Phase 5 executed: CORE-14/15, EMS-13, EV-09/10/12, EASE-01..09 complete pending human UAT; earlier same day: owner decisions folded in: 13 new requirements CORE-14/15, BATT-13..15, EMS-09..13, EV-12, EASE-08/09; Phase 1-3 requirements marked Complete per verified phases; Phase 4.1 inserted)*
