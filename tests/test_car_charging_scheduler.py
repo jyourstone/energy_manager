@@ -446,13 +446,21 @@ class TestCurrentAction:
     """current_action derived from which slot contains `now`."""
 
     def test_current_action_charge_when_in_charge_slot(self):
-        """When now falls at the start of a selected charge slot, current_action='charge'."""
+        """When now falls mid-slot (not at an exact boundary) within a
+        selected charge slot, current_action='charge'.
+
+        Regression test for the in-progress-slot exclusion bug: the old
+        filter (`s.start >= now`) dropped the slot covering 'now' unless
+        'now' happened to land exactly on a slot boundary, so current_action
+        fell back to 'idle' almost all the time in real (non-boundary-aligned)
+        ticks.
+        """
         # Make slots where hour 2 is cheapest (will be selected for charging)
         prices = [(h, 1.00 if h != 2 else 0.10) for h in range(10)]
         slots = _make_slots(prices)
         departure = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
-        # now is exactly at hour 2 start (slot start >= now includes it)
-        now = datetime(2026, 2, 15, 2, 0, 0, tzinfo=UTC)
+        # now is mid-slot -- 30 minutes into hour 2's slot, not at a boundary.
+        now = datetime(2026, 2, 15, 2, 30, 0, tzinfo=UTC)
 
         result = build_car_charging_schedule(
             price_slots=slots,
@@ -467,12 +475,45 @@ class TestCurrentAction:
         # Hour 2 is cheapest -> should be the charge slot for ~7.7 kWh needed
         assert result.current_action == "charge"
 
+    def test_current_action_charge_7_minutes_into_quarter_hour_slot(self):
+        """now = 7 minutes into a cheap 15-min slot that should charge ->
+        current_action must be 'charge', not 'idle'. This is the exact
+        real-world tick shape (coordinator polls mid-slot, essentially never
+        exactly on a 15-minute boundary) that the in-progress-slot exclusion
+        bug broke."""
+        prices = [(0, 0.10)] + [(q, 1.00) for q in range(1, 8)]
+        slots = _make_quarter_slots(prices)
+        departure = datetime(2026, 2, 15, 2, 0, 0, tzinfo=UTC)
+        slot0_start = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+        now = slot0_start + timedelta(minutes=7)
+
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=95.0,
+            target_soc_pct=100.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=DEFAULT_CHARGE_POWER,
+            now=now,
+        )
+
+        assert result.current_action == "charge"
+
     def test_current_action_idle_when_not_in_charge_slot(self):
-        """When now falls within an idle slot, current_action='idle'."""
-        prices = [(h, 0.10 if h < 3 else 1.00) for h in range(10)]
+        """When now falls mid-slot within a slot that is NOT selected for
+        charging (i.e. it's the in-progress slot but it isn't among the
+        cheapest), current_action='idle'.
+
+        The in-progress slot (hour 5, price 2.00) is deliberately pricier
+        than the cheap future slots (hours 6-9, price 0.10) so it's
+        correctly excluded from selection on price alone -- this is
+        distinct from the old bug where the in-progress slot was excluded
+        unconditionally regardless of price.
+        """
+        prices = [(h, 2.00 if h == 5 else 1.00 if h < 5 else 0.10) for h in range(10)]
         slots = _make_slots(prices)
         departure = datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC)
-        # now is in hour 5 (not a cheap slot)
+        # now is mid-slot in hour 5 (the pricier in-progress slot).
         now = datetime(2026, 2, 15, 5, 30, 0, tzinfo=UTC)
 
         result = build_car_charging_schedule(
@@ -868,3 +909,111 @@ class TestFallbackModeQuarterSlots:
         charge_prices = sorted(s.price for s in charge_slots)
         expected = [round(0.10 * (q + 1), 2) for q in range(20)]
         assert charge_prices == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# Test 16: In-progress slot -- included (not just start >= now) and
+# pro-rated to its remaining duration.
+#
+# BUG: the window filter (`s.start >= now`) excluded the slot currently in
+# progress, so the output schedule never contained the slot covering 'now'
+# except at an exact slot boundary -- current_action fell back to 'idle'
+# almost all the time, and scheduled charging never actually triggered the
+# charger. FIX: filter on `s.end > now` instead (keeps the in-progress
+# slot), and pro-rate its deliverable energy to the remaining duration
+# (end - max(start, now)) so selection/fallback energy math isn't
+# over-credited for time that has already elapsed.
+# ---------------------------------------------------------------------------
+
+
+class TestInProgressSlotIncludedAndProrated:
+    """The in-progress slot is included in the schedule and its deliverable
+    energy is pro-rated to the time remaining, not its full duration."""
+
+    def test_in_progress_slot_is_included_mid_slot(self):
+        """now falls 30 minutes into an hourly slot -- that slot must still
+        appear in the schedule (with its true, unmodified start time)."""
+        slots = _make_slots([(0, 0.10), (1, 0.20), (2, 0.30)])
+        departure = datetime(2026, 2, 15, 3, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 30, 0, tzinfo=UTC)
+
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=90.0,
+            target_soc_pct=100.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=DEFAULT_CHARGE_POWER,
+            now=now,
+        )
+
+        starts = [s.start for s in result.schedule]
+        assert datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC) in starts, (
+            "The in-progress slot (0:00-1:00) must be in the schedule with "
+            "its true start time, not excluded or truncated."
+        )
+
+    def test_in_progress_slot_energy_is_prorated_to_remaining_duration(self):
+        """A 15-min in-progress slot with only 5 of its 15 minutes left must
+        only count 5 minutes' worth of energy toward the target -- not the
+        full 15 minutes. This changes how many slots get selected: without
+        pro-ration, the (cheap) in-progress slot alone would look like it
+        delivers enough energy to stop after 1 slot; correctly pro-rated,
+        it delivers less, so a 2nd (also cheap) slot must be selected too."""
+        # Quarter-slots: [0:00-0:15)=0.10 (in progress), [0:15-0:30)=0.10
+        # (tie price, selected 2nd), [0:30-0:45)=0.90 (must stay idle).
+        slots = _make_quarter_slots([(0, 0.10), (1, 0.10), (2, 0.90)])
+        departure = datetime(2026, 2, 15, 0, 45, 0, tzinfo=UTC)
+        # 10 minutes into the in-progress slot -> 5 minutes (0.0833h) remain.
+        now = datetime(2026, 2, 15, 0, 10, 0, tzinfo=UTC)
+
+        # max_charge_power_kw=12kW: full 15-min slot delivers 3.0 kWh;
+        # pro-rated remaining 5 min delivers 1.0 kWh. energy_needed=2.0 kWh
+        # (100 kWh battery, 20%->22% SOC gap) -- achievable with 1 full slot
+        # (3.0 kWh) if the in-progress slot were wrongly credited in full,
+        # but requires 2 slots (1.0 + 3.0 = 4.0 kWh) once pro-rated.
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=20.0,
+            target_soc_pct=22.0,
+            battery_capacity_kwh=100.0,
+            max_charge_power_kw=12.0,
+            now=now,
+        )
+
+        assert result.energy_needed_kwh == pytest.approx(2.0)
+        assert result.charging_slot_count == 2
+
+        charge_slots = [s for s in result.schedule if s.action == "charge"]
+        charge_prices = sorted(s.price for s in charge_slots)
+        assert charge_prices == pytest.approx([0.10, 0.10])
+
+        # The expensive 3rd slot must remain idle.
+        expensive = [s for s in result.schedule if s.price == pytest.approx(0.90)]
+        assert all(s.action == "idle" for s in expensive)
+
+    def test_fallback_mode_prorates_in_progress_slot_energy(self):
+        """Fallback-mode's total-energy-halving math must also use the
+        pro-rated in-progress-slot energy, not the full-duration value."""
+        # In-progress slot with only 5 of 15 minutes left, plus one full
+        # future slot. max_charge_power_kw=12kW.
+        slots = _make_quarter_slots([(0, 0.10), (1, 0.20)])
+        departure = datetime(2026, 2, 15, 0, 30, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 10, 0, tzinfo=UTC)
+
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=20.0,
+            target_soc_pct=80.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=12.0,
+            now=now,
+            fallback_mode=True,
+        )
+
+        # total_energy = 1.0 kWh (prorated in-progress) + 3.0 kWh (full) = 4.0
+        # target_energy = 2.0 kWh -- the cheaper in-progress slot (1.0 kWh)
+        # alone isn't enough, so both slots must be selected.
+        assert result.charging_slot_count == 2

@@ -9,7 +9,11 @@ unit-tested independently.
 Algorithm overview:
     1. Calculate energy needed from SOC gap and battery capacity
     2. Calculate hours needed from energy and max charge power
-    3. Filter price slots to those within [now, departure] window
+    3. Filter price slots to those within [now, departure] window -- this
+       includes the slot currently in progress (the one containing 'now'),
+       not just slots starting at/after 'now', so the output schedule and
+       current_action derivation stay correct mid-slot; the in-progress
+       slot's deliverable energy is pro-rated to its remaining duration
     4. Sort available slots by price ascending
     5. Select cheapest slots, accumulating each slot's deliverable energy
        (slot_duration_hours * max_charge_power_kw), until energy_needed_kwh
@@ -134,11 +138,16 @@ def build_car_charging_schedule(
 
     hours_needed = energy_needed_kwh / max_charge_power_kw
 
-    # Step 2: Parse and filter slots to [now, departure] window
+    # Step 2: Parse and filter slots to [now, departure] window. Filtering
+    # on `s.end > now` (rather than `s.start >= now`) keeps the slot
+    # currently in progress -- excluding it meant the output schedule never
+    # covered 'now' except at an exact slot boundary, so current_action
+    # fell back to "idle" almost all the time and scheduled charging never
+    # actually triggered the charger.
     parsed = _parse_price_slots(price_slots)
     available = [
         s for s in parsed
-        if s.start >= now and s.end <= departure_time_utc
+        if s.end > now and s.end <= departure_time_utc
     ]
 
     if not available:
@@ -156,7 +165,7 @@ def build_car_charging_schedule(
         # EV-08: select cheapest slots covering half of the total
         # deliverable energy across all available slots.
         total_energy = sum(
-            _slot_energy_kwh(s, max_charge_power_kw) for s in available
+            _slot_energy_kwh(s, max_charge_power_kw, now) for s in available
         )
         target_energy = total_energy / 2.0
     else:
@@ -171,7 +180,7 @@ def build_car_charging_schedule(
             if cumulative_energy >= target_energy:
                 break
             charge_ids.add(id(s))
-            cumulative_energy += _slot_energy_kwh(s, max_charge_power_kw)
+            cumulative_energy += _slot_energy_kwh(s, max_charge_power_kw, now)
 
     # Step 4: Assign actions
     for slot in available:
@@ -263,15 +272,18 @@ def _parse_price_slots(price_slots: list[dict]) -> list[_SlotInfo]:
     return result
 
 
-def _slot_energy_kwh(slot: _SlotInfo, max_charge_power_kw: float) -> float:
+def _slot_energy_kwh(slot: _SlotInfo, max_charge_power_kw: float, now: datetime) -> float:
     """Return the energy deliverable in a slot at max charge power.
 
     Uses the slot's actual duration so 15-minute, 30-minute, hourly, and
     mixed-duration slot lists are all handled correctly (Nordpool moved from
     hourly to 15-minute price resolution, breaking the old "1 slot = 1 hour"
-    assumption).
+    assumption). The in-progress slot (the one containing `now`) is
+    pro-rated to its remaining duration -- energy already delivered before
+    `now` doesn't count toward what's still needed.
     """
-    duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
+    effective_start = max(slot.start, now)
+    duration_hours = (slot.end - effective_start).total_seconds() / 3600.0
     return duration_hours * max_charge_power_kw
 
 

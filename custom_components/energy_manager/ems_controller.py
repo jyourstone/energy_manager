@@ -147,7 +147,7 @@ def compute_ems_state(
     pv_power_w: float,
     pv_hysteresis_active: bool,
     max_soc_pct: float = 95.0,
-    safety_buffer_amps: float = 2.0,
+    safety_buffer_amps: float = 1.0,
     voltage: float = 230.0,
     sensor_blocked: bool = False,
     available_ess_amps: float | None = None,

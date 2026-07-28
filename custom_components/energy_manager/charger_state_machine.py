@@ -148,7 +148,7 @@ class ChargerInputs:
     now: datetime
     fuse_rating_amps: float
     cars: tuple[CarDemand, ...] = ()
-    safety_buffer_amps: float = 2.0
+    safety_buffer_amps: float = 1.0
     min_amps: float = 6.0
     max_amps: float = 16.0
     conversion_factor_1phase: float = 4.3
@@ -568,8 +568,8 @@ class ChargerController:
             5. Fuse Layer 1: emergency overload pause
             6. Capacity computation (fuse headroom + grid power cap + car cap)
             7. Phase-switch sequence continuation, if one is in progress
-            8. Phase-switch sequence start, if a switch is newly needed
-            9. Pre-start gate + Fuse Layer 3 (0A-target safety stop)
+            8. Pre-start gate + Fuse Layer 3 (0A-target safety stop)
+            9. Phase-switch sequence start, if a switch is newly needed
             10. Amp hysteresis + start/resume + set_dynamic_limit
         """
         now = inputs.now
@@ -696,7 +696,7 @@ class ChargerController:
 
         if self._sequence_state != "idle":
             self._sequence_mode = mode
-            return self._continue_sequence(inputs, capacity, is_drawing)
+            return self._continue_sequence(inputs, capacity, raw, is_drawing)
 
         # Fuse Layer 3 + pre-start gate, decided BEFORE any phase-mode switch
         # is considered -- there is no point requesting a phase switch when
@@ -803,7 +803,7 @@ class ChargerController:
     # -- Phase-switch sequence continuation -----------------------------
 
     def _continue_sequence(
-        self, inputs: ChargerInputs, capacity: float, is_drawing: bool
+        self, inputs: ChargerInputs, capacity: float, raw: float, is_drawing: bool
     ) -> ChargerDecision:
         now = inputs.now
         assert self._sequence_entered_at is not None
@@ -870,12 +870,18 @@ class ChargerController:
 
         if self._sequence_state == "resuming":
             if is_drawing:
+                # Fuse re-verification stays capacity-based (fuse safety),
+                # but the final limit itself must use the mode-gated `raw`
+                # (already min(capacity, solar_raw, max_amps) for solar
+                # mode) -- otherwise completing a phase switch during solar
+                # mode would set a limit sized to full fuse/grid capacity
+                # instead of the solar surplus.
                 if capacity < inputs.min_amps:
                     return self._abort_sequence_insufficient(
                         inputs, "phase_switch_insufficient_before_limit"
                     )
                 final_target = self._amp_hysteresis.update(
-                    min(capacity, inputs.max_amps),
+                    raw,
                     now,
                     inputs.amp_increase_delay_s,
                     inputs.amp_decrease_delay_s,

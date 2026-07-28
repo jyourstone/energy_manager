@@ -46,7 +46,6 @@ SUBENTRY_TYPE_CAR = "car"
 CONF_CAR_NAME = "car_name"
 CONF_BATTERY_CAPACITY = "battery_capacity"
 CONF_BATTERY_LEVEL_ENTITY = "battery_level_entity"
-CONF_HOME_PLUGGED_ENTITY = "home_plugged_entity"
 CONF_CHARGER_CONNECTED_ENTITY = "charger_connected_entity"
 CONF_LOCATION_ENTITY = "location_entity"
 
@@ -184,9 +183,6 @@ EMS_MODE_MAP = {
 MAX_CHARGE_LIMIT_KW = 15.0
 
 # --- Car charging configuration ---
-
-# Config key for per-car max charge rate
-CONF_MAX_CHARGE_POWER_KW = "max_charge_power_kw"
 
 # Car charge power limits (kW)
 DEFAULT_CAR_MAX_CHARGE_POWER_KW = 7.4  # 1-phase default (32A * 230V)

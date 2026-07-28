@@ -61,7 +61,9 @@ def _car(
 def _inputs(**overrides) -> ChargerInputs:
     """ChargerInputs with ample-headroom defaults; override per test.
 
-    Defaults: fuse=20A, buffer=2A (default), worst=0A, current_limit=0A =>
+    Defaults: fuse=20A, buffer=2A (explicit -- pinned here rather than
+    relying on the ChargerInputs dataclass default so this fixture's math
+    stays stable regardless of that default), worst=0A, current_limit=0A =>
     fuse_available=18A; grid ceiling (12-0.5)*1.45=16.675A; car cap
     22*1.45=31.9A => capacity=16.675A (ample, only max_amps=16 binds).
     """
@@ -77,6 +79,7 @@ def _inputs(**overrides) -> ChargerInputs:
         "now": T0,
         "fuse_rating_amps": 20.0,
         "cars": (_car(),),
+        "safety_buffer_amps": 2.0,
     }
     defaults.update(overrides)
     return ChargerInputs(**defaults)
@@ -1308,6 +1311,128 @@ class TestPhaseSwitchSequenceInsufficientHeadroom:
 
 
 # ---------------------------------------------------------------------------
+# Phase-switch sequence completing in solar mode -- final target must be
+# bounded by the mode-gated (solar) amps, not the full fuse/grid capacity.
+# ---------------------------------------------------------------------------
+
+
+class TestPhaseSwitchSequenceSolarModeBounding:
+    """BUG: `raw = min(capacity, solar_raw, max_amps)` is computed for solar
+    mode, but _continue_sequence's "resuming" branch derived final_target
+    from bare `capacity` -- so completing a phase switch during solar mode
+    set an amp limit sized to full fuse/grid capacity instead of the solar
+    surplus. FIX: thread the mode-gated `raw` into _continue_sequence and
+    use it for the final target in "resuming"."""
+
+    def _base(self, **overrides):
+        car = _car(active_slot=False, home_and_plugged=True, phase_capability=3, max_charge_kw=22.0)
+        defaults = {
+            "cars": (car,),
+            "charger_status": "charging",
+            "charger_power_kw": 3.5,
+            "current_phase_mode": "single",
+            "current_dynamic_limit_amps": 16.0,
+            "measured_worst_case_signed_amps": 0.0,
+            "solar_surplus_kw": 5.5,
+            "battery_soc_pct": 100.0,
+        }
+        defaults.update(overrides)
+        return _inputs(**defaults)
+
+    def test_final_target_bounded_by_solar_amps_not_fuse_capacity(self):
+        """capacity (fuse/grid) is ~16.675A, well above max_amps=16A; solar
+        surplus (net=5.0kW * 1.45 A/kW = 7.25 -> floor 7A) is far lower.
+        Once the phase-switch sequence completes in solar mode, the final
+        set_dynamic_limit must be bounded by the 7A solar amps -- not 16A
+        (the fuse/grid capacity that would apply in grid/forced/scheduled
+        mode)."""
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+
+        d1 = controller.decide(self._base(now=T0))
+        assert d1.mode == "solar"
+        assert d1.sequence_state == "pausing"
+
+        d2 = controller.decide(
+            self._base(
+                now=T0 + timedelta(seconds=8), charger_status="paused", charger_power_kw=0.0
+            )
+        )
+        assert d2.sequence_state == "set_phase"
+
+        d3 = controller.decide(
+            self._base(
+                now=T0 + timedelta(seconds=12), charger_status="paused", charger_power_kw=0.0,
+                current_phase_mode="three",
+            )
+        )
+        assert d3.sequence_state == "resuming"
+
+        d4 = controller.decide(
+            self._base(
+                now=T0 + timedelta(seconds=16), charger_status="charging", charger_power_kw=3.6,
+                current_phase_mode="three",
+            )
+        )
+        assert d4.sequence_state == "set_limit"
+        assert d4.mode == "solar"
+        assert d4.commands == (d4.commands[0],)
+        assert d4.commands[0].action == "set_dynamic_limit"
+        assert d4.commands[0].value == pytest.approx(7.0)
+        assert d4.target_amps == pytest.approx(7.0)
+
+    def test_grid_mode_sequence_completion_still_uses_full_capacity(self):
+        """Sanity check: in non-solar (scheduled) mode, raw == capacity
+        (mode-gating is a no-op), so the final target is unaffected by the
+        fix and still uses the full fuse/grid capacity."""
+        car = _car(active_slot=True, home_and_plugged=True, phase_capability=3, max_charge_kw=22.0)
+        controller = ChargerController()
+        defaults = {
+            "cars": (car,),
+            "charger_status": "charging",
+            "charger_power_kw": 3.5,
+            "current_phase_mode": "single",
+            "current_dynamic_limit_amps": 16.0,
+            "measured_worst_case_signed_amps": 0.0,
+        }
+
+        d1 = controller.decide(_inputs(**defaults, now=T0))
+        assert d1.mode == "scheduled"
+        assert d1.sequence_state == "pausing"
+
+        controller.decide(
+            _inputs(
+                **{**defaults, "charger_status": "paused", "charger_power_kw": 0.0},
+                now=T0 + timedelta(seconds=8),
+            )
+        )
+        controller.decide(
+            _inputs(
+                **{
+                    **defaults,
+                    "charger_status": "paused",
+                    "charger_power_kw": 0.0,
+                    "current_phase_mode": "three",
+                },
+                now=T0 + timedelta(seconds=12),
+            )
+        )
+        d4 = controller.decide(
+            _inputs(
+                **{
+                    **defaults,
+                    "charger_status": "charging",
+                    "charger_power_kw": 3.6,
+                    "current_phase_mode": "three",
+                },
+                now=T0 + timedelta(seconds=16),
+            )
+        )
+        assert d4.sequence_state == "set_limit"
+        assert d4.commands[0].value == 16.0
+
+
+# ---------------------------------------------------------------------------
 # Phase-switch when not currently charging (no pause/resume needed)
 # ---------------------------------------------------------------------------
 
@@ -1459,3 +1584,21 @@ class TestDataclassShapes:
         car = CarDemand(active_slot=True, home_and_plugged=True)
         assert car.phase_capability == 3
         assert car.max_charge_kw == 7.4
+
+    def test_charger_inputs_default_safety_buffer_matches_canonical(self):
+        """The dataclass fallback default must match DEFAULT_SAFETY_BUFFER_AMPS
+        (1.0) -- production always passes safety_buffer_amps explicitly, but
+        the fallback must not disagree with the canonical constant."""
+        inputs = ChargerInputs(
+            charger_status="awaiting_start",
+            charger_power_kw=0.0,
+            measured_worst_case_signed_amps=0.0,
+            current_dynamic_limit_amps=0.0,
+            force_charging=False,
+            solar_surplus_kw=0.0,
+            battery_soc_pct=50.0,
+            current_phase_mode="three",
+            now=T0,
+            fuse_rating_amps=20.0,
+        )
+        assert inputs.safety_buffer_amps == 1.0

@@ -2222,6 +2222,19 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 CONF_AMP_DECREASE_DELAY, DEFAULT_AMP_DECREASE_DELAY_SECONDS
             )
         )
+        # Safety invariant: decreases must never be slower than increases.
+        # Nothing in the config flow cross-validates the two delays, so
+        # enforce it here rather than trusting configuration.
+        if self._amp_decrease_delay_s > self._amp_increase_delay_s:
+            _LOGGER.warning(
+                "amp_decrease_delay (%ss) exceeds amp_increase_delay (%ss); "
+                "clamping decrease delay to %ss -- limit decreases are a "
+                "safety property and must stay fast",
+                self._amp_decrease_delay_s,
+                self._amp_increase_delay_s,
+                self._amp_increase_delay_s,
+            )
+            self._amp_decrease_delay_s = self._amp_increase_delay_s
         self._phase_switch_threshold_kw: float = float(
             entry.options.get(
                 CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
@@ -2435,16 +2448,15 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         return state.state
 
     def _read_charger_power_kw(self) -> float:
-        """Read the charger power entity in kW (Easee reports kW natively)."""
+        """Read the charger power entity in kW.
+
+        Uses the same unit convention as every other power reader (assume W
+        unless unit_of_measurement says kW) -- Easee's power sensor carries a
+        kW unit attribute, so it is converted correctly via the shared helper.
+        """
         if not self._charger_power_entity:
             return 0.0
-        power = _read_entity_float(self.hass, self._charger_power_entity, 0.0)
-        state = self.hass.states.get(self._charger_power_entity)
-        if state is not None:
-            uom = state.attributes.get("unit_of_measurement", "")
-            if uom == "W":
-                power /= 1000.0
-        return power
+        return _read_power_kw(self.hass, self._charger_power_entity)
 
     def _read_current_phase_mode(self) -> str:
         """Read the charger's actual phase mode from the status entity's attribute."""
