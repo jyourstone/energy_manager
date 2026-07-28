@@ -1,0 +1,14 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: energy_manager_ha
+    restart: unless-stopped
+    volumes:
+      # HA config directory (persistent)
+      - ./config:/config
+      # Mount the integration directly into HA
+      - ../custom_components/energy_manager:/config/custom_components/energy_manager:ro
+    ports:
+      - "8123:8123"
+    environment:
+      - TZ=Europe/Stockholm

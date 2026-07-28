@@ -1,0 +1,405 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Price Source",
+        "description": "Select your Nordpool electricity price sensor.",
+        "data": {
+          "nordpool_sensor": "Nordpool sensor"
+        },
+        "data_description": {
+          "nordpool_sensor": "Select the Nordpool sensor that provides your electricity prices. Both the official HA Nordpool and the HACS Nordpool integration are supported."
+        }
+      },
+      "modules": {
+        "title": "Modules",
+        "description": "Choose which energy management modules to enable. You can change this later.",
+        "data": {
+          "battery_enabled": "Home Battery",
+          "ev_enabled": "EV Charging"
+        },
+        "data_description": {
+          "battery_enabled": "Enable home battery charge/discharge scheduling based on electricity prices.",
+          "ev_enabled": "Enable EV charging optimization with price-aware scheduling."
+        }
+      },
+      "battery": {
+        "title": "Home Battery",
+        "description": "Configure your home battery system. Entities are auto-detected from SigenStor.",
+        "data": {
+          "soc_entity": "Battery SOC sensor",
+          "battery_power_entity": "Battery power sensor",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "forecast_solar_entity": "Solar forecast sensors",
+          "charge_buffer_pct": "Charge buffer (%)",
+          "production_factor": "Solar production factor",
+          "estimated_charge_power_kw": "Estimated charge power (kW)",
+          "peak_gap_hours": "Peak grouping gap (h)"
+        },
+        "data_description": {
+          "soc_entity": "Sensor showing battery state of charge (%).",
+          "battery_power_entity": "Sensor showing battery power (W).",
+          "battery_capacity_kwh": "Total usable battery capacity in kWh.",
+          "forecast_solar_entity": "Optional Forecast.Solar \"remaining today\" sensor(s) for solar-aware scheduling -- select one or more (e.g. east + west arrays); their readings are summed. Leave empty if not available.",
+          "charge_buffer_pct": "Extra percentage added on top of the calculated charge deficit before scheduling charge slots.",
+          "production_factor": "Multiplier applied to the solar forecast reading to account for forecast optimism (1.0 = trust the forecast fully).",
+          "estimated_charge_power_kw": "Assumed charging rate used to size how many slots are needed to cover a charge deficit (capped by the max charging power number entity).",
+          "peak_gap_hours": "Maximum gap between expensive hours to still treat them as the same discharge peak."
+        }
+      },
+      "ems": {
+        "title": "EMS Control",
+        "description": "Configure fuse protection and battery control entities. Control entities are auto-detected from SigenStor.",
+        "data": {
+          "fuse_rating_amps": "Fuse rating (A)",
+          "fuse_safety_buffer_amps": "Fuse safety buffer (A)",
+          "ems_select_entity": "EMS mode select entity",
+          "charge_limit_entity": "Max charging limit entity",
+          "discharge_limit_entity": "Max discharging limit entity",
+          "grid_power_entity": "Grid power sensor",
+          "grid_phase_a_entity": "Grid phase A power",
+          "grid_phase_b_entity": "Grid phase B power",
+          "grid_phase_c_entity": "Grid phase C power",
+          "pv_power_entity": "PV power sensor",
+          "sensor_fail_behavior": "If current sensors are unavailable",
+          "assumed_load_amps": "Assumed load when sensors unavailable (A)",
+          "max_ess_charge_amps": "Max battery charging current (A)",
+          "ess_increase_delay": "Charge limit increase delay (s)"
+        },
+        "data_description": {
+          "fuse_rating_amps": "Your main fuse rating in amps. Used to calculate safe charging limits.",
+          "fuse_safety_buffer_amps": "Advanced: extra safety margin subtracted from the fuse rating before any charging headroom is calculated.",
+          "ems_select_entity": "Select entity controlling the SigenStor EMS mode.",
+          "charge_limit_entity": "Number entity for max battery charging limit (kW).",
+          "discharge_limit_entity": "Number entity for max battery discharging limit (kW).",
+          "grid_power_entity": "Fallback: total grid active power (kW or W), signed (positive = import, negative = export). Used only when per-phase sensors are not configured.",
+          "grid_phase_a_entity": "Per-phase grid power sensor for phase A (kW or W), signed (positive = import, negative = export). For 3-phase fuse protection, configure all three phases.",
+          "grid_phase_b_entity": "Per-phase grid power sensor for phase B (kW or W), signed (positive = import, negative = export).",
+          "grid_phase_c_entity": "Per-phase grid power sensor for phase C (kW or W), signed (positive = import, negative = export).",
+          "pv_power_entity": "Sensor showing current PV/solar power output (W).",
+          "sensor_fail_behavior": "Advanced: what to do when the grid current sensors are unavailable, unknown, or not configured. 'Assume load' keeps charging using an assumed load estimate; 'Block' pauses battery charging entirely until sensors recover.",
+          "assumed_load_amps": "Advanced: load in amps to assume when current sensors are unavailable and the behavior above is 'Assume load'.",
+          "max_ess_charge_amps": "Advanced: hard safety cap on the battery's own charging current, independent of fuse headroom.",
+          "ess_increase_delay": "Advanced: how long a higher charge limit must stay stable before it is applied. Decreases always apply immediately."
+        }
+      },
+      "ev": {
+        "title": "EV Charging",
+        "description": "Configure your EV charger. Entities are auto-detected from Easee.",
+        "data": {
+          "charger_status_entity": "Charger status sensor",
+          "charger_power_entity": "Charger power sensor",
+          "charger_device_id": "Charger device ID",
+          "house_consumption_entity": "House consumption sensor",
+          "excluded_power_entities": "Excluded power sensors",
+          "notify_service": "Notification service",
+          "min_charge_amps": "Minimum charging current (A)",
+          "max_charge_amps": "Maximum charging current (A)",
+          "max_grid_charge_power_kw": "Maximum grid charging power (kW)",
+          "amp_increase_delay": "Charging current increase delay (s)",
+          "amp_decrease_delay": "Charging current decrease delay (s)",
+          "phase_switch_threshold_kw": "3-phase switch threshold (kW)",
+          "solar_start_threshold_kw": "Solar charging start threshold (kW)",
+          "solar_activation_delay": "Solar charging activation delay (s)",
+          "solar_deactivation_delay": "Solar charging deactivation delay (s)",
+          "battery_soc_gate_pct": "Battery SOC gate for solar charging (%)",
+          "emergency_margin_amps": "Emergency overload margin (A)"
+        },
+        "data_description": {
+          "charger_status_entity": "Sensor showing charger connection status.",
+          "charger_power_entity": "Sensor showing charger power output (W).",
+          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong.",
+          "house_consumption_entity": "Sensor showing total house power consumption, used for solar-surplus charging. Auto-detected from SigenStor.",
+          "excluded_power_entities": "Optional: power sensors to subtract from house consumption (e.g. a separately-managed water heater) before computing solar surplus.",
+          "notify_service": "Optional notify service (e.g. 'notify.mobile_app_x') for safety notifications. Leave empty to disable notifications.",
+          "min_charge_amps": "Advanced: the lowest current the charger will ever be set to (Easee minimum is 6A).",
+          "max_charge_amps": "Advanced: the highest current the charger will ever be set to.",
+          "max_grid_charge_power_kw": "Advanced: absolute grid charging power ceiling.",
+          "amp_increase_delay": "Advanced: how long a higher charging current must stay stable before it is applied.",
+          "amp_decrease_delay": "Advanced: how long a lower charging current must stay stable before it is applied. Always much shorter than the increase delay -- this is a safety property.",
+          "phase_switch_threshold_kw": "Advanced: available power below which the charger switches to single-phase charging.",
+          "solar_start_threshold_kw": "Advanced: minimum net solar surplus to start opportunistic solar charging.",
+          "solar_activation_delay": "Advanced: how long solar surplus must be continuously available before solar charging activates.",
+          "solar_deactivation_delay": "Advanced: how long solar surplus must be continuously unavailable before solar charging deactivates.",
+          "battery_soc_gate_pct": "Advanced: minimum house battery charge level before solar charging is allowed to divert surplus to the car.",
+          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
+        }
+      }
+    },
+    "error": {
+      "nordpool_not_found": "Could not find a valid Nordpool sensor. Please verify the entity exists and the Nordpool integration is loaded."
+    },
+    "abort": {
+      "already_configured": "Energy Manager is already configured."
+    }
+  },
+  "config_subentries": {
+    "car": {
+      "entry_type": "Car",
+      "initiate_flow": {
+        "user": "Add car"
+      },
+      "step": {
+        "user": {
+          "title": "Add Car",
+          "description": "Configure a car for charging optimization. Entities are auto-detected from Skoda/VW integrations.",
+          "data": {
+            "car_name": "Car name",
+            "battery_capacity": "Battery capacity (kWh)",
+            "battery_level_entity": "Battery level sensor",
+            "charger_connected_entity": "Car charger connected sensor",
+            "location_entity": "Car location tracker",
+            "phase_capability": "Charger phases used by this car"
+          },
+          "data_description": {
+            "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
+            "battery_capacity": "Total battery capacity of the car in kWh.",
+            "battery_level_entity": "Sensor showing the car's battery level (%).",
+            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
+            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home.",
+            "phase_capability": "How many of the charger's phases this car actually draws on when it is in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2."
+          }
+        },
+        "reconfigure": {
+          "title": "Edit Car",
+          "description": "Update the configuration for this car.",
+          "data": {
+            "car_name": "Car name",
+            "battery_capacity": "Battery capacity (kWh)",
+            "battery_level_entity": "Battery level sensor",
+            "charger_connected_entity": "Car charger connected sensor",
+            "location_entity": "Car location tracker",
+            "phase_capability": "Charger phases used by this car"
+          },
+          "data_description": {
+            "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
+            "battery_capacity": "Total battery capacity of the car in kWh.",
+            "battery_level_entity": "Sensor showing the car's battery level (%).",
+            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
+            "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home.",
+            "phase_capability": "How many of the charger's phases this car actually draws on when it is in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2."
+          }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Price Source",
+        "description": "Select your Nordpool electricity price sensor.",
+        "data": {
+          "nordpool_sensor": "Nordpool sensor"
+        },
+        "data_description": {
+          "nordpool_sensor": "Select the Nordpool sensor that provides your electricity prices. Both the official HA Nordpool and the HACS Nordpool integration are supported."
+        }
+      },
+      "modules": {
+        "title": "Modules",
+        "description": "Choose which energy management modules to enable. You can change this later.",
+        "data": {
+          "battery_enabled": "Home Battery",
+          "ev_enabled": "EV Charging"
+        },
+        "data_description": {
+          "battery_enabled": "Enable home battery charge/discharge scheduling based on electricity prices.",
+          "ev_enabled": "Enable EV charging optimization with price-aware scheduling."
+        }
+      },
+      "battery": {
+        "title": "Home Battery",
+        "description": "Configure your home battery system. Entities are auto-detected from SigenStor.",
+        "data": {
+          "soc_entity": "Battery SOC sensor",
+          "battery_power_entity": "Battery power sensor",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "forecast_solar_entity": "Solar forecast sensors",
+          "charge_buffer_pct": "Charge buffer (%)",
+          "production_factor": "Solar production factor",
+          "estimated_charge_power_kw": "Estimated charge power (kW)",
+          "peak_gap_hours": "Peak grouping gap (h)"
+        },
+        "data_description": {
+          "soc_entity": "Sensor showing battery state of charge (%).",
+          "battery_power_entity": "Sensor showing battery power (W).",
+          "battery_capacity_kwh": "Total usable battery capacity in kWh.",
+          "forecast_solar_entity": "Optional Forecast.Solar \"remaining today\" sensor(s) for solar-aware scheduling -- select one or more (e.g. east + west arrays); their readings are summed. Leave empty if not available.",
+          "charge_buffer_pct": "Extra percentage added on top of the calculated charge deficit before scheduling charge slots.",
+          "production_factor": "Multiplier applied to the solar forecast reading to account for forecast optimism (1.0 = trust the forecast fully).",
+          "estimated_charge_power_kw": "Assumed charging rate used to size how many slots are needed to cover a charge deficit (capped by the max charging power number entity).",
+          "peak_gap_hours": "Maximum gap between expensive hours to still treat them as the same discharge peak."
+        }
+      },
+      "ems": {
+        "title": "EMS Control",
+        "description": "Configure fuse protection and battery control entities. Control entities are auto-detected from SigenStor.",
+        "data": {
+          "fuse_rating_amps": "Fuse rating (A)",
+          "fuse_safety_buffer_amps": "Fuse safety buffer (A)",
+          "ems_select_entity": "EMS mode select entity",
+          "charge_limit_entity": "Max charging limit entity",
+          "discharge_limit_entity": "Max discharging limit entity",
+          "grid_power_entity": "Grid power sensor",
+          "grid_phase_a_entity": "Grid phase A power",
+          "grid_phase_b_entity": "Grid phase B power",
+          "grid_phase_c_entity": "Grid phase C power",
+          "pv_power_entity": "PV power sensor",
+          "sensor_fail_behavior": "If current sensors are unavailable",
+          "assumed_load_amps": "Assumed load when sensors unavailable (A)",
+          "max_ess_charge_amps": "Max battery charging current (A)",
+          "ess_increase_delay": "Charge limit increase delay (s)"
+        },
+        "data_description": {
+          "fuse_rating_amps": "Your main fuse rating in amps. Used to calculate safe charging limits.",
+          "fuse_safety_buffer_amps": "Advanced: extra safety margin subtracted from the fuse rating before any charging headroom is calculated.",
+          "ems_select_entity": "Select entity controlling the SigenStor EMS mode.",
+          "charge_limit_entity": "Number entity for max battery charging limit (kW).",
+          "discharge_limit_entity": "Number entity for max battery discharging limit (kW).",
+          "grid_power_entity": "Fallback: total grid active power (kW or W), signed (positive = import, negative = export). Used only when per-phase sensors are not configured.",
+          "grid_phase_a_entity": "Per-phase grid power sensor for phase A (kW or W), signed (positive = import, negative = export). For 3-phase fuse protection, configure all three phases.",
+          "grid_phase_b_entity": "Per-phase grid power sensor for phase B (kW or W), signed (positive = import, negative = export).",
+          "grid_phase_c_entity": "Per-phase grid power sensor for phase C (kW or W), signed (positive = import, negative = export).",
+          "pv_power_entity": "Sensor showing current PV/solar power output (W).",
+          "sensor_fail_behavior": "Advanced: what to do when the grid current sensors are unavailable, unknown, or not configured. 'Assume load' keeps charging using an assumed load estimate; 'Block' pauses battery charging entirely until sensors recover.",
+          "assumed_load_amps": "Advanced: load in amps to assume when current sensors are unavailable and the behavior above is 'Assume load'.",
+          "max_ess_charge_amps": "Advanced: hard safety cap on the battery's own charging current, independent of fuse headroom.",
+          "ess_increase_delay": "Advanced: how long a higher charge limit must stay stable before it is applied. Decreases always apply immediately."
+        }
+      },
+      "ev": {
+        "title": "EV Charging",
+        "description": "Configure your EV charger. Entities are auto-detected from Easee.",
+        "data": {
+          "charger_status_entity": "Charger status sensor",
+          "charger_power_entity": "Charger power sensor",
+          "charger_device_id": "Charger device ID",
+          "house_consumption_entity": "House consumption sensor",
+          "excluded_power_entities": "Excluded power sensors",
+          "notify_service": "Notification service",
+          "min_charge_amps": "Minimum charging current (A)",
+          "max_charge_amps": "Maximum charging current (A)",
+          "max_grid_charge_power_kw": "Maximum grid charging power (kW)",
+          "amp_increase_delay": "Charging current increase delay (s)",
+          "amp_decrease_delay": "Charging current decrease delay (s)",
+          "phase_switch_threshold_kw": "3-phase switch threshold (kW)",
+          "solar_start_threshold_kw": "Solar charging start threshold (kW)",
+          "solar_activation_delay": "Solar charging activation delay (s)",
+          "solar_deactivation_delay": "Solar charging deactivation delay (s)",
+          "battery_soc_gate_pct": "Battery SOC gate for solar charging (%)",
+          "emergency_margin_amps": "Emergency overload margin (A)"
+        },
+        "data_description": {
+          "charger_status_entity": "Sensor showing charger connection status.",
+          "charger_power_entity": "Sensor showing charger power output (W).",
+          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong.",
+          "house_consumption_entity": "Sensor showing total house power consumption, used for solar-surplus charging. Auto-detected from SigenStor.",
+          "excluded_power_entities": "Optional: power sensors to subtract from house consumption (e.g. a separately-managed water heater) before computing solar surplus.",
+          "notify_service": "Optional notify service (e.g. 'notify.mobile_app_x') for safety notifications. Leave empty to disable notifications.",
+          "min_charge_amps": "Advanced: the lowest current the charger will ever be set to (Easee minimum is 6A).",
+          "max_charge_amps": "Advanced: the highest current the charger will ever be set to.",
+          "max_grid_charge_power_kw": "Advanced: absolute grid charging power ceiling.",
+          "amp_increase_delay": "Advanced: how long a higher charging current must stay stable before it is applied.",
+          "amp_decrease_delay": "Advanced: how long a lower charging current must stay stable before it is applied. Always much shorter than the increase delay -- this is a safety property.",
+          "phase_switch_threshold_kw": "Advanced: available power below which the charger switches to single-phase charging.",
+          "solar_start_threshold_kw": "Advanced: minimum net solar surplus to start opportunistic solar charging.",
+          "solar_activation_delay": "Advanced: how long solar surplus must be continuously available before solar charging activates.",
+          "solar_deactivation_delay": "Advanced: how long solar surplus must be continuously unavailable before solar charging deactivates.",
+          "battery_soc_gate_pct": "Advanced: minimum house battery charge level before solar charging is allowed to divert surplus to the car.",
+          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
+        }
+      }
+    },
+    "error": {
+      "nordpool_not_found": "Could not find a valid Nordpool sensor. Please verify the entity exists and the Nordpool integration is loaded."
+    }
+  },
+  "selector": {
+    "sensor_fail_behavior": {
+      "options": {
+        "assume_load": "Assume a fixed load (recommended)",
+        "block": "Block charging until sensors recover"
+      }
+    },
+    "phase_capability": {
+      "options": {
+        "1": "1 phase",
+        "2": "2 phases",
+        "3": "3 phases"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "electricity_price": {
+        "name": "Electricity Price"
+      },
+      "battery_schedule": {
+        "name": "Battery Schedule"
+      },
+      "next_charging_slot": {
+        "name": "Next Charging Slot"
+      },
+      "next_discharging_slot": {
+        "name": "Next Discharging Slot"
+      },
+      "ems_status": {
+        "name": "EMS Status"
+      },
+      "car_schedule": {
+        "name": "Car Charging Schedule"
+      },
+      "charger_status": {
+        "name": "Charger Status"
+      },
+      "actual_electricity_price": {
+        "name": "Actual Electricity Price"
+      },
+      "house_load": {
+        "name": "House Load"
+      },
+      "solar_surplus": {
+        "name": "Solar Surplus"
+      }
+    },
+    "number": {
+      "charge_price_threshold": {
+        "name": "Charge Price Threshold"
+      },
+      "discharge_price_threshold": {
+        "name": "Discharge Price Threshold"
+      },
+      "max_charge_power": {
+        "name": "Max Charging Power"
+      },
+      "car_target_soc": {
+        "name": "Target SOC"
+      },
+      "car_max_charge_power": {
+        "name": "Max Charge Power"
+      },
+      "battery_cycle_cost": {
+        "name": "Battery Cycle Cost"
+      },
+      "grid_transfer_fee": {
+        "name": "Grid Transfer Fee"
+      },
+      "electricity_company_fee": {
+        "name": "Electricity Company Fee"
+      }
+    },
+    "time": {
+      "departure_time": {
+        "name": "Departure Time"
+      }
+    },
+    "switch": {
+      "control_enabled": {
+        "name": "Device control"
+      },
+      "force_charging": {
+        "name": "Force charging"
+      }
+    }
+  }
+}

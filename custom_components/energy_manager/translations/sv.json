@@ -1,0 +1,405 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Priskälla",
+        "description": "Välj din Nordpool-sensor för elpris.",
+        "data": {
+          "nordpool_sensor": "Nordpool-sensor"
+        },
+        "data_description": {
+          "nordpool_sensor": "Välj den Nordpool-sensor som tillhandahåller dina elpriser. Både den officiella HA Nordpool-integrationen och HACS Nordpool-integrationen stöds."
+        }
+      },
+      "modules": {
+        "title": "Moduler",
+        "description": "Välj vilka energihanteringsmoduler som ska aktiveras. Du kan ändra detta senare.",
+        "data": {
+          "battery_enabled": "Hembatteri",
+          "ev_enabled": "Elbilsladdning"
+        },
+        "data_description": {
+          "battery_enabled": "Aktivera schemaläggning av hembatteriets laddning/urladdning baserat på elpriser.",
+          "ev_enabled": "Aktivera prisoptimerad schemaläggning för elbilsladdning."
+        }
+      },
+      "battery": {
+        "title": "Hembatteri",
+        "description": "Konfigurera ditt hembatterisystem. Entiteter identifieras automatiskt från SigenStor.",
+        "data": {
+          "soc_entity": "Sensor för batteriets laddningsnivå",
+          "battery_power_entity": "Sensor för batterieffekt",
+          "battery_capacity_kwh": "Batterikapacitet (kWh)",
+          "forecast_solar_entity": "Sensorer för solprognos",
+          "charge_buffer_pct": "Laddningsbuffert (%)",
+          "production_factor": "Solprognosfaktor",
+          "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
+          "peak_gap_hours": "Gap mellan toppar (h)"
+        },
+        "data_description": {
+          "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
+          "battery_power_entity": "Sensor som visar batteriets effekt (W).",
+          "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
+          "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns.",
+          "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
+          "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
+          "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
+          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp."
+        }
+      },
+      "ems": {
+        "title": "EMS-styrning",
+        "description": "Konfigurera säkringsskydd och entiteter för batteristyrning. Styrentiteter identifieras automatiskt från SigenStor.",
+        "data": {
+          "fuse_rating_amps": "Huvudsäkringens storlek (A)",
+          "fuse_safety_buffer_amps": "Säkerhetsmarginal för säkring (A)",
+          "ems_select_entity": "Väljarentitet för EMS-läge",
+          "charge_limit_entity": "Entitet för max laddningsgräns",
+          "discharge_limit_entity": "Entitet för max urladdningsgräns",
+          "grid_power_entity": "Sensor för elnätets effekt",
+          "grid_phase_a_entity": "Elnätets effekt, fas A",
+          "grid_phase_b_entity": "Elnätets effekt, fas B",
+          "grid_phase_c_entity": "Elnätets effekt, fas C",
+          "pv_power_entity": "Sensor för PV-effekt",
+          "sensor_fail_behavior": "Om strömsensorerna är otillgängliga",
+          "assumed_load_amps": "Antagen last när sensorer är otillgängliga (A)",
+          "max_ess_charge_amps": "Max laddningsström för batteri (A)",
+          "ess_increase_delay": "Fördröjning vid höjning av laddningsgräns (s)"
+        },
+        "data_description": {
+          "fuse_rating_amps": "Din huvudsäkrings storlek i ampere. Används för att beräkna säkra laddningsgränser.",
+          "fuse_safety_buffer_amps": "Avancerat: extra säkerhetsmarginal som dras från säkringens storlek innan tillgängligt laddningsutrymme beräknas.",
+          "ems_select_entity": "Väljarentitet som styr SigenStor EMS-läge.",
+          "charge_limit_entity": "Nummerentitet för batteriets max laddningsgräns (kW).",
+          "discharge_limit_entity": "Nummerentitet för batteriets max urladdningsgräns (kW).",
+          "grid_power_entity": "Reserv: elnätets totala aktiva effekt (kW eller W), med tecken (positivt = import, negativt = export). Används endast när fasvisa sensorer inte är konfigurerade.",
+          "grid_phase_a_entity": "Fasvis sensor för elnätets effekt, fas A (kW eller W), med tecken (positivt = import, negativt = export). Konfigurera alla tre faserna för 3-fas säkringsskydd.",
+          "grid_phase_b_entity": "Fasvis sensor för elnätets effekt, fas B (kW eller W), med tecken (positivt = import, negativt = export).",
+          "grid_phase_c_entity": "Fasvis sensor för elnätets effekt, fas C (kW eller W), med tecken (positivt = import, negativt = export).",
+          "pv_power_entity": "Sensor som visar aktuell PV-/soleffekt (W).",
+          "sensor_fail_behavior": "Avancerat: vad som ska göras när elnätets strömsensorer är otillgängliga, okända eller inte konfigurerade. 'Anta en fast last' fortsätter laddningen med en uppskattad last; 'Blockera' pausar batteriladdningen helt tills sensorerna återhämtar sig.",
+          "assumed_load_amps": "Avancerat: last i ampere att anta när strömsensorerna är otillgängliga och ovanstående beteende är 'Anta en fast last'.",
+          "max_ess_charge_amps": "Avancerat: absolut säkerhetsgräns för batteriets egen laddningsström, oberoende av säkringens utrymme.",
+          "ess_increase_delay": "Avancerat: hur länge en högre laddningsgräns måste vara stabil innan den tillämpas. Sänkningar tillämpas alltid omedelbart."
+        }
+      },
+      "ev": {
+        "title": "Elbilsladdning",
+        "description": "Konfigurera din elbilsladdare. Entiteter identifieras automatiskt från Easee.",
+        "data": {
+          "charger_status_entity": "Sensor för laddarens status",
+          "charger_power_entity": "Sensor för laddarens effekt",
+          "charger_device_id": "Laddarens enhets-ID",
+          "house_consumption_entity": "Sensor för husets elförbrukning",
+          "excluded_power_entities": "Undantagna effektsensorer",
+          "notify_service": "Aviseringstjänst",
+          "min_charge_amps": "Minsta laddström (A)",
+          "max_charge_amps": "Högsta laddström (A)",
+          "max_grid_charge_power_kw": "Max laddeffekt från elnätet (kW)",
+          "amp_increase_delay": "Fördröjning vid höjning av laddström (s)",
+          "amp_decrease_delay": "Fördröjning vid sänkning av laddström (s)",
+          "phase_switch_threshold_kw": "Tröskel för växling till 3-fas (kW)",
+          "solar_start_threshold_kw": "Tröskel för start av solladdning (kW)",
+          "solar_activation_delay": "Fördröjning vid aktivering av solladdning (s)",
+          "solar_deactivation_delay": "Fördröjning vid avaktivering av solladdning (s)",
+          "battery_soc_gate_pct": "Batterinivå som krävs för solladdning (%)",
+          "emergency_margin_amps": "Marginal för nödstopp vid överlast (A)"
+        },
+        "data_description": {
+          "charger_status_entity": "Sensor som visar laddarens anslutningsstatus.",
+          "charger_power_entity": "Sensor som visar laddarens effektuttag (W).",
+          "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel.",
+          "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
+          "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas.",
+          "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
+          "min_charge_amps": "Avancerat: den lägsta ström laddaren någonsin ställs in på (Easees minimum är 6A).",
+          "max_charge_amps": "Avancerat: den högsta ström laddaren någonsin ställs in på.",
+          "max_grid_charge_power_kw": "Avancerat: absolut gräns för laddeffekt från elnätet.",
+          "amp_increase_delay": "Avancerat: hur länge en högre laddström måste vara stabil innan den tillämpas.",
+          "amp_decrease_delay": "Avancerat: hur länge en lägre laddström måste vara stabil innan den tillämpas. Alltid mycket kortare än höjningsfördröjningen -- detta är en säkerhetsegenskap.",
+          "phase_switch_threshold_kw": "Avancerat: tillgänglig effekt under vilken laddaren växlar till enfasladdning.",
+          "solar_start_threshold_kw": "Avancerat: minsta nettosolöverskott för att starta solladdning.",
+          "solar_activation_delay": "Avancerat: hur länge solöverskott måste finnas kontinuerligt innan solladdning aktiveras.",
+          "solar_deactivation_delay": "Avancerat: hur länge solöverskott måste saknas kontinuerligt innan solladdning avaktiveras.",
+          "battery_soc_gate_pct": "Avancerat: lägsta batterinivå i hembatteriet innan solladdning tillåts avleda överskott till bilen.",
+          "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser nödpaus och avisering."
+        }
+      }
+    },
+    "error": {
+      "nordpool_not_found": "Kunde inte hitta en giltig Nordpool-sensor. Kontrollera att entiteten finns och att Nordpool-integrationen är laddad."
+    },
+    "abort": {
+      "already_configured": "Energy Manager är redan konfigurerad."
+    }
+  },
+  "config_subentries": {
+    "car": {
+      "entry_type": "Bil",
+      "initiate_flow": {
+        "user": "Lägg till bil"
+      },
+      "step": {
+        "user": {
+          "title": "Lägg till bil",
+          "description": "Konfigurera en bil för laddningsoptimering. Entiteter identifieras automatiskt från Skoda/VW-integrationerna.",
+          "data": {
+            "car_name": "Bilens namn",
+            "battery_capacity": "Batterikapacitet (kWh)",
+            "battery_level_entity": "Sensor för batterinivå",
+            "charger_connected_entity": "Sensor för bilens laddkabelanslutning",
+            "location_entity": "Platsspårare för bilen",
+            "phase_capability": "Laddfaser som används av denna bil"
+          },
+          "data_description": {
+            "car_name": "Ett beskrivande namn för bilen (t.ex. 'Enyaq', 'Familjebilen').",
+            "battery_capacity": "Bilens totala batterikapacitet i kWh.",
+            "battery_level_entity": "Sensor som visar bilens batterinivå (%).",
+            "charger_connected_entity": "Valfritt: binär sensor från bilintegrationen som visar om laddkabeln är ansluten. Identifieras automatiskt från Skoda/VW-integrationerna.",
+            "location_entity": "Valfritt: platsspårare från bilintegrationen som visar fordonets position. Används för att bekräfta att bilen är hemma.",
+            "phase_capability": "Hur många av laddarens faser denna bil faktiskt använder när den är i 3-fasläge. De flesta bilar använder alla 3; vissa (t.ex. VW ID.3) använder bara 2."
+          }
+        },
+        "reconfigure": {
+          "title": "Redigera bil",
+          "description": "Uppdatera konfigurationen för denna bil.",
+          "data": {
+            "car_name": "Bilens namn",
+            "battery_capacity": "Batterikapacitet (kWh)",
+            "battery_level_entity": "Sensor för batterinivå",
+            "charger_connected_entity": "Sensor för bilens laddkabelanslutning",
+            "location_entity": "Platsspårare för bilen",
+            "phase_capability": "Laddfaser som används av denna bil"
+          },
+          "data_description": {
+            "car_name": "Ett beskrivande namn för bilen (t.ex. 'Enyaq', 'Familjebilen').",
+            "battery_capacity": "Bilens totala batterikapacitet i kWh.",
+            "battery_level_entity": "Sensor som visar bilens batterinivå (%).",
+            "charger_connected_entity": "Valfritt: binär sensor från bilintegrationen som visar om laddkabeln är ansluten. Identifieras automatiskt från Skoda/VW-integrationerna.",
+            "location_entity": "Valfritt: platsspårare från bilintegrationen som visar fordonets position. Används för att bekräfta att bilen är hemma.",
+            "phase_capability": "Hur många av laddarens faser denna bil faktiskt använder när den är i 3-fasläge. De flesta bilar använder alla 3; vissa (t.ex. VW ID.3) använder bara 2."
+          }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Priskälla",
+        "description": "Välj din Nordpool-sensor för elpris.",
+        "data": {
+          "nordpool_sensor": "Nordpool-sensor"
+        },
+        "data_description": {
+          "nordpool_sensor": "Välj den Nordpool-sensor som tillhandahåller dina elpriser. Både den officiella HA Nordpool-integrationen och HACS Nordpool-integrationen stöds."
+        }
+      },
+      "modules": {
+        "title": "Moduler",
+        "description": "Välj vilka energihanteringsmoduler som ska aktiveras. Du kan ändra detta senare.",
+        "data": {
+          "battery_enabled": "Hembatteri",
+          "ev_enabled": "Elbilsladdning"
+        },
+        "data_description": {
+          "battery_enabled": "Aktivera schemaläggning av hembatteriets laddning/urladdning baserat på elpriser.",
+          "ev_enabled": "Aktivera prisoptimerad schemaläggning för elbilsladdning."
+        }
+      },
+      "battery": {
+        "title": "Hembatteri",
+        "description": "Konfigurera ditt hembatterisystem. Entiteter identifieras automatiskt från SigenStor.",
+        "data": {
+          "soc_entity": "Sensor för batteriets laddningsnivå",
+          "battery_power_entity": "Sensor för batterieffekt",
+          "battery_capacity_kwh": "Batterikapacitet (kWh)",
+          "forecast_solar_entity": "Sensorer för solprognos",
+          "charge_buffer_pct": "Laddningsbuffert (%)",
+          "production_factor": "Solprognosfaktor",
+          "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
+          "peak_gap_hours": "Gap mellan toppar (h)"
+        },
+        "data_description": {
+          "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
+          "battery_power_entity": "Sensor som visar batteriets effekt (W).",
+          "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
+          "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns.",
+          "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
+          "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
+          "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
+          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp."
+        }
+      },
+      "ems": {
+        "title": "EMS-styrning",
+        "description": "Konfigurera säkringsskydd och entiteter för batteristyrning. Styrentiteter identifieras automatiskt från SigenStor.",
+        "data": {
+          "fuse_rating_amps": "Huvudsäkringens storlek (A)",
+          "fuse_safety_buffer_amps": "Säkerhetsmarginal för säkring (A)",
+          "ems_select_entity": "Väljarentitet för EMS-läge",
+          "charge_limit_entity": "Entitet för max laddningsgräns",
+          "discharge_limit_entity": "Entitet för max urladdningsgräns",
+          "grid_power_entity": "Sensor för elnätets effekt",
+          "grid_phase_a_entity": "Elnätets effekt, fas A",
+          "grid_phase_b_entity": "Elnätets effekt, fas B",
+          "grid_phase_c_entity": "Elnätets effekt, fas C",
+          "pv_power_entity": "Sensor för PV-effekt",
+          "sensor_fail_behavior": "Om strömsensorerna är otillgängliga",
+          "assumed_load_amps": "Antagen last när sensorer är otillgängliga (A)",
+          "max_ess_charge_amps": "Max laddningsström för batteri (A)",
+          "ess_increase_delay": "Fördröjning vid höjning av laddningsgräns (s)"
+        },
+        "data_description": {
+          "fuse_rating_amps": "Din huvudsäkrings storlek i ampere. Används för att beräkna säkra laddningsgränser.",
+          "fuse_safety_buffer_amps": "Avancerat: extra säkerhetsmarginal som dras från säkringens storlek innan tillgängligt laddningsutrymme beräknas.",
+          "ems_select_entity": "Väljarentitet som styr SigenStor EMS-läge.",
+          "charge_limit_entity": "Nummerentitet för batteriets max laddningsgräns (kW).",
+          "discharge_limit_entity": "Nummerentitet för batteriets max urladdningsgräns (kW).",
+          "grid_power_entity": "Reserv: elnätets totala aktiva effekt (kW eller W), med tecken (positivt = import, negativt = export). Används endast när fasvisa sensorer inte är konfigurerade.",
+          "grid_phase_a_entity": "Fasvis sensor för elnätets effekt, fas A (kW eller W), med tecken (positivt = import, negativt = export). Konfigurera alla tre faserna för 3-fas säkringsskydd.",
+          "grid_phase_b_entity": "Fasvis sensor för elnätets effekt, fas B (kW eller W), med tecken (positivt = import, negativt = export).",
+          "grid_phase_c_entity": "Fasvis sensor för elnätets effekt, fas C (kW eller W), med tecken (positivt = import, negativt = export).",
+          "pv_power_entity": "Sensor som visar aktuell PV-/soleffekt (W).",
+          "sensor_fail_behavior": "Avancerat: vad som ska göras när elnätets strömsensorer är otillgängliga, okända eller inte konfigurerade. 'Anta en fast last' fortsätter laddningen med en uppskattad last; 'Blockera' pausar batteriladdningen helt tills sensorerna återhämtar sig.",
+          "assumed_load_amps": "Avancerat: last i ampere att anta när strömsensorerna är otillgängliga och ovanstående beteende är 'Anta en fast last'.",
+          "max_ess_charge_amps": "Avancerat: absolut säkerhetsgräns för batteriets egen laddningsström, oberoende av säkringens utrymme.",
+          "ess_increase_delay": "Avancerat: hur länge en högre laddningsgräns måste vara stabil innan den tillämpas. Sänkningar tillämpas alltid omedelbart."
+        }
+      },
+      "ev": {
+        "title": "Elbilsladdning",
+        "description": "Konfigurera din elbilsladdare. Entiteter identifieras automatiskt från Easee.",
+        "data": {
+          "charger_status_entity": "Sensor för laddarens status",
+          "charger_power_entity": "Sensor för laddarens effekt",
+          "charger_device_id": "Laddarens enhets-ID",
+          "house_consumption_entity": "Sensor för husets elförbrukning",
+          "excluded_power_entities": "Undantagna effektsensorer",
+          "notify_service": "Aviseringstjänst",
+          "min_charge_amps": "Minsta laddström (A)",
+          "max_charge_amps": "Högsta laddström (A)",
+          "max_grid_charge_power_kw": "Max laddeffekt från elnätet (kW)",
+          "amp_increase_delay": "Fördröjning vid höjning av laddström (s)",
+          "amp_decrease_delay": "Fördröjning vid sänkning av laddström (s)",
+          "phase_switch_threshold_kw": "Tröskel för växling till 3-fas (kW)",
+          "solar_start_threshold_kw": "Tröskel för start av solladdning (kW)",
+          "solar_activation_delay": "Fördröjning vid aktivering av solladdning (s)",
+          "solar_deactivation_delay": "Fördröjning vid avaktivering av solladdning (s)",
+          "battery_soc_gate_pct": "Batterinivå som krävs för solladdning (%)",
+          "emergency_margin_amps": "Marginal för nödstopp vid överlast (A)"
+        },
+        "data_description": {
+          "charger_status_entity": "Sensor som visar laddarens anslutningsstatus.",
+          "charger_power_entity": "Sensor som visar laddarens effektuttag (W).",
+          "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel.",
+          "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
+          "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas.",
+          "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
+          "min_charge_amps": "Avancerat: den lägsta ström laddaren någonsin ställs in på (Easees minimum är 6A).",
+          "max_charge_amps": "Avancerat: den högsta ström laddaren någonsin ställs in på.",
+          "max_grid_charge_power_kw": "Avancerat: absolut gräns för laddeffekt från elnätet.",
+          "amp_increase_delay": "Avancerat: hur länge en högre laddström måste vara stabil innan den tillämpas.",
+          "amp_decrease_delay": "Avancerat: hur länge en lägre laddström måste vara stabil innan den tillämpas. Alltid mycket kortare än höjningsfördröjningen -- detta är en säkerhetsegenskap.",
+          "phase_switch_threshold_kw": "Avancerat: tillgänglig effekt under vilken laddaren växlar till enfasladdning.",
+          "solar_start_threshold_kw": "Avancerat: minsta nettosolöverskott för att starta solladdning.",
+          "solar_activation_delay": "Avancerat: hur länge solöverskott måste finnas kontinuerligt innan solladdning aktiveras.",
+          "solar_deactivation_delay": "Avancerat: hur länge solöverskott måste saknas kontinuerligt innan solladdning avaktiveras.",
+          "battery_soc_gate_pct": "Avancerat: lägsta batterinivå i hembatteriet innan solladdning tillåts avleda överskott till bilen.",
+          "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser nödpaus och avisering."
+        }
+      }
+    },
+    "error": {
+      "nordpool_not_found": "Kunde inte hitta en giltig Nordpool-sensor. Kontrollera att entiteten finns och att Nordpool-integrationen är laddad."
+    }
+  },
+  "selector": {
+    "sensor_fail_behavior": {
+      "options": {
+        "assume_load": "Anta en fast last (rekommenderas)",
+        "block": "Blockera laddning tills sensorerna återhämtar sig"
+      }
+    },
+    "phase_capability": {
+      "options": {
+        "1": "1 fas",
+        "2": "2 faser",
+        "3": "3 faser"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "electricity_price": {
+        "name": "Elpris"
+      },
+      "battery_schedule": {
+        "name": "Batterischema"
+      },
+      "next_charging_slot": {
+        "name": "Nästa laddningstillfälle"
+      },
+      "next_discharging_slot": {
+        "name": "Nästa urladdningstillfälle"
+      },
+      "ems_status": {
+        "name": "EMS-status"
+      },
+      "car_schedule": {
+        "name": "Bilens laddningsschema"
+      },
+      "charger_status": {
+        "name": "Laddarstatus"
+      },
+      "actual_electricity_price": {
+        "name": "Faktiskt elpris"
+      },
+      "house_load": {
+        "name": "Husets belastning"
+      },
+      "solar_surplus": {
+        "name": "Solöverskott"
+      }
+    },
+    "number": {
+      "charge_price_threshold": {
+        "name": "Priströskel för laddning"
+      },
+      "discharge_price_threshold": {
+        "name": "Priströskel för urladdning"
+      },
+      "max_charge_power": {
+        "name": "Max laddningseffekt"
+      },
+      "car_target_soc": {
+        "name": "Målladdningsnivå"
+      },
+      "car_max_charge_power": {
+        "name": "Max laddningseffekt"
+      },
+      "battery_cycle_cost": {
+        "name": "Batteriets cykelkostnad"
+      },
+      "grid_transfer_fee": {
+        "name": "Nätöverföringsavgift"
+      },
+      "electricity_company_fee": {
+        "name": "Elhandelsavgift"
+      }
+    },
+    "time": {
+      "departure_time": {
+        "name": "Avresetid"
+      }
+    },
+    "switch": {
+      "control_enabled": {
+        "name": "Enhetsstyrning"
+      },
+      "force_charging": {
+        "name": "Tvinga laddning"
+      }
+    }
+  }
+}
