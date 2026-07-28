@@ -123,11 +123,14 @@ Plans:
   7. Dynamic phase switching based on available power respects per-car phase capability (1/2/3, default 3) with conversion factors 4.3 / 2.5 / 1.45 A-per-kW (EV-10, EV-12)
   8. Observe-only (dry-run) mode + master switch: all decisions computed, logged and visible in status sensors while device commands are suppressed (CORE-14) -- required before running in parallel with the live AppDaemon system
   9. Safety events reach a configurable notify target (EASE-08); tuned constants exposed as options with live-system defaults (EASE-09)
-**Plans**: TBD
+**Plans**: 5 planned (see 05-RESEARCH.md)
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md -- TDD: charger_state_machine.py pure module (arbitration, amp calc, conversion factors, hysteresis, fuse layers, unauthorized-charge detection)
+- [ ] 05-02-PLAN.md -- TDD: phase-switch + start/stop sequence states, stuck-state timeouts, power cross-checks
+- [ ] 05-03-PLAN.md -- EaseeCoordinator, command executor, observe-only master switch, config flow step, shared fuse arbiter
+- [ ] 05-04-PLAN.md -- Charger entities (status sensor, force switch, master switch), EN+SV translations, solar-surplus wiring (EV-09)
+- [ ] 05-05-PLAN.md -- UAT prep: observe-only parallel-run checklist, cutover checklist
 
 ### Phase 6: Polish + Release
 **Goal**: The integration is self-contained with zero external helper dependencies, fully configurable via options flow, comprehensively tested, and ready for HACS publication
