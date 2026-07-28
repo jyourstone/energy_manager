@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/logo.png" alt="Energy Manager logo" width="140">
+</p>
+
 <h1 align="center">Energy Manager</h1>
 
 <p align="center">
