@@ -2329,6 +2329,10 @@ class EnergyManagerData:
     # toggle and read by EaseeCoordinator when building ChargerInputs.
     # Defaults OFF.
     force_charging: bool = False
+    # Platform values actually forwarded at setup -- consulted at unload so
+    # an options change (module toggle) between setup and unload can't make
+    # us unload platforms that were never set up.
+    forwarded_platforms: list[str] = field(default_factory=list)
 
 
 EnergyManagerConfigEntry = ConfigEntry[EnergyManagerData]

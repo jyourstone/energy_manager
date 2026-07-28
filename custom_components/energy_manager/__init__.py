@@ -119,8 +119,12 @@ async def async_setup_entry(
         entry_type=dr.DeviceEntryType.SERVICE,
     )
 
-    # Forward platforms for enabled modules
+    # Forward platforms for enabled modules. Remember exactly which were
+    # forwarded -- at unload time entry.options may already hold NEW values
+    # (options are persisted before update listeners fire), so recomputing
+    # from options there could unload platforms that were never set up.
     platforms = _get_enabled_platforms(entry)
+    entry.runtime_data.forwarded_platforms = [p.value for p in platforms]
     if platforms:
         await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
@@ -187,7 +191,11 @@ async def async_unload_entry(
     Returns:
         True if unload was successful.
     """
-    platforms = _get_enabled_platforms(entry)
+    forwarded = getattr(entry.runtime_data, "forwarded_platforms", None)
+    if forwarded is not None:
+        platforms = [Platform(p) for p in forwarded]
+    else:
+        platforms = _get_enabled_platforms(entry)
     if platforms:
         return await hass.config_entries.async_unload_platforms(entry, platforms)
     return True
