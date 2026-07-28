@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 4 complete -- Car Charging (4 of 4 plans complete: scheduler TDD, coordinator+entity, per-car entities, UAT gap closure)
+**Current focus:** Phase 4.1 (INSERTED) -- correctness + safety fixes from the 2026-07-28 full-system audit, plus HACS packaging pass
 
 ## Current Position
 
-Phase: 4 of 6 (Car Charging)
-Plan: 4 of 4 in current phase
-Status: Phase 04 complete -- all car charging plans executed (including gap closure)
-Last activity: 2026-02-23 -- Plan 04-04 complete: UAT gap closure (car autodetect + home+plugged derivation)
+Phase: 4.1 of 6 (Correctness + Safety Fixes and HACS Packaging)
+Plan: parallel-agent execution (no numbered plans)
+Status: In progress -- slot-duration fix, signed fuse math, sensor-fail option, battery add-back, asymmetric timing, car-priority wiring, packaging, sv translations
+Last activity: 2026-07-28 -- Full-system audit (8-agent workflow) + 12 owner decisions folded into REQUIREMENTS/ROADMAP; live HA formulas extracted and verified
 
 Progress: [########=.] 80%
 
@@ -122,6 +122,8 @@ Recent decisions affecting current work:
 - [Phase 04]: battery_percentage and charging_level added to SOC entity patterns for mySkoda compatibility
 - [Phase 04]: _is_home_and_plugged_in() uses 3-signal cascade: Easee charger status (required), car charger_connected (optional), vehicle location (optional)
 - [Phase 04]: home_plugged_entity replaced by charger_connected_entity + location_entity (auto-detected, optional manual override)
+- [2026-07-28 owner decisions]: Maximally customizable with production-tuned defaults; NO helpers or template sensors -- everything integration-owned; observe-only mode + master switch before parallel running; per-car phase capability 1/2/3 (default 3, ID.3 = 2); single charger v1 (no multi-car arbitration); guest fallback window configurable (default 00-06); single persistent departure/target entities (drop default+temporary helper UX); economics >= live parity (fees + cycle cost; discharge threshold = cycle_cost - transfer_fee); port March 2026 algorithm improvements; Forecast.Solar only, multiple sensors summed; configurable notify target; EN + SV locales; NO backwards-compat constraints (unreleased)
+- [2026-07-28 verified live]: grid phase current sensors are SIGNED (import +, export -, read -8.1 A during export); fuse headroom for the charger must exclude the charger's own current (live "minus Easee" template chain); house load excludes water heater (Power Saver's) and charger; AppDaemon tuned: 20 A fuse, 1 A buffer, ESS 5 s down/180 s up, charger 5 s down/120 s up, W-to-A divisor 692.8; Nordpool delivers 15-min slots (96/day); HA easee services confirmed present (easee.action_command, set_charger_dynamic_limit, set_charger_phase_mode); live formulas archived in session memory (energy-manager-live-formulas)
 
 ### Pending Todos
 
@@ -131,10 +133,13 @@ None yet.
 
 - Phase 1: Subentry flow pattern (HA 2024.12+) is relatively new -- needs validation during implementation
 - Phase 3: EMS safety guards need careful specification of hard limits and failure modes
-- Phase 5: Easee API interaction (pyeasee vs HA service calls) needs verification
+- ~~Phase 5: Easee API interaction (pyeasee vs HA service calls) needs verification~~ RESOLVED 2026-07-28: HA easee integration services confirmed present in live HA (easee.action_command, easee.set_charger_dynamic_limit, easee.set_charger_phase_mode) -- use service calls, no pyeasee dependency
+- Phase 4: human UAT re-run pending (8/10 tests never executed after 04-04 gap closure)
+- Phase 5: live Easee status is flaky (owner runs a watchdog automation reloading the config entry when stuck) -- state machine must tolerate unreliable status via power-based cross-checks
+- Cutover (post-Phase-5): AppDaemon apps live NOW; parallel install without observe-only mode means two controllers fighting over EMS select, ESS limit, charger. Cutover checklist needed: disable 5 AppDaemon apps, remove dead laddningsautomatik automations, remove satt_avresetid/satt_malladdning helper-reset automations, decide Easee watchdog fate
 
 ## Session Continuity
 
-Last session: 2026-02-23
-Stopped at: Completed 04-04-PLAN.md (UAT gap closure -- car autodetect + home+plugged derivation)
+Last session: 2026-07-28
+Stopped at: Phase 4.1 in progress -- parallel agents running (scheduler fix, coordinator safety fixes, HACS packaging); sv translations queued
 Resume file: None

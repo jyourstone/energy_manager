@@ -15,9 +15,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Core Infrastructure + Price Foundation** - Integration skeleton with config flow, Nordpool adapter, and module architecture
 - [x] **Phase 2: Home Battery Schedule** - Multi-cycle charge/discharge scheduling based on electricity prices and solar production
 - [x] **Phase 3: EMS Controller** - Real-time battery mode execution with fuse protection and safety guards
-- [ ] **Phase 4: Car Charging** - Per-car price-optimized charging schedules with departure constraints
-- [ ] **Phase 5: Easee Charger Control** - Physical charger control with state machine, solar charging, and fuse limiting
-- [ ] **Phase 6: Polish + Release** - Options flow, diagnostics, helper migration, test coverage, and HACS publication
+- [ ] **Phase 4: Car Charging** - Per-car price-optimized charging schedules with departure constraints (executed; human UAT re-run pending)
+- [ ] **Phase 4.1: Correctness + Safety Fixes and HACS Packaging** (INSERTED) - Cross-cutting fixes found in the 2026-07-28 full-system audit, plus repo packaging for HACS compliance
+- [ ] **Phase 5: Easee Charger Control** - Physical charger control with state machine, solar charging, fuse limiting, and observe-only mode
+- [ ] **Phase 6: Polish + Release** - Options flow, diagnostics, helper/template internalization, economics model, algorithm improvements, test coverage, and HACS publication
 
 ## Phase Details
 
@@ -93,20 +94,35 @@ Plans:
 - [x] 04-01-PLAN.md -- TDD: Pure car charging scheduler algorithm (cheapest N slots, fallback mode, solar marking)
 - [x] 04-02-PLAN.md -- CarChargingCoordinator, CarEntity base, fallback detection, per-subentry wiring
 - [x] 04-03-PLAN.md -- Per-car entities (schedule sensor, departure time, target SOC, max charge power) and translations
-- [ ] 04-04-PLAN.md -- UAT gap closure: expand car auto-detection patterns and auto-derive home+plugged state
+- [x] 04-04-PLAN.md -- UAT gap closure: expand car auto-detection patterns and auto-derive home+plugged state
+
+### Phase 4.1: Correctness + Safety Fixes and HACS Packaging (INSERTED)
+**Goal**: The cross-cutting defects found in the 2026-07-28 audit are fixed before any actuation work starts, and the repository is HACS-compliant
+**Depends on**: Phase 4
+**Requirements**: CORE-15, EMS-09, EMS-10, EMS-11, EMS-12 (+ re-validates CORE-08)
+**Success Criteria** (what must be TRUE):
+  1. Car scheduler is slot-duration-aware -- correct energy math with live 15-minute Nordpool slots (was booking ~25% of needed time)
+  2. Fuse math uses signed phase currents (import positive); PV export increases headroom; fuse rating and buffer are advanced options (20 A / 1 A defaults)
+  3. Sensor-unavailable behavior is a config option (degrade with assumed 10 A default, or block) -- the silent 0 A / static 18 A headroom bug is gone
+  4. Battery self-draw add-back and asymmetric ESS-limit timing (immediate decrease / 180 s increase) match the tuned live system
+  5. EMS car-priority uses real signals (active slot AND home+plugged via the wired _is_home_and_plugged_in) instead of the module-enabled flag
+  6. Repo passes HACS + hassfest validation in CI: root hacs.json, README, clean manifest, workflows, repo topics; Swedish translations complete
+**Plans**: executed directly as parallel-agent work, 2026-07-28 (no numbered plan files)
 
 ### Phase 5: Easee Charger Control
 **Goal**: The integration physically controls the Easee charger -- starting/stopping charge sessions, setting dynamic amp limits, and managing solar vs grid charging modes through a robust state machine
-**Depends on**: Phase 3 (fuse protection), Phase 4 (car charging schedule)
-**Requirements**: EASE-01, EASE-02, EASE-03, EASE-04, EASE-05, EASE-06, EASE-07, EV-09, EV-10
+**Depends on**: Phase 4.1 (correct fuse math and car-priority signals)
+**Requirements**: EASE-01, EASE-02, EASE-03, EASE-04, EASE-05, EASE-06, EASE-07, EASE-08, EASE-09, EV-09, EV-10, EV-12, CORE-14, EMS-13
 **Success Criteria** (what must be TRUE):
   1. Charger dynamic amp limit changes automatically based on the active schedule and current fuse load
-  2. Start/stop charging sequences follow a defined state machine that handles stuck states with timeout detection and recovery
+  2. Start/stop charging sequences follow a defined state machine that handles stuck states with timeout detection and recovery -- treating Easee status as unreliable (power-based cross-checks; live system needed a watchdog automation for stuck status)
   3. User can toggle a force-grid-charging switch to override the schedule and charge immediately
-  4. Solar charging mode sets the charger limit based on available PV power after home consumption, and waits for the battery to reach a configurable SOC threshold before activating
-  5. Fuse protection limits charger amps based on current phase load with safety buffer -- never exceeds the configured fuse rating
-  6. Solar-surplus EV charging routes excess PV power to the charger with hysteresis to prevent on/off cycling (EV-09)
-  7. Dynamic phase switching between 1-phase and 3-phase based on available power (EV-10)
+  4. Solar charging mode sets the charger limit based on available PV power after home consumption, and waits for the battery to reach a configurable SOC threshold (default 100%) before activating
+  5. Fuse protection limits charger amps based on current phase load with safety buffer -- never exceeds the configured fuse rating; battery ESS limit and charger amps draw from ONE shared fuse-headroom arbiter, and the charger's own current is excluded from the house load it sees
+  6. Solar-surplus EV charging routes excess PV power to the charger with hysteresis to prevent on/off cycling (EV-09); surplus = PV - house consumption - battery charging + charger draw (live formula), with EMS-13 exclusion list applied to house consumption
+  7. Dynamic phase switching based on available power respects per-car phase capability (1/2/3, default 3) with conversion factors 4.3 / 2.5 / 1.45 A-per-kW (EV-10, EV-12)
+  8. Observe-only (dry-run) mode + master switch: all decisions computed, logged and visible in status sensors while device commands are suppressed (CORE-14) -- required before running in parallel with the live AppDaemon system
+  9. Safety events reach a configurable notify target (EASE-08); tuned constants exposed as options with live-system defaults (EASE-09)
 **Plans**: TBD
 
 Plans:
@@ -116,13 +132,15 @@ Plans:
 ### Phase 6: Polish + Release
 **Goal**: The integration is self-contained with zero external helper dependencies, fully configurable via options flow, comprehensively tested, and ready for HACS publication
 **Depends on**: Phase 1-5 (all modules must exist before full options flow and testing)
-**Requirements**: CORE-05, CORE-10, CORE-11, QUAL-01, QUAL-02, QUAL-03, QUAL-04, QUAL-05
+**Requirements**: CORE-05, CORE-10, CORE-11, BATT-13, BATT-14, BATT-15, QUAL-01, QUAL-02, QUAL-03, QUAL-04, QUAL-05
 **Success Criteria** (what must be TRUE):
   1. User can adjust all runtime settings (thresholds, capacities, targets, departure times) via options flow without reconfiguring the integration
-  2. All 24 previously manual HA helpers are replaced by integration-owned entities -- user needs zero manual helpers
-  3. Integration exposes diagnostics data for debugging (accessible via HA Settings > Devices > Diagnostics)
-  4. All entity states handle "unavailable" and "unknown" sensor data gracefully -- no crashes, sensible fallback behavior
-  5. CI pipeline runs unit tests, integration tests, linting (ruff), HACS validation, and manifest validation on every PR
+  2. ALL previously manual HA helpers AND template sensors are replaced -- inputs as integration entities, derived values computed internally and exposed as diagnostic sensors (fuse headroom, filtered house load, solar surplus, actual price incl. fees); zero Jinja
+  3. Economics model: transfer fees + battery cycle cost as number entities; discharge threshold default derived as cycle cost minus transfer fee (live-system parity); multiple Forecast.Solar sensors summed (BATT-13/14)
+  4. March 2026 algorithm improvements ported: solar recharge estimation between peaks, refined future-peak energy reservation (BATT-15)
+  5. Integration exposes diagnostics data for debugging (accessible via HA Settings > Devices > Diagnostics)
+  6. All entity states handle "unavailable" and "unknown" sensor data gracefully -- no crashes, sensible fallback behavior
+  7. CI pipeline runs unit tests, integration tests, linting (ruff), HACS validation, and manifest validation on every PR
 **Plans**: TBD
 
 Plans:
@@ -132,17 +150,18 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 4.1 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Infrastructure + Price Foundation | 5/5 | Complete | 2026-02-15 |
 | 2. Home Battery Schedule | 5/5 | Complete | 2026-02-16 |
 | 3. EMS Controller | 5/5 | Complete | 2026-02-23 |
-| 4. Car Charging | 3/4 | UAT gap closure | - |
+| 4. Car Charging | 4/4 | Executed -- human UAT re-run pending (8/10 tests) | - |
+| 4.1 Correctness + Safety Fixes and HACS Packaging | - | In progress | - |
 | 5. Easee Charger Control | 0/0 | Not started | - |
 | 6. Polish + Release | 0/0 | Not started | - |
 
 ---
 *Roadmap created: 2026-02-15*
-*Last updated: 2026-02-23 (Phase 4: added UAT gap closure plan 04-04)*
+*Last updated: 2026-07-28 (Phase 4.1 inserted from full-system audit; Phase 5/6 scope expanded with owner decisions: observe-only mode, per-car phases, shared fuse arbiter, economics model, March algorithm improvements)*
