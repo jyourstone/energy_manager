@@ -1903,12 +1903,20 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         if state.state.lower() not in car_connected_states:
             return False
 
-        # 3. Never received a SOC reading -> likely unrecognized car
+        # 3. This car is confirmed home and plugged in -> recognized car,
+        # never fallback. Car SOC integrations (e.g. mySkoda) can go silent
+        # for 30-60+ min while parked, so a staleness check alone would
+        # misclassify the owner's own car as an unknown guest; a stale SOC
+        # here just means "schedule from the last known reading".
+        if self._is_home_and_plugged_in():
+            return False
+
+        # 4. Never received a SOC reading -> likely unrecognized car
         if self._soc_last_updated is None:
             return True
 
-        # 4. SOC reading is stale -> likely unrecognized car
-        # 5. Otherwise: recognized car with recent SOC
+        # 5. SOC reading is stale -> likely unrecognized car
+        # 6. Otherwise: recognized car with recent SOC
         elapsed = (dt_util.utcnow() - self._soc_last_updated).total_seconds()
         return elapsed > FALLBACK_STALE_THRESHOLD_MINUTES * 60
 
