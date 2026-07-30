@@ -11,8 +11,10 @@ attribute -- diagnostics.py never touches coordinator-specific behavior.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -148,8 +150,18 @@ def _fake_entry(
 # ---------------------------------------------------------------------------
 
 
+MANIFEST_VERSION = json.loads(
+    (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "energy_manager"
+        / "manifest.json"
+    ).read_text()
+)["version"]
+
+
 def test_read_manifest_version_matches_bundled_manifest() -> None:
-    assert diagnostics._read_manifest_version() == "0.1.0"
+    assert diagnostics._read_manifest_version() == MANIFEST_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +183,7 @@ def test_diagnostics_full_snapshot() -> None:
 
     assert result["entry"]["data"] == {"nordpool_sensor": "sensor.np"}
     assert result["entry"]["options"] == {"battery_enabled": True}
-    assert result["integration_version"] == "0.1.0"
+    assert result["integration_version"] == MANIFEST_VERSION
     assert result["runtime_flags"] == {
         "control_enabled": True,
         "force_charging": False,
