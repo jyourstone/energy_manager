@@ -1,7 +1,9 @@
 {
   "domain": "energy_manager",
   "name": "Energy Manager",
-  "codeowners": ["@jyourstone"],
+  "codeowners": [
+    "@jyourstone"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/jyourstone/energy_manager",
