@@ -27,6 +27,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     CAR_CHARGE_POWER_STEP_KW,
     CHARGE_POWER_STEP_KW,
+    CONF_BATTERY_CYCLE_COST,
+    CONF_ELECTRICITY_COMPANY_FEE,
+    CONF_GRID_TRANSFER_FEE,
+    CONF_MAX_CHARGE_POWER,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CHARGE_THRESHOLD,
@@ -215,16 +219,19 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
     ) -> None:
         """Initialize the max charge power entity."""
         super().__init__(coordinator, entry)
+        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_max_charge_power"
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous value on startup, or use default."""
+        """Restore previous value on startup, or use the options seed/default."""
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
             self._attr_native_value = last_data.native_value
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = self._entry.options.get(
+                CONF_MAX_CHARGE_POWER, self._default_value
+            )
         self.coordinator.max_charge_power_w = self._attr_native_value * 1000
         await self.coordinator.async_request_refresh()
 
@@ -268,16 +275,19 @@ class BatteryCycleCost(EnergyManagerEntity, RestoreNumber):
     ) -> None:
         """Initialize the battery cycle cost entity."""
         super().__init__(coordinator, entry)
+        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_battery_cycle_cost"
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous value on startup, or use default."""
+        """Restore previous value on startup, or use the options seed/default."""
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
             self._attr_native_value = last_data.native_value
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = self._entry.options.get(
+                CONF_BATTERY_CYCLE_COST, self._default_value
+            )
         self.coordinator.battery_cycle_cost = self._attr_native_value
         await self.coordinator.async_request_refresh()
 
@@ -319,16 +329,19 @@ class GridTransferFee(EnergyManagerEntity, RestoreNumber):
     ) -> None:
         """Initialize the grid transfer fee entity."""
         super().__init__(coordinator, entry)
+        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_grid_transfer_fee"
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous value on startup, or use default."""
+        """Restore previous value on startup, or use the options seed/default."""
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
             self._attr_native_value = last_data.native_value
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = self._entry.options.get(
+                CONF_GRID_TRANSFER_FEE, self._default_value
+            )
         self.coordinator.grid_transfer_fee = self._attr_native_value
         await self.coordinator.async_request_refresh()
 
@@ -370,16 +383,19 @@ class ElectricityCompanyFee(EnergyManagerEntity, RestoreNumber):
     ) -> None:
         """Initialize the electricity company fee entity."""
         super().__init__(coordinator, entry)
+        self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_electricity_company_fee"
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous value on startup, or use default."""
+        """Restore previous value on startup, or use the options seed/default."""
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
             self._attr_native_value = last_data.native_value
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = self._entry.options.get(
+                CONF_ELECTRICITY_COMPANY_FEE, self._default_value
+            )
         self.coordinator.electricity_company_fee = self._attr_native_value
         await self.coordinator.async_request_refresh()
 

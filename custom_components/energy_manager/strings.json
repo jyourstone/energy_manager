@@ -124,6 +124,26 @@
           "battery_soc_gate_pct": "Advanced: minimum house battery charge level before solar charging is allowed to divert surplus to the car.",
           "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
         }
+      },
+      "economics": {
+        "title": "Economics",
+        "description": "Electricity fees and battery charging power. These values seed the tunable number entities — you can adjust them anytime later from the Energy Manager device page.",
+        "data": {
+          "battery_cycle_cost": "Battery cycle cost (per kWh)",
+          "grid_transfer_fee": "Grid transfer fee (per kWh)",
+          "electricity_company_fee": "Electricity company fee (per kWh)",
+          "max_charge_power": "Max battery charging power"
+        },
+        "data_description": {
+          "battery_cycle_cost": "Wear cost per charged kWh. When above 0, the discharge threshold is derived automatically as cycle cost minus grid transfer fee.",
+          "grid_transfer_fee": "Your grid operator's transfer fee, added to the spot price.",
+          "electricity_company_fee": "Your electricity supplier's markup, added to the spot price.",
+          "max_charge_power": "Maximum power used when grid-charging the home battery."
+        }
+      },
+      "finish": {
+        "title": "Setup complete",
+        "description": "Energy Manager is ready. Two things before it takes any action:\n\n- Add your car(s) with the 'Add car' button on the integration page to enable scheduled EV charging.\n- Device control starts OFF (observe-only): the integration only logs what it would do until you turn on the 'Device control' switch."
       }
     },
     "error": {
