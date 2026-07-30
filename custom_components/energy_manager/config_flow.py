@@ -823,8 +823,11 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 5: Economics -- fees and battery charge power.
 
         Values seed the tunable number entities on first setup; they stay
-        adjustable at runtime from the device page afterward.
+        adjustable at runtime from the device page afterward. Skipped when
+        the battery module is disabled -- all four values are battery-bound.
         """
+        if not self._data.get(CONF_BATTERY_ENABLED):
+            return await self._async_route_finish()
         if user_input is not None:
             self._data[CONF_BATTERY_CYCLE_COST] = user_input.get(
                 CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST
@@ -838,7 +841,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_MAX_CHARGE_POWER] = user_input.get(
                 CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER_KW
             )
-            return await self.async_step_finish()
+            return await self._async_route_finish()
 
         schema = vol.Schema(
             {
@@ -878,6 +881,12 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="economics", data_schema=schema)
 
+    async def _async_route_finish(self) -> ConfigFlowResult:
+        """Pick the finish variant: car guidance only when EV is enabled."""
+        if self._data.get(CONF_EV_ENABLED):
+            return await self.async_step_finish()
+        return await self.async_step_finish_basic()
+
     async def async_step_finish(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -885,6 +894,16 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             return self._create_entry()
         return self.async_show_form(step_id="finish", data_schema=vol.Schema({}))
+
+    async def async_step_finish_basic(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 6 (no EV): Setup-complete note without car guidance."""
+        if user_input is not None:
+            return self._create_entry()
+        return self.async_show_form(
+            step_id="finish_basic", data_schema=vol.Schema({})
+        )
 
     def _create_entry(self) -> ConfigFlowResult:
         """Create the config entry with collected data.

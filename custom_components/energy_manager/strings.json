@@ -144,6 +144,10 @@
       "finish": {
         "title": "Setup complete",
         "description": "Energy Manager is ready. Two things before it takes any action:\n\n- Add your car(s) with the 'Add car' button on the integration page to enable scheduled EV charging.\n- Device control starts OFF (observe-only): the integration only logs what it would do until you turn on the 'Device control' switch."
+      },
+      "finish_basic": {
+        "title": "Setup complete",
+        "description": "Energy Manager is ready. Device control starts OFF (observe-only): the integration only logs what it would do until you turn on the 'Device control' switch."
       }
     },
     "error": {

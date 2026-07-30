@@ -144,6 +144,10 @@
       "finish": {
         "title": "Installationen är klar",
         "description": "Energy Manager är redo. Två saker innan den gör något:\n\n- Lägg till din(a) bil(ar) med knappen 'Lägg till bil' på integrationssidan för att aktivera schemalagd elbilsladdning.\n\n- Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'."
+      },
+      "finish_basic": {
+        "title": "Installationen är klar",
+        "description": "Energy Manager är redo. Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'."
       }
     },
     "error": {
