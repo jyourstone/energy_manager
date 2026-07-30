@@ -67,7 +67,7 @@ BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES = 5
 # Number entity defaults
 DEFAULT_CHARGE_THRESHOLD = 1.0  # SEK/kWh
 DEFAULT_DISCHARGE_THRESHOLD = 0.50  # SEK/kWh
-DEFAULT_MAX_CHARGE_POWER_KW = 5.0  # kW
+DEFAULT_MAX_CHARGE_POWER_KW = 8.0  # kW
 
 # Number entity limits
 MIN_PRICE_THRESHOLD = 0.0
@@ -122,6 +122,12 @@ MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES = 1.0
 DEFAULT_BATTERY_CYCLE_COST = 0.0  # SEK/kWh -- 0 disables the BATT-14 derivation
 DEFAULT_GRID_TRANSFER_FEE = 0.0  # SEK/kWh
 DEFAULT_ELECTRICITY_COMPANY_FEE = 0.0  # SEK/kWh -- actual-price sensor only
+
+# Economics wizard step -- seed values for the tunable number entities
+CONF_BATTERY_CYCLE_COST = "battery_cycle_cost"
+CONF_GRID_TRANSFER_FEE = "grid_transfer_fee"
+CONF_ELECTRICITY_COMPANY_FEE = "electricity_company_fee"
+CONF_MAX_CHARGE_POWER = "max_charge_power"
 
 # --- EMS Controller configuration ---
 

@@ -124,6 +124,30 @@
           "battery_soc_gate_pct": "Avancerat: lägsta batterinivå i hembatteriet innan solladdning tillåts avleda överskott till bilen.",
           "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser nödpaus och avisering."
         }
+      },
+      "economics": {
+        "title": "Ekonomi",
+        "description": "Elavgifter och batteriets laddeffekt. Värdena förifyller de justerbara nummerentiteterna — du kan ändra dem när som helst senare från Energy Managers enhetssida.",
+        "data": {
+          "battery_cycle_cost": "Batteriets cykelkostnad (per kWh)",
+          "grid_transfer_fee": "Elnätets överföringsavgift (per kWh)",
+          "electricity_company_fee": "Elbolagets påslag (per kWh)",
+          "max_charge_power": "Max laddeffekt för batteriet"
+        },
+        "data_description": {
+          "battery_cycle_cost": "Slitagekostnad per laddad kWh. Över 0 härleds urladdningströskeln automatiskt som cykelkostnad minus överföringsavgift.",
+          "grid_transfer_fee": "Elnätsbolagets överföringsavgift som läggs på spotpriset.",
+          "electricity_company_fee": "Elbolagets påslag som läggs på spotpriset.",
+          "max_charge_power": "Maximal effekt vid nätladdning av husbatteriet."
+        }
+      },
+      "finish": {
+        "title": "Installationen är klar",
+        "description": "Energy Manager är redo. Två saker innan den gör något:\n\n- Lägg till din(a) bil(ar) med knappen 'Lägg till bil' på integrationssidan för att aktivera schemalagd elbilsladdning.\n\n- Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'."
+      },
+      "finish_basic": {
+        "title": "Installationen är klar",
+        "description": "Energy Manager är redo. Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'."
       }
     },
     "error": {

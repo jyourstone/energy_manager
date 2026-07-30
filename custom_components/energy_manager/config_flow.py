@@ -62,11 +62,13 @@ from .auto_detect import (
     find_sigenstor_entities,
 )
 from .const import (
+    CHARGE_POWER_STEP_KW,
     CONF_AMP_DECREASE_DELAY,
     CONF_AMP_INCREASE_DELAY,
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CYCLE_COST,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
@@ -79,6 +81,7 @@ from .const import (
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_ELECTRICITY_COMPANY_FEE,
     CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
@@ -92,9 +95,11 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_GRID_TRANSFER_FEE,
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_LOCATION_ENTITY,
     CONF_MAX_CHARGE_AMPS,
+    CONF_MAX_CHARGE_POWER,
     CONF_MAX_ESS_CHARGE_AMPS,
     CONF_MAX_GRID_CHARGE_POWER_KW,
     CONF_MIN_CHARGE_AMPS,
@@ -116,13 +121,17 @@ from .const import (
     DEFAULT_AMP_DECREASE_DELAY_SECONDS,
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_ASSUMED_LOAD_AMPS,
+    DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
     DEFAULT_CHARGE_BUFFER_PCT,
+    DEFAULT_ELECTRICITY_COMPANY_FEE,
     DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
     DEFAULT_ESTIMATED_CHARGE_POWER_KW,
     DEFAULT_FUSE_RATING_AMPS,
+    DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_AMPS,
+    DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_ESS_CHARGE_AMPS,
     DEFAULT_MAX_GRID_CHARGE_POWER_KW,
     DEFAULT_MIN_CHARGE_AMPS,
@@ -141,6 +150,7 @@ from .const import (
     MAX_ASSUMED_LOAD_AMPS,
     MAX_BATTERY_SOC_GATE_PCT,
     MAX_CHARGE_BUFFER_PCT,
+    MAX_CHARGE_POWER_KW,
     MAX_EMERGENCY_MARGIN_AMPS,
     MAX_ESS_INCREASE_DELAY_SECONDS,
     MAX_ESTIMATED_CHARGE_POWER_KW,
@@ -151,6 +161,7 @@ from .const import (
     MAX_MIN_CHARGE_AMPS,
     MAX_PEAK_GAP_HOURS,
     MAX_PHASE_SWITCH_THRESHOLD_KW,
+    MAX_PRICE_THRESHOLD,
     MAX_PRODUCTION_FACTOR,
     MAX_SAFETY_BUFFER_AMPS,
     MAX_SOLAR_DELAY_SECONDS,
@@ -159,6 +170,7 @@ from .const import (
     MIN_ASSUMED_LOAD_AMPS,
     MIN_BATTERY_SOC_GATE_PCT,
     MIN_CHARGE_BUFFER_PCT,
+    MIN_CHARGE_POWER_KW,
     MIN_EMERGENCY_MARGIN_AMPS,
     MIN_ESS_INCREASE_DELAY_SECONDS,
     MIN_ESTIMATED_CHARGE_POWER_KW,
@@ -308,7 +320,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 # EV control also needs the shared fuse/grid-sensor config
                 # from the EMS step, not just the battery module.
                 return await self.async_step_ems()
-            return self._create_entry()
+            return await self.async_step_economics()
 
         schema = vol.Schema(
             {
@@ -484,7 +496,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if self._data.get(CONF_EV_ENABLED):
                 return await self.async_step_ev()
-            return self._create_entry()
+            return await self.async_step_economics()
 
         # Auto-detect SigenStor EMS entities
         detected = find_sigenstor_ems_entities(self.hass)
@@ -645,7 +657,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_EMERGENCY_MARGIN_AMPS] = user_input.get(
                 CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
             )
-            return self._create_entry()
+            return await self.async_step_economics()
 
         # Auto-detect Easee entities + charger device_id + house consumption
         detected = find_easee_entities(self.hass)
@@ -805,6 +817,94 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=schema,
         )
 
+    async def async_step_economics(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 5: Economics -- fees and battery charge power.
+
+        Values seed the tunable number entities on first setup; they stay
+        adjustable at runtime from the device page afterward. Skipped when
+        the battery module is disabled -- all four values are battery-bound.
+        """
+        if not self._data.get(CONF_BATTERY_ENABLED):
+            return await self._async_route_finish()
+        if user_input is not None:
+            self._data[CONF_BATTERY_CYCLE_COST] = user_input.get(
+                CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST
+            )
+            self._data[CONF_GRID_TRANSFER_FEE] = user_input.get(
+                CONF_GRID_TRANSFER_FEE, DEFAULT_GRID_TRANSFER_FEE
+            )
+            self._data[CONF_ELECTRICITY_COMPANY_FEE] = user_input.get(
+                CONF_ELECTRICITY_COMPANY_FEE, DEFAULT_ELECTRICITY_COMPANY_FEE
+            )
+            self._data[CONF_MAX_CHARGE_POWER] = user_input.get(
+                CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER_KW
+            )
+            return await self._async_route_finish()
+
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_BATTERY_CYCLE_COST, default=DEFAULT_BATTERY_CYCLE_COST
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0.0, max=MAX_PRICE_THRESHOLD, step=0.01
+                    )
+                ),
+                vol.Optional(
+                    CONF_GRID_TRANSFER_FEE, default=DEFAULT_GRID_TRANSFER_FEE
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0.0, max=MAX_PRICE_THRESHOLD, step=0.01
+                    )
+                ),
+                vol.Optional(
+                    CONF_ELECTRICITY_COMPANY_FEE,
+                    default=DEFAULT_ELECTRICITY_COMPANY_FEE,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0.0, max=MAX_PRICE_THRESHOLD, step=0.01
+                    )
+                ),
+                vol.Optional(
+                    CONF_MAX_CHARGE_POWER, default=DEFAULT_MAX_CHARGE_POWER_KW
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_CHARGE_POWER_KW,
+                        max=MAX_CHARGE_POWER_KW,
+                        step=CHARGE_POWER_STEP_KW,
+                        unit_of_measurement="kW",
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="economics", data_schema=schema)
+
+    async def _async_route_finish(self) -> ConfigFlowResult:
+        """Pick the finish variant: car guidance only when EV is enabled."""
+        if self._data.get(CONF_EV_ENABLED):
+            return await self.async_step_finish()
+        return await self.async_step_finish_basic()
+
+    async def async_step_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 6: Setup-complete note -- next steps (add cars, enable control)."""
+        if user_input is not None:
+            return self._create_entry()
+        return self.async_show_form(step_id="finish", data_schema=vol.Schema({}))
+
+    async def async_step_finish_basic(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 6 (no EV): Setup-complete note without car guidance."""
+        if user_input is not None:
+            return self._create_entry()
+        return self.async_show_form(
+            step_id="finish_basic", data_schema=vol.Schema({})
+        )
+
     def _create_entry(self) -> ConfigFlowResult:
         """Create the config entry with collected data.
 
@@ -917,6 +1017,18 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             CONF_EMERGENCY_MARGIN_AMPS: self._data.get(
                 CONF_EMERGENCY_MARGIN_AMPS, DEFAULT_EMERGENCY_MARGIN_AMPS
+            ),
+            CONF_BATTERY_CYCLE_COST: self._data.get(
+                CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST
+            ),
+            CONF_GRID_TRANSFER_FEE: self._data.get(
+                CONF_GRID_TRANSFER_FEE, DEFAULT_GRID_TRANSFER_FEE
+            ),
+            CONF_ELECTRICITY_COMPANY_FEE: self._data.get(
+                CONF_ELECTRICITY_COMPANY_FEE, DEFAULT_ELECTRICITY_COMPANY_FEE
+            ),
+            CONF_MAX_CHARGE_POWER: self._data.get(
+                CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER_KW
             ),
         }
         return self.async_create_entry(
