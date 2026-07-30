@@ -383,7 +383,7 @@
         "name": "House Load"
       },
       "solar_surplus": {
-        "name": "Solar Surplus"
+        "name": "Solar Balance"
       }
     },
     "number": {

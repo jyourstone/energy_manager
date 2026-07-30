@@ -383,7 +383,7 @@
         "name": "Husets belastning"
       },
       "solar_surplus": {
-        "name": "Solöverskott"
+        "name": "Solbalans"
       }
     },
     "number": {

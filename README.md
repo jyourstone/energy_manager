@@ -112,7 +112,7 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
 | Charger Status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
 | House Load *(diagnostic)* | Filtered house consumption (house consumption minus excluded power entities), with the BATT-15 rolling mean consumption as an attribute |
-| Solar Surplus *(diagnostic)* | Raw computed solar surplus (PV minus house load minus battery charging plus charger draw) before the charger's own activation gating |
+| Solar Balance *(diagnostic)* | Signed net solar balance (PV minus house load minus battery charging plus charger draw): positive means surplus available for the charger, negative means deficit. Raw value before the charger's own activation gating |
 
 ### Switches
 
