@@ -31,6 +31,10 @@ jobs:
 
       - name: Extract changelog from tag message
         run: |
+          # actions/checkout fetches with --no-tags and leaves a *lightweight*
+          # local tag, so %(contents) would dereference to the commit message.
+          # Force-fetch the real annotated tag object first.
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           # The /release skill writes the curated changelog into the annotated
           # tag body (subject is just "Release <version>", so it is dropped).
           git tag -l --format='%(contents:body)' "${GITHUB_REF_NAME}" > release_notes.md
