@@ -453,7 +453,7 @@ class CarTargetSOC(CarEntity, RestoreNumber):
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
-            self._attr_native_value = int(round(last_data.native_value))
+            self._attr_native_value = round(last_data.native_value)
         else:
             self._attr_native_value = int(self._default_value)
         self.coordinator.target_soc = self._attr_native_value
@@ -465,7 +465,7 @@ class CarTargetSOC(CarEntity, RestoreNumber):
         Args:
             value: New target state of charge percentage (whole percent).
         """
-        self._attr_native_value = int(round(value))
+        self._attr_native_value = round(value)
         self.async_write_ha_state()
         self.coordinator.target_soc = self._attr_native_value
         await self.coordinator.async_request_refresh()
@@ -511,7 +511,7 @@ class CarSolarTargetSOC(CarEntity, RestoreNumber):
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
-            self._attr_native_value = int(round(last_data.native_value))
+            self._attr_native_value = round(last_data.native_value)
         else:
             self._attr_native_value = int(self._default_value)
         self.coordinator.solar_target_soc = self._attr_native_value
@@ -524,7 +524,7 @@ class CarSolarTargetSOC(CarEntity, RestoreNumber):
             value: New solar charging target state of charge percentage
                 (whole percent).
         """
-        self._attr_native_value = int(round(value))
+        self._attr_native_value = round(value)
         self.async_write_ha_state()
         self.coordinator.solar_target_soc = self._attr_native_value
         await self.coordinator.async_request_refresh()
