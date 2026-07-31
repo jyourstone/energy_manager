@@ -399,6 +399,9 @@
       "car_target_soc": {
         "name": "Target SOC"
       },
+      "car_solar_target_soc": {
+        "name": "Solar charging target"
+      },
       "car_max_charge_power": {
         "name": "Max Charge Power"
       },

@@ -105,6 +105,7 @@ from .const import (
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
+    DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
     DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
@@ -1635,7 +1636,8 @@ class CarChargingData:
         hours_needed: Hours of charging needed at max charge power.
         is_preliminary: True when tomorrow's prices not yet available.
         car_name: Display name of the car.
-        current_soc: Current state of charge percentage.
+        current_soc: Current state of charge percentage, or None when the
+            SOC sensor is unavailable (solar eligibility stays fail-open).
         target_soc: Target state of charge percentage.
         last_calculated: UTC timestamp of last calculation.
         home_and_plugged: Whether the car is currently home and plugged in
@@ -1646,6 +1648,8 @@ class CarChargingData:
         max_charge_power_kw: The car's own maximum charge power in kW
             (mutable, set by the per-car number entity). Consumed by
             EaseeCoordinator to build a CarDemand.
+        solar_target_soc: SOC ceiling for solar charging of this car
+            (percent).
     """
 
     current_action: str
@@ -1655,12 +1659,13 @@ class CarChargingData:
     hours_needed: float
     is_preliminary: bool
     car_name: str
-    current_soc: float
+    current_soc: float | None
     target_soc: float
     last_calculated: datetime
     home_and_plugged: bool
     phase_capability: int
     max_charge_power_kw: float
+    solar_target_soc: float = 100.0
 
 
 class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
@@ -1727,6 +1732,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self.departure_time: time = time(7, 0)  # Default 07:00
         self.target_soc: float = DEFAULT_TARGET_SOC_PCT
         self.max_charge_power_kw: float = DEFAULT_CAR_MAX_CHARGE_POWER_KW
+        self.solar_target_soc: float = DEFAULT_CAR_SOLAR_TARGET_SOC_PCT
 
         # SOC staleness tracking for fallback detection
         self._soc_last_updated: datetime | None = None
@@ -1778,8 +1784,11 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
                 "No price data available for car charging schedule calculation"
             )
 
-        # 2. Read car SOC from battery_level_entity
+        # 2. Read car SOC from battery_level_entity. The scheduler needs a
+        # number, so unknown SOC assumes 50% for slot sizing; CarChargingData
+        # keeps the raw None so solar eligibility stays fail-open.
         current_soc = self._read_car_soc()
+        scheduling_soc = current_soc if current_soc is not None else 50.0
 
         # 3. Convert departure_time (local time-of-day) to UTC datetime
         departure_utc = self._departure_to_utc()
@@ -1802,7 +1811,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         result: CarScheduleResult = build_car_charging_schedule(
             price_slots=price_slots,
             departure_time_utc=departure_utc,
-            current_soc_pct=current_soc,
+            current_soc_pct=scheduling_soc,
             target_soc_pct=self.target_soc,
             battery_capacity_kwh=self._battery_capacity_kwh,
             max_charge_power_kw=self.max_charge_power_kw,
@@ -1827,20 +1836,25 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             home_and_plugged=self._is_home_and_plugged_in(),
             phase_capability=self._phase_capability,
             max_charge_power_kw=self.max_charge_power_kw,
+            solar_target_soc=self.solar_target_soc,
         )
 
-    def _read_car_soc(self) -> float:
+    def _read_car_soc(self) -> float | None:
         """Read the car's battery level from HA entity state.
 
         Returns:
-            SOC as a percentage (0-100). Defaults to 50.0 if unavailable.
+            SOC as a percentage (0-100), or None when the sensor is not
+            configured, unavailable, or non-numeric. Callers that need a
+            number (the price scheduler) apply their own assumption;
+            solar-mode eligibility must see None so unknown SOC stays
+            fail-open (charge) regardless of the solar target level.
         """
         if not self._battery_level_entity:
-            return 50.0
+            return None
 
         state = self.hass.states.get(self._battery_level_entity)
         if state is None or state.state in ("unavailable", "unknown"):
-            return 50.0
+            return None
 
         try:
             soc = float(state.state)
@@ -1851,7 +1865,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             self._soc_last_updated = state.last_updated
             return soc
         except (ValueError, TypeError):
-            return 50.0
+            return None
 
     def _departure_to_utc(self) -> datetime:
         """Convert departure_time (local time-of-day) to UTC datetime.
@@ -2531,6 +2545,8 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                     home_and_plugged=data.home_and_plugged,
                     phase_capability=data.phase_capability,
                     max_charge_kw=data.max_charge_power_kw,
+                    soc_pct=data.current_soc,
+                    solar_target_soc_pct=data.solar_target_soc,
                 )
             )
         return tuple(demands)

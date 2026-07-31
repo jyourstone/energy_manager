@@ -48,6 +48,8 @@ def _car(
     home_and_plugged: bool = True,
     phase_capability: int = 3,
     max_charge_kw: float = 22.0,
+    soc_pct: float | None = None,
+    solar_target_soc_pct: float = 100.0,
 ) -> CarDemand:
     """A CarDemand with a generous max_charge_kw so it never binds unless overridden."""
     return CarDemand(
@@ -55,6 +57,8 @@ def _car(
         home_and_plugged=home_and_plugged,
         phase_capability=phase_capability,
         max_charge_kw=max_charge_kw,
+        soc_pct=soc_pct,
+        solar_target_soc_pct=solar_target_soc_pct,
     )
 
 
@@ -646,6 +650,40 @@ class TestModeArbitration:
         )
         decision = controller.decide(inputs)
         assert decision.mode == "solar"
+
+    def test_solar_skips_car_at_or_above_solar_target(self):
+        """SOC 90 already >= a solar_target of 80 -- solar-satisfied, no session."""
+        car = _car(active_slot=False, home_and_plugged=True, soc_pct=90.0, solar_target_soc_pct=80.0)
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        inputs = _inputs(cars=(car,), solar_surplus_kw=5.0, battery_soc_pct=100.0)
+        decision = controller.decide(inputs)
+        assert decision.mode == "idle"
+
+    def test_solar_enters_when_soc_unknown(self):
+        """Unknown SOC fails open -- solar mode still authorizes charging."""
+        car = _car(active_slot=False, home_and_plugged=True, soc_pct=None, solar_target_soc_pct=50.0)
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        inputs = _inputs(cars=(car,), solar_surplus_kw=5.0, battery_soc_pct=100.0)
+        decision = controller.decide(inputs)
+        assert decision.mode == "solar"
+
+    def test_solar_selects_second_car_when_first_is_solar_satisfied(self):
+        """car_a is solar-satisfied (skipped); car_b is below its solar target."""
+        car_a = _car(active_slot=False, home_and_plugged=True, soc_pct=85.0, solar_target_soc_pct=80.0)
+        car_b = _car(
+            active_slot=False, home_and_plugged=True, max_charge_kw=3.0,
+            soc_pct=50.0, solar_target_soc_pct=100.0,
+        )
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        inputs = _inputs(cars=(car_a, car_b), solar_surplus_kw=5.0, battery_soc_pct=100.0)
+        decision = controller.decide(inputs)
+        assert decision.mode == "solar"
+        # car_b's 3.0kW cap (4.35A) below min_amps proves car_b, not car_a, was selected.
+        assert decision.target_amps == pytest.approx(4.35)
+        assert decision.commands == ()
 
     def test_idle_when_nothing_authorizes(self):
         car = _car(active_slot=False, home_and_plugged=True)

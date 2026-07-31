@@ -33,6 +33,7 @@ from .const import (
     CONF_MAX_CHARGE_POWER,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
+    DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
     DEFAULT_ELECTRICITY_COMPANY_FEE,
@@ -88,6 +89,7 @@ async def async_setup_entry(
         async_add_entities(
             [
                 CarTargetSOC(coordinator, entry, subentry),
+                CarSolarTargetSOC(coordinator, entry, subentry),
                 CarMaxChargePower(coordinator, entry, subentry),
             ],
             config_subentry_id=subentry_id,
@@ -466,6 +468,64 @@ class CarTargetSOC(CarEntity, RestoreNumber):
         self._attr_native_value = value
         self.async_write_ha_state()
         self.coordinator.target_soc = value
+        await self.coordinator.async_request_refresh()
+
+
+class CarSolarTargetSOC(CarEntity, RestoreNumber):
+    """Number entity for the car's solar charging target SOC.
+
+    Solar-mode charging stops when the car reaches this level; the regular
+    charging target only governs scheduled (price-based) charging. Default
+    100%.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "car_solar_target_soc"
+    _attr_native_min_value = MIN_TARGET_SOC_PCT
+    _attr_native_max_value = MAX_TARGET_SOC_PCT
+    _attr_native_step = TARGET_SOC_STEP_PCT
+    _attr_native_unit_of_measurement = "%"
+
+    _default_value = DEFAULT_CAR_SOLAR_TARGET_SOC_PCT
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+        subentry,
+    ) -> None:
+        """Initialize the solar target SOC entity.
+
+        Args:
+            coordinator: The CarChargingCoordinator for this car.
+            entry: The config entry this entity belongs to.
+            subentry: The car subentry with car-specific configuration.
+        """
+        super().__init__(coordinator, entry, subentry)
+        self._attr_unique_id = f"{subentry.subentry_id}_solar_target_soc"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous solar target SOC on startup, or use default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = self._default_value
+        self.coordinator.solar_target_soc = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the solar target SOC and trigger schedule recalculation.
+
+        Args:
+            value: New solar charging target state of charge percentage.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.solar_target_soc = value
         await self.coordinator.async_request_refresh()
 
 
