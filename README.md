@@ -39,7 +39,8 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 
 - Reads Nordpool spot prices (both the official native integration and the HACS custom component)
 - Computes a multi-cycle home battery charge/discharge schedule using peak grouping and virtual energy tracking, so the battery charges before the most profitable price peaks rather than just reacting to the current price
-- Drives a SigenStor inverter's EMS mode (`Command Charging (PV First)` / `Maximum Self Consumption` / `Standby`) to actually execute that schedule, with dynamic per-phase fuse headroom limiting and command read-back verification
+- Drives a SigenStor inverter's EMS mode (`Command Charging (PV First)` / `Maximum Self Consumption`) to actually execute that schedule, with dynamic per-phase fuse headroom limiting and command read-back verification
+- Gates battery self-consumption via the SigenStor discharge-limit number: outside scheduled discharge slots the battery may still cover house load when the price spread beats the effective discharge threshold — but not when that energy is already reserved for an upcoming scheduled peak (unless a recharge is planned first)
 - Computes a price-optimized charging schedule per car, picking the cheapest available slots that get the car to its target SOC by its departure time
 - Adds PV-opportunistic charging with hysteresis, so surplus solar production nudges the battery/car into charging without rapid on/off cycling
 

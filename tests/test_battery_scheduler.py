@@ -18,9 +18,11 @@ from datetime import datetime, timedelta, timezone
 
 from custom_components.energy_manager.battery_scheduler import (
     BatteryScheduleResult,
+    ScheduleSlot,
     _normalize_daylight_window,
     _overlap_hours,
     build_battery_schedule,
+    compute_discharge_gate,
     compute_effective_discharge_threshold,
 )
 
@@ -327,7 +329,7 @@ class TestEdgeCaseNoPrices:
         assert result.next_charging_slot is None
         assert result.next_discharging_slot is None
         assert result.current_action == "idle"
-        assert result.target_ems_mode == "standby"
+        assert result.target_ems_mode == "max_self_consumption"
 
 
 # ---------------------------------------------------------------------------
@@ -794,3 +796,199 @@ class TestScheduleAttributeFiltering:
 
         assert len(filtered) == 1
         assert filtered[0]["action"] == "discharge"
+
+
+# ---------------------------------------------------------------------------
+# Test 15: compute_discharge_gate (self-consumption discharge gating)
+# ---------------------------------------------------------------------------
+
+
+class TestDischargeGate:
+    """Test compute_discharge_gate, the self-consumption discharge gate."""
+
+    def test_scheduled_discharge_slot_is_allowed(self):
+        """A slot already scheduled to discharge is always allowed, no reservation."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+        schedule = [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                price=2.0,
+                action="discharge",
+            )
+        ]
+
+        gate = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            effective_discharge_threshold=1.0,
+            battery_soc_pct=50.0,
+            battery_capacity_kwh=10.0,
+            mean_consumption_kw=1.0,
+        )
+
+        assert gate.allowed is True
+        assert gate.reason == "scheduled_discharge"
+        assert gate.reserved_energy_kwh == 0.0
+
+    def test_idle_spread_below_threshold_is_blocked(self):
+        """An idle slot whose spread over the period minimum does not clear
+        the threshold must not open the discharge limit."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+        schedule = [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                price=0.5,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                price=0.3,
+                action="idle",
+            ),
+        ]
+
+        gate = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            effective_discharge_threshold=1.0,
+            battery_soc_pct=50.0,
+            battery_capacity_kwh=10.0,
+            mean_consumption_kw=1.0,
+        )
+
+        assert gate.allowed is False
+        assert gate.reason == "below_threshold"
+
+    def test_idle_spread_above_threshold_no_future_discharge_is_allowed(self):
+        """Idle slot with sufficient spread and no upcoming discharge peak to
+        protect should be allowed to self-consume."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+        schedule = [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                price=2.0,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                price=0.5,
+                action="idle",
+            ),
+        ]
+
+        gate = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            effective_discharge_threshold=1.0,
+            battery_soc_pct=50.0,
+            battery_capacity_kwh=10.0,
+            mean_consumption_kw=1.0,
+        )
+
+        assert gate.allowed is True
+        assert gate.reason == "spread_above_threshold"
+        assert gate.reserved_energy_kwh == 0.0
+
+    def test_idle_spread_above_threshold_reserved_for_future_peak_is_blocked(self):
+        """A future discharge peak whose reservation eats nearly all usable
+        energy must block idle-period self-consumption discharge."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+        schedule = [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 9, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                price=0.3,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                price=2.0,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                price=1.5,
+                action="discharge",
+            ),
+        ]
+
+        gate = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            effective_discharge_threshold=1.0,
+            battery_soc_pct=10.0,
+            battery_capacity_kwh=10.0,
+            mean_consumption_kw=1.0,
+        )
+
+        assert gate.allowed is False
+        assert gate.reason == "reserved_for_peak"
+        assert gate.reserved_energy_kwh == 1.0
+
+    def test_charge_slot_before_future_discharge_resets_reservation(self):
+        """A planned recharge before the future discharge peak means the
+        reservation does not apply -- discharging now is fine."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+        schedule = [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 9, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                price=0.3,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                price=2.0,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                price=0.4,
+                action="charge",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 13, 0, 0, tzinfo=UTC),
+                price=1.5,
+                action="discharge",
+            ),
+        ]
+
+        gate = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            effective_discharge_threshold=1.0,
+            battery_soc_pct=50.0,
+            battery_capacity_kwh=10.0,
+            mean_consumption_kw=1.0,
+        )
+
+        assert gate.allowed is True
+        assert gate.reason == "spread_above_threshold"
+        assert gate.reserved_energy_kwh == 0.0
+
+    def test_empty_schedule_returns_no_schedule(self):
+        """An empty schedule (no slot contains 'now') blocks discharge."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+
+        gate = compute_discharge_gate(
+            schedule=[],
+            now=now,
+            effective_discharge_threshold=1.0,
+            battery_soc_pct=50.0,
+            battery_capacity_kwh=10.0,
+            mean_consumption_kw=1.0,
+        )
+
+        assert gate.allowed is False
+        assert gate.reason == "no_schedule"
+        assert gate.reserved_energy_kwh == 0.0

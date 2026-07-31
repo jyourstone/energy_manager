@@ -212,6 +212,9 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
             "target_ems_mode": data.target_ems_mode,
             "last_calculated": data.last_calculated.isoformat(),
             "solar_forecast_used": data.solar_forecast_used,
+            "discharge_allowed": data.discharge_allowed,
+            "discharge_gate_reason": data.discharge_gate_reason,
+            "reserved_energy_kwh": round(data.reserved_energy_kwh, 2),
         }
 
 
@@ -422,6 +425,8 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
             "pv_charging_active": data.pv_charging_active,
             "dry_run": data.dry_run,
             "last_suppressed_command": data.last_suppressed_command,
+            "discharge_allowed": data.discharge_allowed,
+            "discharge_gate_reason": data.discharge_gate_reason,
         }
 
 

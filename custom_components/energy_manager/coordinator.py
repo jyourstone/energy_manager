@@ -352,6 +352,12 @@ class BatteryScheduleData:
             used to size the schedule's energy needs.
         consumption_sample_count: Number of samples currently in the BATT-15
             rolling window (see BatteryScheduleCoordinator._consumption_samples).
+        discharge_allowed: Whether the scheduler currently permits battery
+            discharge.
+        discharge_gate_reason: Human-readable reason discharge is blocked,
+            or "" when discharge is allowed.
+        reserved_energy_kwh: Energy the scheduler is holding back for a
+            later, more expensive peak.
     """
 
     current_state: str
@@ -365,6 +371,9 @@ class BatteryScheduleData:
     solar_forecast_used: bool
     mean_consumption_kw: float
     consumption_sample_count: int
+    discharge_allowed: bool = True
+    discharge_gate_reason: str = ""
+    reserved_energy_kwh: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,6 +394,10 @@ class EMSData:
             (observe-only) -- commands are computed but not sent (CORE-14).
         last_suppressed_command: Human-readable description of the most
             recently suppressed command, or None if none has been suppressed.
+        discharge_allowed: Whether the scheduler currently permits battery
+            discharge.
+        discharge_gate_reason: Human-readable reason discharge is blocked,
+            or "" when discharge is allowed.
     """
 
     current_mode: str
@@ -398,6 +411,8 @@ class EMSData:
     pv_charging_active: bool
     dry_run: bool
     last_suppressed_command: str | None
+    discharge_allowed: bool = True
+    discharge_gate_reason: str = ""
 
 
 class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
@@ -595,6 +610,9 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             solar_forecast_used=solar_forecast_remaining_wh is not None,
             mean_consumption_kw=mean_consumption_kw,
             consumption_sample_count=consumption_sample_count,
+            discharge_allowed=result.discharge_allowed,
+            discharge_gate_reason=result.discharge_gate_reason,
+            reserved_energy_kwh=result.reserved_energy_kwh,
         )
 
     def _read_soc(self) -> float:
@@ -1165,6 +1183,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # Change detection for command deduplication
         self._last_sent_mode: str | None = None
         self._last_charge_limit: float | None = None
+        self._last_sent_discharge_limit: float | None = None
 
         # Command verification tracking
         self._pending_verification: dict | None = None
@@ -1255,6 +1274,8 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 pv_charging_active=False,
                 dry_run=not self._is_control_enabled(),
                 last_suppressed_command=self._last_suppressed_command,
+                discharge_allowed=True,
+                discharge_gate_reason="",
             )
 
         # 2. Read real-time sensor values (signed: positive = import, negative = export)
@@ -1329,6 +1350,31 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 if limit_changed:
                     limit_sent = await self._send_charge_limit(result.charge_limit_kw)
 
+        # 8b. Discharge limit gate: mirror the scheduler's discharge_allowed
+        # decision onto the SigenStor discharge-limit number entity, using
+        # the same dedup convention as the charge limit (only advance dedup
+        # state when actually sent).
+        if self._discharge_limit_entity:
+            if schedule_data.discharge_allowed:
+                limit_state = self.hass.states.get(self._discharge_limit_entity)
+                entity_max = (
+                    limit_state.attributes.get("max") if limit_state else None
+                )
+                target_discharge_limit = (
+                    float(entity_max)
+                    if entity_max is not None
+                    else MAX_CHARGE_LIMIT_KW
+                )
+            else:
+                target_discharge_limit = 0.0
+
+            if target_discharge_limit != self._last_sent_discharge_limit:
+                discharge_sent = await self._send_discharge_limit(
+                    target_discharge_limit
+                )
+                if discharge_sent:
+                    self._last_sent_discharge_limit = target_discharge_limit
+
         # 9. Schedule verification if mode changed and actually sent -- skip
         # when suppressed by observe-only mode (CORE-14), otherwise the
         # command would never be verified and would log a false warning.
@@ -1364,6 +1410,8 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             pv_charging_active=result.override_reason == "pv_opportunistic",
             dry_run=not self._is_control_enabled(),
             last_suppressed_command=self._last_suppressed_command,
+            discharge_allowed=schedule_data.discharge_allowed,
+            discharge_gate_reason=schedule_data.discharge_gate_reason,
         )
 
     def _is_control_enabled(self) -> bool:
@@ -1563,6 +1611,70 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             "number",
             "set_value",
             {"entity_id": self._charge_limit_entity, "value": clamped},
+            blocking=True,
+        )
+        return True
+
+    async def _send_discharge_limit(self, limit_kw: float) -> bool:
+        """Send discharging limit to SigenStor via HA service call.
+
+        Args:
+            limit_kw: Discharging limit in kW.
+
+        Returns:
+            True if command was sent successfully, False otherwise.
+        """
+        if not self._discharge_limit_entity:
+            _LOGGER.debug(
+                "Discharge limit entity not configured, skipping limit command"
+            )
+            return False
+
+        # Defense in depth: the configured entity must be a writable number.*
+        # setpoint (mirrors the charge limit entity check).
+        if not self._discharge_limit_entity.startswith("number."):
+            _LOGGER.error(
+                "Discharge limit entity %s is not in the 'number' domain -- "
+                "skipping command. Reconfigure the discharge limit entity to "
+                "a writable number.* setpoint.",
+                self._discharge_limit_entity,
+            )
+            return False
+
+        # Check entity availability
+        state = self.hass.states.get(self._discharge_limit_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            _LOGGER.warning(
+                "Discharge limit entity %s is unavailable",
+                self._discharge_limit_entity,
+            )
+            return False
+
+        # Clamp to safe range before sending (Pitfall 2)
+        clamped = max(0.0, min(limit_kw, MAX_CHARGE_LIMIT_KW))
+
+        # Choke point (CORE-14): suppress the command when observe-only.
+        decision = build_command_decision(
+            control_enabled=self._is_control_enabled(),
+            service_domain="number",
+            service_name="set_value",
+            entity_id=self._discharge_limit_entity,
+            value=clamped,
+        )
+        if not decision.should_send:
+            _LOGGER.info(decision.dry_run_message)
+            self._last_suppressed_command = decision.dry_run_message
+            return False
+
+        _LOGGER.info(
+            "Setting discharge limit to %.1f kW (requested %.1f)",
+            clamped,
+            limit_kw,
+        )
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": self._discharge_limit_entity, "value": clamped},
             blocking=True,
         )
         return True
