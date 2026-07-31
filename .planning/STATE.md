@@ -5,11 +5,11 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Users can optimize their energy costs by automatically scheduling battery charging/discharging and EV charging based on electricity prices, solar production, and fuse constraints -- without any manual helpers or complex setup.
-**Current focus:** Phase 6 EXECUTED (options flow, economics, March algorithms, diagnostics, logo). Remaining: QUAL-03 real-HA lifecycle tests, brands PR, v0.1.0 tag, live parallel-run UAT per 05-CUTOVER.md
+**Current focus:** Phase 6 EXECUTED (options flow, economics, March algorithms, diagnostics, logo). Remaining: QUAL-03 real-HA lifecycle tests, v0.1.0 tag, live parallel-run UAT per 05-CUTOVER.md
 
 ## Current Position
 
-Phase: 6 of 6 (Polish + Release) -- EXECUTED. Waves D/E/F: full options flow (CORE-05), economics + multi-forecast + March algorithms (BATT-13/14/15), diagnostics + derived sensors + QUAL-05 audit clean. 323 tests. Open: QUAL-03, brands PR, v0.1.0
+Phase: 6 of 6 (Polish + Release) -- EXECUTED. Waves D/E/F: full options flow (CORE-05), economics + multi-forecast + March algorithms (BATT-13/14/15), diagnostics + derived sensors + QUAL-05 audit clean. 323 tests. Open: QUAL-03, v0.1.0
 Plan: parallel-agent execution (no numbered plans)
 Status: Phase 5 waves A/B/C landed (124d0a7, 7df81e8, 9f5d7bb): charger_state_machine.py (111 tests), EaseeCoordinator + options + observe-only command gating, charger entities + solar surplus. 287 tests green, ruff clean. Dev verification: laddarstatus sensor computing, dry_run true, zero easee calls, shared fuse arbiter (16.3A both sensors)
 Last activity: 2026-07-28 -- Phase 5 executed via 3 sequential agent waves + headless dev verification; cutover checklist written (05-CUTOVER.md)

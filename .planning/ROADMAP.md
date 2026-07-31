@@ -163,7 +163,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 4.1 -> 5 -> 6
 | 4. Car Charging | 4/4 | Executed -- human UAT re-run pending (8/10 tests) | - |
 | 4.1 Correctness + Safety Fixes and HACS Packaging | - | Complete (incl. local UAT + bug fixes) | 2026-07-28 |
 | 5. Easee Charger Control | 3 waves | Executed + observe-only verified locally -- live parallel-run UAT pending | 2026-07-28 |
-| 6. Polish + Release | 3 waves | Executed -- QUAL-03 (real-HA lifecycle tests) open; brands PR + v0.1.0 tag pending owner | 2026-07-28 |
+| 6. Polish + Release | 3 waves | Executed -- QUAL-03 (real-HA lifecycle tests) open; v0.1.0 tag pending owner | 2026-07-28 |
 
 ---
 *Roadmap created: 2026-02-15*
