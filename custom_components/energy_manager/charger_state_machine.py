@@ -65,12 +65,19 @@ class CarDemand:
         max_charge_kw: The car's own maximum charge power in kW -- an
             additional ceiling on the computed amp target so we never ask for
             more than the car itself can accept.
+        soc_pct: Current car SOC in percent, or None when unknown. Only
+            consulted by solar mode.
+        solar_target_soc_pct: SOC ceiling for solar charging. Solar mode
+            skips a car at or above this level; scheduled/forced charging is
+            governed by the car's normal target instead.
     """
 
     active_slot: bool
     home_and_plugged: bool
     phase_capability: int = 3
     max_charge_kw: float = 7.4
+    soc_pct: float | None = None
+    solar_target_soc_pct: float = 100.0
 
 
 @dataclass(frozen=True)
@@ -615,9 +622,14 @@ class ChargerController:
         elif demanding:
             mode = "scheduled"
             selected_car = demanding[0]
-        elif solar_active:
+        elif solar_active and (
+            solar_eligible := [
+                c for c in present
+                if c.soc_pct is None or c.soc_pct < c.solar_target_soc_pct
+            ]
+        ):
             mode = "solar"
-            selected_car = present[0]
+            selected_car = solar_eligible[0]
         else:
             mode = "idle"
             selected_car = None

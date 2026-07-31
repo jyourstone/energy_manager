@@ -105,6 +105,7 @@ from .const import (
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
+    DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
     DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
@@ -1646,6 +1647,8 @@ class CarChargingData:
         max_charge_power_kw: The car's own maximum charge power in kW
             (mutable, set by the per-car number entity). Consumed by
             EaseeCoordinator to build a CarDemand.
+        solar_target_soc: SOC ceiling for solar charging of this car
+            (percent).
     """
 
     current_action: str
@@ -1661,6 +1664,7 @@ class CarChargingData:
     home_and_plugged: bool
     phase_capability: int
     max_charge_power_kw: float
+    solar_target_soc: float = 100.0
 
 
 class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
@@ -1727,6 +1731,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self.departure_time: time = time(7, 0)  # Default 07:00
         self.target_soc: float = DEFAULT_TARGET_SOC_PCT
         self.max_charge_power_kw: float = DEFAULT_CAR_MAX_CHARGE_POWER_KW
+        self.solar_target_soc: float = DEFAULT_CAR_SOLAR_TARGET_SOC_PCT
 
         # SOC staleness tracking for fallback detection
         self._soc_last_updated: datetime | None = None
@@ -1827,6 +1832,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             home_and_plugged=self._is_home_and_plugged_in(),
             phase_capability=self._phase_capability,
             max_charge_power_kw=self.max_charge_power_kw,
+            solar_target_soc=self.solar_target_soc,
         )
 
     def _read_car_soc(self) -> float:
@@ -2531,6 +2537,8 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                     home_and_plugged=data.home_and_plugged,
                     phase_capability=data.phase_capability,
                     max_charge_kw=data.max_charge_power_kw,
+                    soc_pct=data.current_soc,
+                    solar_target_soc_pct=data.solar_target_soc,
                 )
             )
         return tuple(demands)

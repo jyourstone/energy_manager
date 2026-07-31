@@ -399,6 +399,9 @@
       "car_target_soc": {
         "name": "Målladdningsnivå"
       },
+      "car_solar_target_soc": {
+        "name": "Solladdningsmål"
+      },
       "car_max_charge_power": {
         "name": "Max laddningseffekt"
       },

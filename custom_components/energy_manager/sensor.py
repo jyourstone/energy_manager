@@ -649,6 +649,7 @@ class CarScheduleSensor(CarEntity, SensorEntity):
             "hours_needed": round(data.hours_needed, 1),
             "current_soc": data.current_soc,
             "target_soc": data.target_soc,
+            "solar_target_soc": data.solar_target_soc,
             "is_preliminary": data.is_preliminary,
             "last_calculated": data.last_calculated.isoformat(),
         }
