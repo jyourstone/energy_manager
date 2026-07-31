@@ -131,7 +131,8 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `battery_cycle_cost - grid_transfer_fee`, overriding the manual Discharge Price Threshold above (parity with the live system's economics formula). Default 0 (disabled) |
 | Grid Transfer Fee | Grid transfer fee (SEK/kWh); feeds the Battery Cycle Cost formula and the Actual Electricity Price sensor |
 | Electricity Company Fee | Electricity company fee (SEK/kWh); used only by the Actual Electricity Price sensor |
-| Car Target SOC *(per car)* | Target state of charge for that car |
+| Grid charging target *(per car)* | Target state of charge for scheduled price-based charging |
+| Solar charging target *(per car)* | SOC ceiling for solar-surplus charging (default 100%) |
 | Car Max Charge Power *(per car)* | Maximum charge power for that car (kW) |
 
 ### Time

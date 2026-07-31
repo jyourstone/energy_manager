@@ -453,9 +453,9 @@ class CarTargetSOC(CarEntity, RestoreNumber):
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
-            self._attr_native_value = last_data.native_value
+            self._attr_native_value = int(round(last_data.native_value))
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = int(self._default_value)
         self.coordinator.target_soc = self._attr_native_value
         await self.coordinator.async_request_refresh()
 
@@ -463,11 +463,11 @@ class CarTargetSOC(CarEntity, RestoreNumber):
         """Update the target SOC and trigger schedule recalculation.
 
         Args:
-            value: New target state of charge percentage.
+            value: New target state of charge percentage (whole percent).
         """
-        self._attr_native_value = value
+        self._attr_native_value = int(round(value))
         self.async_write_ha_state()
-        self.coordinator.target_soc = value
+        self.coordinator.target_soc = self._attr_native_value
         await self.coordinator.async_request_refresh()
 
 
@@ -511,9 +511,9 @@ class CarSolarTargetSOC(CarEntity, RestoreNumber):
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
-            self._attr_native_value = last_data.native_value
+            self._attr_native_value = int(round(last_data.native_value))
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = int(self._default_value)
         self.coordinator.solar_target_soc = self._attr_native_value
         await self.coordinator.async_request_refresh()
 
@@ -521,11 +521,12 @@ class CarSolarTargetSOC(CarEntity, RestoreNumber):
         """Update the solar target SOC and trigger schedule recalculation.
 
         Args:
-            value: New solar charging target state of charge percentage.
+            value: New solar charging target state of charge percentage
+                (whole percent).
         """
-        self._attr_native_value = value
+        self._attr_native_value = int(round(value))
         self.async_write_ha_state()
-        self.coordinator.solar_target_soc = value
+        self.coordinator.solar_target_soc = self._attr_native_value
         await self.coordinator.async_request_refresh()
 
 
