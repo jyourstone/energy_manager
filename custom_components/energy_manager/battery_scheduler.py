@@ -71,6 +71,12 @@ class BatteryScheduleResult:
         next_discharging_slot: Next upcoming discharge slot relative to now.
         current_action: Action for the slot containing 'now'.
         target_ems_mode: EMS mode string for Phase 3 consumption.
+        discharge_allowed: Whether self-consumption discharge is currently
+            allowed (see compute_discharge_gate).
+        discharge_gate_reason: Machine-readable reason for the discharge
+            gate's decision.
+        reserved_energy_kwh: Energy earmarked for upcoming scheduled
+            discharge slots (before the next charge slot).
     """
 
     schedule: list[ScheduleSlot]
@@ -80,6 +86,25 @@ class BatteryScheduleResult:
     next_discharging_slot: ScheduleSlot | None
     current_action: str
     target_ems_mode: str
+    discharge_allowed: bool = True
+    discharge_gate_reason: str = "scheduled_discharge"
+    reserved_energy_kwh: float = 0.0
+
+
+@dataclass(frozen=True)
+class DischargeGate:
+    """Whether self-consumption discharge is currently allowed.
+
+    Attributes:
+        allowed: True when the battery may discharge to cover house load.
+        reason: Machine-readable reason string for diagnostics.
+        reserved_energy_kwh: Energy earmarked for upcoming scheduled
+            discharge slots (before the next charge slot).
+    """
+
+    allowed: bool
+    reason: str
+    reserved_energy_kwh: float
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +261,16 @@ def build_battery_schedule(
     )
     discharging_count = sum(1 for s in schedule if s.action == "discharge")
 
+    gate = compute_discharge_gate(
+        schedule=schedule,
+        now=now,
+        effective_discharge_threshold=discharge_threshold,
+        battery_soc_pct=current_soc_pct,
+        battery_capacity_kwh=battery_capacity_kwh,
+        mean_consumption_kw=mean_consumption_kw,
+        min_soc_pct=min_soc_pct,
+    )
+
     return BatteryScheduleResult(
         schedule=schedule,
         charging_slot_count=charging_count,
@@ -244,6 +279,9 @@ def build_battery_schedule(
         next_discharging_slot=next_discharge,
         current_action=current_action,
         target_ems_mode=target_ems_mode,
+        discharge_allowed=gate.allowed,
+        discharge_gate_reason=gate.reason,
+        reserved_energy_kwh=gate.reserved_energy_kwh,
     )
 
 
@@ -280,6 +318,101 @@ def compute_effective_discharge_threshold(
     return discharge_threshold
 
 
+def compute_discharge_gate(
+    schedule: list[ScheduleSlot],
+    now: datetime,
+    effective_discharge_threshold: float,
+    battery_soc_pct: float,
+    battery_capacity_kwh: float,
+    mean_consumption_kw: float,
+    min_soc_pct: float = 10.0,
+) -> DischargeGate:
+    """Determine whether self-consumption discharge is currently allowed.
+
+    Ports the live AppDaemon system's max-discharging-limit gate: the
+    battery's discharge limit is only opened up to serve house load once
+    the current slot's price spread against the period minimum clears the
+    effective discharge threshold. This scheduler improves on that
+    AppDaemon behavior with a reservation check: energy already earmarked
+    for a scheduled discharge peak later today (before the next planned
+    recharge) is protected from being drained by idle-period
+    self-consumption, so an early self-consumption drain cannot starve a
+    later, already-planned peak.
+
+    Args:
+        schedule: Ordered list of schedule slots (as produced by
+            build_battery_schedule).
+        now: Current UTC-aware datetime.
+        effective_discharge_threshold: Spread threshold in SEK/kWh -- see
+            compute_effective_discharge_threshold for BATT-14 derivation.
+        battery_soc_pct: Current battery state of charge (0-100).
+        battery_capacity_kwh: Total battery capacity in kWh.
+        mean_consumption_kw: Rolling average house consumption in kW.
+
+    Returns:
+        DischargeGate describing whether discharge is currently allowed.
+    """
+    current_slot = _find_current_slot(schedule, now)
+    if current_slot is None:
+        return DischargeGate(
+            allowed=False, reason="no_schedule", reserved_energy_kwh=0.0
+        )
+
+    if current_slot.action == "discharge":
+        return DischargeGate(
+            allowed=True, reason="scheduled_discharge", reserved_energy_kwh=0.0
+        )
+
+    if current_slot.action in ("charge", "solar_charge"):
+        return DischargeGate(
+            allowed=True, reason="charging_slot", reserved_energy_kwh=0.0
+        )
+
+    # Idle slot: gate self-consumption discharge on price spread, then on
+    # energy reserved for an upcoming scheduled discharge peak.
+    min_price = min(s.price for s in schedule)
+    spread = current_slot.price - min_price
+
+    reserved_energy_kwh = 0.0
+    for slot in schedule:
+        if slot.start < now:
+            continue
+        if slot.action in ("charge", "solar_charge"):
+            # A planned recharge resets the reservation -- discharging
+            # before a refill is fine.
+            break
+        if slot.action == "discharge":
+            duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
+            reserved_energy_kwh += mean_consumption_kw * duration_hours
+
+    if spread <= effective_discharge_threshold:
+        return DischargeGate(
+            allowed=False,
+            reason="below_threshold",
+            reserved_energy_kwh=reserved_energy_kwh,
+        )
+
+    # Only energy above the scheduler's minimum SOC is expendable -- the
+    # bottom min_soc_pct is never dispatched (same floor the slot sizing
+    # uses), so counting it here would open the gate on energy that the
+    # battery will not actually deliver.
+    usable_kwh = (
+        max(0.0, battery_soc_pct - min_soc_pct) / 100.0
+    ) * battery_capacity_kwh
+    if usable_kwh - reserved_energy_kwh < mean_consumption_kw * 0.5:
+        return DischargeGate(
+            allowed=False,
+            reason="reserved_for_peak",
+            reserved_energy_kwh=reserved_energy_kwh,
+        )
+
+    return DischargeGate(
+        allowed=True,
+        reason="spread_above_threshold",
+        reserved_energy_kwh=reserved_energy_kwh,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -294,7 +427,10 @@ def _idle_result() -> BatteryScheduleResult:
         next_charging_slot=None,
         next_discharging_slot=None,
         current_action="idle",
-        target_ems_mode="standby",
+        target_ems_mode="max_self_consumption",
+        discharge_allowed=False,
+        discharge_gate_reason="no_schedule",
+        reserved_energy_kwh=0.0,
     )
 
 
@@ -661,6 +797,12 @@ def _find_next_slot(
 def _action_to_ems_mode(action: str) -> str:
     """Map a scheduler action to the corresponding EMS mode.
 
+    Idle now means the battery is free to self-consume; discharge
+    permission is governed by the discharge gate (see
+    compute_discharge_gate), not by freezing the battery in "standby".
+    "standby" is no longer produced by the scheduler -- it remains only
+    for the EMS car-priority override elsewhere.
+
     Args:
         action: Scheduler action string.
 
@@ -669,6 +811,4 @@ def _action_to_ems_mode(action: str) -> str:
     """
     if action in ("charge", "solar_charge"):
         return "command_charging"
-    if action == "discharge":
-        return "max_self_consumption"
-    return "standby"
+    return "max_self_consumption"
