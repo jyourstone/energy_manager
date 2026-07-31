@@ -1361,7 +1361,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     limit_state.attributes.get("max") if limit_state else None
                 )
                 target_discharge_limit = (
-                    float(entity_max)
+                    min(float(entity_max), MAX_CHARGE_LIMIT_KW)
                     if entity_max is not None
                     else MAX_CHARGE_LIMIT_KW
                 )

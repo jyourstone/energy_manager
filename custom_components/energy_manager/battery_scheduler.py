@@ -268,6 +268,7 @@ def build_battery_schedule(
         battery_soc_pct=current_soc_pct,
         battery_capacity_kwh=battery_capacity_kwh,
         mean_consumption_kw=mean_consumption_kw,
+        min_soc_pct=min_soc_pct,
     )
 
     return BatteryScheduleResult(
@@ -324,6 +325,7 @@ def compute_discharge_gate(
     battery_soc_pct: float,
     battery_capacity_kwh: float,
     mean_consumption_kw: float,
+    min_soc_pct: float = 10.0,
 ) -> DischargeGate:
     """Determine whether self-consumption discharge is currently allowed.
 
@@ -390,7 +392,13 @@ def compute_discharge_gate(
             reserved_energy_kwh=reserved_energy_kwh,
         )
 
-    usable_kwh = (battery_soc_pct / 100.0) * battery_capacity_kwh
+    # Only energy above the scheduler's minimum SOC is expendable -- the
+    # bottom min_soc_pct is never dispatched (same floor the slot sizing
+    # uses), so counting it here would open the gate on energy that the
+    # battery will not actually deliver.
+    usable_kwh = (
+        max(0.0, battery_soc_pct - min_soc_pct) / 100.0
+    ) * battery_capacity_kwh
     if usable_kwh - reserved_energy_kwh < mean_consumption_kw * 0.5:
         return DischargeGate(
             allowed=False,
