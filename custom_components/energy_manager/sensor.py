@@ -154,7 +154,7 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
     """
 
     _attr_translation_key = "battery_schedule"
-    _attr_icon = "mdi:battery-clock"
+    _attr_icon = "mdi:home-battery"
 
     def __init__(
         self,
