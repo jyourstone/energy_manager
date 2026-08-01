@@ -26,9 +26,10 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
        pricier one (BATT-15b), then a cheapest-first charge deficit (with
        buffer) is scheduled, and finally discharge is marked
        most-expensive-first while consumption energy remains.
-    5. Charge slots that fall within the daylight window are relabeled
-       "solar_charge" -- a cosmetic distinction only (EMS treats both the
-       same way) communicating that the draw could be covered by PV.
+    5. Charge slots that fall within a resolved solar window (today's, and
+       tomorrow's when a tomorrow forecast is available -- BATT-16) are
+       relabeled "solar_charge" -- a cosmetic distinction only (EMS treats
+       both the same way) communicating that the draw could be covered by PV.
     6. Derive current action and EMS mode from the slot containing 'now'.
 """
 
@@ -78,7 +79,8 @@ class BatteryScheduleResult:
         discharge_gate_reason: Machine-readable reason for the discharge
             gate's decision.
         reserved_energy_kwh: Energy earmarked for upcoming scheduled
-            discharge slots (before the next charge slot).
+            discharge slots (before the next charge slot), net of the solar
+            energy expected to arrive before them (BATT-16).
     """
 
     schedule: list[ScheduleSlot]
@@ -101,7 +103,9 @@ class DischargeGate:
         allowed: True when the battery may discharge to cover house load.
         reason: Machine-readable reason string for diagnostics.
         reserved_energy_kwh: Energy earmarked for upcoming scheduled
-            discharge slots (before the next charge slot).
+            discharge slots (before the next charge slot), net of the solar
+            energy expected to arrive before them when solar windows are
+            provided (BATT-16).
     """
 
     allowed: bool
@@ -142,9 +146,11 @@ def build_battery_schedule(
     estimated_charge_power_kw: float = 6.0,
     charge_buffer_pct: float = 20.0,
     solar_forecast_remaining_wh: float | None = None,
+    solar_forecast_tomorrow_wh: float | None = None,
     production_factor: float = 0.8,
     dawn: datetime | None = None,
     dusk: datetime | None = None,
+    tomorrow_start: datetime | None = None,
     peak_gap_hours: float = 2.0,
     min_soc_pct: float = 10.0,
     max_soc_pct: float = 95.0,
@@ -178,11 +184,18 @@ def build_battery_schedule(
         solar_forecast_remaining_wh: Estimated remaining solar production
             for the rest of today, in Wh (already summed across all
             configured Forecast.Solar sensors), or None.
-        production_factor: Multiplier applied to solar_forecast_remaining_wh
-            to account for forecast optimism (default 0.8).
+        solar_forecast_tomorrow_wh: Estimated solar production for tomorrow,
+            in Wh (already summed across all derived Forecast.Solar tomorrow
+            sensors), or None when unavailable (BATT-16).
+        production_factor: Multiplier applied to the raw solar forecast
+            readings to account for forecast optimism (default 0.8).
         dawn: The next_dawn datetime from sun.sun (NEXT occurrence -- may be
             tomorrow's dawn if it is currently daytime), or None.
         dusk: The next_dusk datetime from sun.sun (NEXT occurrence), or None.
+        tomorrow_start: UTC instant of the next local midnight -- the only
+            calendar knowledge the scheduler needs to attribute the resolved
+            daylight window to today or tomorrow (BATT-16). None disables
+            tomorrow attribution.
         peak_gap_hours: Hours gap to separate peak groups.
         min_soc_pct: Minimum SOC to maintain (0-100).
         max_soc_pct: Maximum SOC target (0-100).
@@ -218,10 +231,15 @@ def build_battery_schedule(
     discharge_candidates = [s for s in slots if s.action == "discharge"]
     peaks = _group_into_peaks(discharge_candidates, peak_gap_hours)
 
-    # Step 5: Resolve the solar recharge rate (BATT-15a) and daylight window
-    daylight_window = _normalize_daylight_window(dawn, dusk)
-    solar_rate_kw = _estimate_solar_rate_kw(
-        solar_forecast_remaining_wh, production_factor, daylight_window
+    # Step 5: Resolve the solar recharge windows and their rates
+    # (BATT-15a / BATT-16)
+    solar_windows = _resolve_solar_windows(
+        dawn=dawn,
+        dusk=dusk,
+        solar_forecast_remaining_wh=solar_forecast_remaining_wh,
+        solar_forecast_tomorrow_wh=solar_forecast_tomorrow_wh,
+        production_factor=production_factor,
+        tomorrow_start=tomorrow_start,
     )
 
     # Step 6: Virtual energy tracking -- optimize charge/discharge allocation
@@ -235,8 +253,7 @@ def build_battery_schedule(
         estimated_charge_power_kw=estimated_charge_power_kw,
         max_charge_power_w=max_charge_power_w,
         charge_buffer_pct=charge_buffer_pct,
-        solar_rate_kw=solar_rate_kw,
-        daylight_window=daylight_window,
+        solar_windows=solar_windows,
         min_soc_pct=min_soc_pct,
         max_soc_pct=max_soc_pct,
     )
@@ -277,6 +294,7 @@ def build_battery_schedule(
         battery_capacity_kwh=battery_capacity_kwh,
         mean_consumption_kw=mean_consumption_kw,
         min_soc_pct=min_soc_pct,
+        solar_windows=solar_windows,
     )
 
     return BatteryScheduleResult(
@@ -334,6 +352,7 @@ def compute_discharge_gate(
     battery_capacity_kwh: float,
     mean_consumption_kw: float,
     min_soc_pct: float = 10.0,
+    solar_windows: list[tuple[tuple[datetime, datetime], float]] | None = None,
 ) -> DischargeGate:
     """Determine whether self-consumption discharge is currently allowed.
 
@@ -356,6 +375,13 @@ def compute_discharge_gate(
         battery_soc_pct: Current battery state of charge (0-100).
         battery_capacity_kwh: Total battery capacity in kWh.
         mean_consumption_kw: Rolling average house consumption in kW.
+        min_soc_pct: Minimum SOC to maintain (0-100).
+        solar_windows: Resolved ((start, end), rate_kw) solar windows as
+            produced by _resolve_solar_windows, or None. When provided, the
+            reservation is computed net of the solar energy expected to
+            arrive before each discharge slot (prefix-max over future
+            discharge slots, BATT-16); None preserves the gross-reservation
+            behavior exactly.
 
     Returns:
         DischargeGate describing whether discharge is currently allowed.
@@ -382,6 +408,7 @@ def compute_discharge_gate(
     spread = current_slot.price - min_price
 
     reserved_energy_kwh = 0.0
+    needed_energy_kwh = 0.0
     for slot in schedule:
         if slot.start < now:
             continue
@@ -391,7 +418,20 @@ def compute_discharge_gate(
             break
         if slot.action == "discharge":
             duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
-            reserved_energy_kwh += mean_consumption_kw * duration_hours
+            needed_energy_kwh += mean_consumption_kw * duration_hours
+            if solar_windows is None:
+                reserved_energy_kwh = needed_energy_kwh
+            else:
+                # BATT-16 prefix-max net-of-solar reservation: the energy
+                # needed NOW is the max over future discharge slots of
+                # (cumulative need through that slot minus the solar energy
+                # expected to arrive before it). Floored at 0 because
+                # reserved_energy_kwh starts there and only ever ratchets up.
+                reserved_energy_kwh = max(
+                    reserved_energy_kwh,
+                    needed_energy_kwh
+                    - _solar_energy_kwh(now, slot.start, solar_windows),
+                )
 
     if spread <= effective_discharge_threshold:
         return DischargeGate(
@@ -599,6 +639,109 @@ def _estimate_solar_rate_kw(
     return estimated_remaining_kwh / daylight_hours
 
 
+def _resolve_solar_windows(
+    dawn: datetime | None,
+    dusk: datetime | None,
+    solar_forecast_remaining_wh: float | None,
+    solar_forecast_tomorrow_wh: float | None,
+    production_factor: float,
+    tomorrow_start: datetime | None,
+) -> list[tuple[tuple[datetime, datetime], float]]:
+    """Resolve daylight windows and their solar recharge rates (BATT-16).
+
+    Extends the single-window BATT-15a solar model across the 48h planning
+    horizon. sun.sun only describes ONE upcoming daylight window, so which
+    forecast belongs to it depends on the time of day: in the evening (after
+    dusk) both next_dawn and next_dusk already point at tomorrow, so the
+    resolved window IS tomorrow's and must carry tomorrow's forecast energy
+    -- naively shifting it +24h would misplace that energy beyond the
+    horizon. During daytime/morning the resolved window is today's; a
+    synthetic tomorrow window is appended when tomorrow's forecast is
+    available.
+
+    Args:
+        dawn: The next_dawn datetime from sun.sun, or None.
+        dusk: The next_dusk datetime from sun.sun, or None.
+        solar_forecast_remaining_wh: Estimated remaining production for the
+            rest of today in Wh, or None.
+        solar_forecast_tomorrow_wh: Estimated production for tomorrow in Wh,
+            or None when tomorrow sensors are unavailable.
+        production_factor: Multiplier applied to the raw forecast readings.
+        tomorrow_start: UTC instant of the next local midnight, or None to
+            disable tomorrow attribution. Must be provided whenever
+            solar_forecast_tomorrow_wh is: without it, evening calls cannot
+            detect that the sun.sun window already describes tomorrow, and
+            tomorrow's energy would be misattributed to a +24h window.
+
+    Returns:
+        List of ((window_start, window_end), rate_kw) tuples, empty when no
+        daylight window can be resolved.
+    """
+    window = _normalize_daylight_window(dawn, dusk)
+    if window is None:
+        return []
+
+    w0_is_tomorrow = tomorrow_start is not None and window[0] >= tomorrow_start
+    if w0_is_tomorrow:
+        # Evening: the single resolved window is tomorrow's daylight, so it
+        # carries tomorrow's forecast. Falling back to remaining-today when
+        # tomorrow sensors are absent preserves the pre-BATT-16 behavior.
+        energy_wh = (
+            solar_forecast_tomorrow_wh
+            if solar_forecast_tomorrow_wh is not None
+            else solar_forecast_remaining_wh
+        )
+        return [(window, _estimate_solar_rate_kw(energy_wh, production_factor, window))]
+
+    windows = [
+        (
+            window,
+            _estimate_solar_rate_kw(
+                solar_forecast_remaining_wh, production_factor, window
+            ),
+        )
+    ]
+    if solar_forecast_tomorrow_wh is not None:
+        # Shift +24h in UTC: immune to DST transitions (UTC has none); the
+        # only error versus tomorrow's true dawn/dusk is seasonal sun drift
+        # of roughly 1-3 minutes per day.
+        tomorrow_window = (
+            window[0] + timedelta(hours=24),
+            window[1] + timedelta(hours=24),
+        )
+        windows.append(
+            (
+                tomorrow_window,
+                _estimate_solar_rate_kw(
+                    solar_forecast_tomorrow_wh, production_factor, tomorrow_window
+                ),
+            )
+        )
+    return windows
+
+
+def _solar_energy_kwh(
+    range_start: datetime,
+    range_end: datetime,
+    solar_windows: list[tuple[tuple[datetime, datetime], float]],
+) -> float:
+    """Expected solar energy in kWh between two instants across all windows.
+
+    Args:
+        range_start: Start of the time range.
+        range_end: End of the time range.
+        solar_windows: Resolved ((start, end), rate_kw) solar windows.
+
+    Returns:
+        Sum of rate x overlap over all windows with a positive rate.
+    """
+    return sum(
+        rate_kw * _overlap_hours(range_start, range_end, window[0], window[1])
+        for window, rate_kw in solar_windows
+        if rate_kw > 0
+    )
+
+
 def _optimize_schedule(
     slots: list[_SlotInfo],
     peaks: list[list[_SlotInfo]],
@@ -609,8 +752,7 @@ def _optimize_schedule(
     estimated_charge_power_kw: float,
     max_charge_power_w: float,
     charge_buffer_pct: float,
-    solar_rate_kw: float,
-    daylight_window: tuple[datetime, datetime] | None,
+    solar_windows: list[tuple[tuple[datetime, datetime], float]],
     min_soc_pct: float,
     max_soc_pct: float,
 ) -> None:
@@ -618,12 +760,13 @@ def _optimize_schedule(
 
     Processes peaks chronologically, tracking a virtual battery energy
     level. For each peak: solar recharge accumulated in the gap before it is
-    added first (BATT-15a); energy is reserved for future, more expensive
-    peaks net of their own upcoming recharge (BATT-15b); a cheapest-first
-    charge deficit (with buffer, capped at the usable energy range) is
-    scheduled from peak-relative charge candidates; then discharge is
-    marked most-expensive-first while energy remains for each slot's own
-    house-consumption need. Charge slots inside the daylight window are
+    added first (BATT-15a, summed across all resolved solar windows --
+    BATT-16); energy is reserved for future, more expensive peaks net of
+    their own upcoming recharge (BATT-15b); a cheapest-first charge deficit
+    (with buffer, capped at the usable energy range) is scheduled from
+    peak-relative charge candidates; then discharge is marked
+    most-expensive-first while energy remains for each slot's own
+    house-consumption need. Charge slots inside any solar window are
     finally relabeled "solar_charge" (cosmetic only).
 
     Mutates slots in place, changing actions as needed.
@@ -655,13 +798,7 @@ def _optimize_schedule(
         window_end = peak[0].start
         window_bounds.append((window_start, window_end))
 
-        if solar_rate_kw > 0 and daylight_window is not None:
-            overlap = _overlap_hours(
-                window_start, window_end, daylight_window[0], daylight_window[1]
-            )
-            peak_recharge.append(solar_rate_kw * overlap)
-        else:
-            peak_recharge.append(0.0)
+        peak_recharge.append(_solar_energy_kwh(window_start, window_end, solar_windows))
 
     virtual_energy = current_energy_kwh
 
@@ -732,14 +869,17 @@ def _optimize_schedule(
 
         virtual_energy -= discharged
 
-    # Charge slots that fall within the daylight window are relabeled
+    # Charge slots that fall within any solar window are relabeled
     # solar_charge -- cosmetic only (EMS maps both to command_charging);
     # communicates that the draw could be covered by PV rather than grid.
-    if daylight_window is not None:
+    # Keyed on window presence, not rate, matching the single-window
+    # semantics (a resolved window with a zero forecast still relabels).
+    if solar_windows:
         for s in slots:
-            if s.action == "charge" and _overlap_hours(
-                s.start, s.end, daylight_window[0], daylight_window[1]
-            ) > 0:
+            if s.action == "charge" and any(
+                _overlap_hours(s.start, s.end, window[0], window[1]) > 0
+                for window, _rate_kw in solar_windows
+            ):
                 s.action = "solar_charge"
 
 

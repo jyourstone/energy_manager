@@ -3,10 +3,13 @@
 coordinator.py cannot be fully instantiated under the HA stubs (known
 limitation, DataUpdateCoordinator subclassing breaks under the stub -- see
 test_easee_coordinator_helpers.py), so this file targets only the small
-pure/HA-light functions added for BATT-13 (multi-forecast summing) and
-BATT-15 (house-consumption rolling average, sun.sun dawn/dusk reading):
+pure/HA-light functions added for BATT-13 (multi-forecast summing),
+BATT-15 (house-consumption rolling average, sun.sun dawn/dusk reading),
+and BATT-16 (tomorrow forecast entity derivation):
 - sum_solar_forecast_wh(): kWh/Wh-aware summing across multiple
   Forecast.Solar sensor readings.
+- derive_tomorrow_forecast_entities(): BATT-16 auto-derivation of
+  Forecast.Solar "tomorrow" entity ids from configured "remaining today" ids.
 - _prune_samples(): time-window pruning for the rolling consumption average.
 - _should_sample_consumption(): minimum-interval gate for the rolling
   consumption average (event-driven refreshes must not append a sample on
@@ -23,6 +26,7 @@ from custom_components.energy_manager.coordinator import (
     _prune_samples,
     _read_sun_dawn_dusk,
     _should_sample_consumption,
+    derive_tomorrow_forecast_entities,
     sum_solar_forecast_wh,
 )
 
@@ -66,6 +70,41 @@ def test_sum_solar_forecast_wh_case_insensitive_unit() -> None:
 
 def test_sum_solar_forecast_wh_empty_readings_is_zero() -> None:
     assert sum_solar_forecast_wh([]) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# derive_tomorrow_forecast_entities() -- BATT-16 tomorrow-entity derivation
+# ---------------------------------------------------------------------------
+
+
+def test_derive_tomorrow_forecast_entities_maps_both_prod_entities() -> None:
+    """Both Forecast.Solar naming variants map, incl. the _2 array suffix."""
+    result = derive_tomorrow_forecast_entities(
+        [
+            "sensor.energy_production_today_remaining",
+            "sensor.energy_production_today_remaining_2",
+        ]
+    )
+
+    assert result == [
+        "sensor.energy_production_tomorrow",
+        "sensor.energy_production_tomorrow_2",
+    ]
+
+
+def test_derive_tomorrow_forecast_entities_drops_non_matching() -> None:
+    result = derive_tomorrow_forecast_entities(
+        [
+            "sensor.energy_production_today_remaining",
+            "sensor.my_custom_solar_forecast",
+        ]
+    )
+
+    assert result == ["sensor.energy_production_tomorrow"]
+
+
+def test_derive_tomorrow_forecast_entities_empty_input() -> None:
+    assert derive_tomorrow_forecast_entities([]) == []
 
 
 # ---------------------------------------------------------------------------
