@@ -681,6 +681,43 @@ class TestNextSlotsLookup:
 
 
 # ---------------------------------------------------------------------------
+# Test 11b: Slot counts exclude past slots
+# ---------------------------------------------------------------------------
+
+
+class TestSlotCountsExcludePast:
+    """Slot counts reflect remaining slots only, not already-passed ones."""
+
+    def _result_at(self, now: datetime):
+        prices = (
+            [0.80] * 10  # hours 0-9: idle
+            + [2.50] * 4  # hours 10-13: expensive -> discharge
+            + [0.80] * 10  # hours 14-23: idle
+        )
+        return _build(
+            _make_24h_slots(prices),
+            current_soc_pct=50.0,
+            mean_consumption_kw=1.0,
+            estimated_charge_power_kw=1.0,
+            max_charge_power_w=1000.0,
+            now=now,
+        )
+
+    def test_counts_full_before_discharge_block(self):
+        result = self._result_at(datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC))
+        assert result.discharging_slot_count == 4
+
+    def test_counts_shrink_as_slots_pass(self):
+        """Mid-block: the current slot still counts, passed ones do not."""
+        result = self._result_at(datetime(2026, 2, 15, 12, 30, 0, tzinfo=UTC))
+        assert result.discharging_slot_count == 2
+
+    def test_counts_zero_after_block_passed(self):
+        result = self._result_at(datetime(2026, 2, 15, 23, 0, 0, tzinfo=UTC))
+        assert result.discharging_slot_count == 0
+
+
+# ---------------------------------------------------------------------------
 # Test 12: BATT-14 economics derivation (pure helper)
 # ---------------------------------------------------------------------------
 

@@ -65,8 +65,10 @@ class BatteryScheduleResult:
 
     Attributes:
         schedule: Ordered list of ScheduleSlot objects covering the full period.
-        charging_slot_count: Number of slots assigned to charge or solar_charge.
-        discharging_slot_count: Number of slots assigned to discharge.
+        charging_slot_count: Number of remaining charge or solar_charge slots
+            (slots that have not yet ended, including the current slot).
+        discharging_slot_count: Number of remaining discharge slots (slots
+            that have not yet ended, including the current slot).
         next_charging_slot: Next upcoming charge/solar_charge slot relative to now.
         next_discharging_slot: Next upcoming discharge slot relative to now.
         current_action: Action for the slot containing 'now'.
@@ -256,10 +258,16 @@ def build_battery_schedule(
     next_charge = _find_next_slot(schedule, now, ("charge", "solar_charge"))
     next_discharge = _find_next_slot(schedule, now, ("discharge",))
 
+    # Count only remaining slots (current slot included) so the counts match
+    # the future-filtered schedule exposed on the sensor.
     charging_count = sum(
-        1 for s in schedule if s.action in ("charge", "solar_charge")
+        1
+        for s in schedule
+        if s.action in ("charge", "solar_charge") and s.end > now
     )
-    discharging_count = sum(1 for s in schedule if s.action == "discharge")
+    discharging_count = sum(
+        1 for s in schedule if s.action == "discharge" and s.end > now
+    )
 
     gate = compute_discharge_gate(
         schedule=schedule,
