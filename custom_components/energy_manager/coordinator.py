@@ -1855,6 +1855,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     mode_changed
                     and target_discharge_limit is not None
                     and self._last_sent_discharge_limit == target_discharge_limit
+                    and self._discharge_limit_reads_at_most(target_discharge_limit)
                 ):
                     mode_sent = await self._send_ems_mode(result.target_mode)
                 if limit_changed:
@@ -1953,6 +1954,25 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         _read_control_enabled() (shared with EaseeCoordinator).
         """
         return _read_control_enabled(self.config_entry)
+
+    def _discharge_limit_reads_at_most(self, limit_kw: float) -> bool:
+        """True when the discharge-limit entity's LIVE state is <= limit_kw.
+
+        Entry-side symmetry to the 8b raise-guard (Greptile PR #7 round
+        2): a successful number.set_value call can precede the inverter
+        actually applying the value, and commanding Command Discharging in
+        that window would run at the previous (possibly entity-max) limit
+        above the fuse ceiling. Unknown/non-numeric states return False --
+        hold the mode, retry next cycle (costs at most one 30s tick of
+        sale time).
+        """
+        state = self.hass.states.get(self._discharge_limit_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return False
+        try:
+            return float(state.state) <= limit_kw + 0.001
+        except (TypeError, ValueError):
+            return False
 
     def _plant_mode_is_command_discharging(self) -> bool:
         """True when the EMS select entity currently READS a discharging mode.
