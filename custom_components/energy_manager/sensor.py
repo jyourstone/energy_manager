@@ -33,6 +33,12 @@ from .coordinator import (
     PriceData,
 )
 from .entity import CarEntity, EnergyManagerEntity
+from .forecast_accuracy import (
+    mean_ratio,
+    serialize_history,
+    suggested_factor,
+    valid_ratios,
+)
 
 
 async def async_setup_entry(
@@ -64,6 +70,7 @@ async def async_setup_entry(
             NextChargeSensor(battery_coordinator, entry),
             NextDischargeSensor(battery_coordinator, entry),
             ActualPriceSensor(battery_coordinator, price_coordinator, entry),
+            ForecastAccuracySensor(battery_coordinator, entry),
         ])
 
     # EMS status sensor (when EMS coordinator exists)
@@ -370,6 +377,62 @@ class ActualPriceSensor(EnergyManagerEntity, SensorEntity):
             + self.coordinator.grid_transfer_fee
             + self.coordinator.electricity_company_fee
         )
+
+
+class ForecastAccuracySensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for Stage-1 solar-forecast accuracy telemetry.
+
+    State is the suggested production factor derived from the last 14 days
+    of forecast-vs-actual PV production (unknown until 7 valid days exist).
+    Attributes expose the accuracy ratios and the persisted daily history.
+    Observe-only: nothing here feeds the scheduler -- the configured
+    production factor is applied unchanged (Stage 2 is post-cutover).
+    """
+
+    _attr_translation_key = "forecast_accuracy"
+    _attr_icon = "mdi:chart-line"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the forecast accuracy sensor.
+
+        Args:
+            coordinator: The BatteryScheduleCoordinator providing the
+                forecast_accuracy_history records.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_forecast_accuracy"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the suggested production factor, or None under 7 valid days."""
+        return suggested_factor(self.coordinator.forecast_accuracy_history)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return accuracy ratios and the persisted daily history.
+
+        ratio_yesterday is the most recent valid record's actual/forecast
+        ratio; ratio_7d/ratio_14d are plain means over the newest 7/14
+        valid ratios; valid_days counts the ratios in the 14-day window.
+        """
+        history = self.coordinator.forecast_accuracy_history
+        ratios = valid_ratios(history)
+        ratio_7d = mean_ratio(ratios[-7:])
+        ratio_14d = mean_ratio(ratios)
+        return {
+            "ratio_yesterday": round(ratios[-1], 3) if ratios else None,
+            "ratio_7d": round(ratio_7d, 3) if ratio_7d is not None else None,
+            "ratio_14d": round(ratio_14d, 3) if ratio_14d is not None else None,
+            "valid_days": len(ratios),
+            "history": serialize_history(history),
+        }
 
 
 class EMSStatusSensor(EnergyManagerEntity, SensorEntity):

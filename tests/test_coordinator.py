@@ -11,6 +11,8 @@ and BATT-16 (tomorrow forecast entity derivation):
 - derive_tomorrow_forecast_entities(): BATT-16 auto-derivation of
   Forecast.Solar "tomorrow" entity ids from configured "remaining today" ids.
 - _prune_samples(): time-window pruning for the rolling consumption average.
+- _serialize_samples()/_restore_samples(): persistence round-trip for the
+  rolling consumption window (survives HA restarts via Store).
 - _should_sample_consumption(): minimum-interval gate for the rolling
   consumption average (event-driven refreshes must not append a sample on
   every tick).
@@ -25,6 +27,8 @@ from unittest.mock import MagicMock
 from custom_components.energy_manager.coordinator import (
     _prune_samples,
     _read_sun_dawn_dusk,
+    _restore_samples,
+    _serialize_samples,
     _should_sample_consumption,
     derive_tomorrow_forecast_entities,
     sum_solar_forecast_wh,
@@ -138,6 +142,95 @@ def test_prune_samples_keeps_all_when_within_window() -> None:
 def test_prune_samples_empty_input() -> None:
     now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
     assert _prune_samples([], now, window_hours=48.0) == []
+
+
+# ---------------------------------------------------------------------------
+# _serialize_samples() / _restore_samples() -- BATT-15 persistence
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_restore_round_trip() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    samples = [
+        (now - timedelta(hours=2), 1.5),
+        (now - timedelta(minutes=5), 0.8),
+    ]
+
+    restored = _restore_samples(
+        _serialize_samples(samples), now, window_hours=48.0
+    )
+
+    assert restored == samples
+
+
+def test_restore_samples_prunes_outside_window() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    samples = [
+        (now - timedelta(hours=49), 1.0),  # outside 48h window
+        (now - timedelta(hours=1), 2.0),  # inside
+    ]
+
+    restored = _restore_samples(
+        _serialize_samples(samples), now, window_hours=48.0
+    )
+
+    assert restored == [(now - timedelta(hours=1), 2.0)]
+
+
+def test_restore_samples_tolerates_none_and_garbage() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+
+    assert _restore_samples(None, now, window_hours=48.0) == []
+    assert _restore_samples("garbage", now, window_hours=48.0) == []
+    assert _restore_samples(42, now, window_hours=48.0) == []
+    assert _restore_samples({"a": 1}, now, window_hours=48.0) == []
+
+
+def test_restore_samples_skips_malformed_entries() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    valid_ts = (now - timedelta(hours=1)).isoformat()
+    raw = [
+        [valid_ts, 1.5],  # valid
+        ["not-a-timestamp", 2.0],  # unparseable timestamp
+        [123, 2.0],  # non-string timestamp
+        [valid_ts, "not-a-number"],  # unparseable value
+        [valid_ts],  # wrong arity
+        "junk",
+        None,
+    ]
+
+    restored = _restore_samples(raw, now, window_hours=48.0)
+
+    assert restored == [(now - timedelta(hours=1), 1.5)]
+
+
+def test_restore_samples_drops_future_timestamps() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    raw = _serialize_samples(
+        [
+            (now + timedelta(hours=1), 9.9),  # future (e.g. clock skew)
+            (now - timedelta(hours=1), 1.0),
+        ]
+    )
+
+    restored = _restore_samples(raw, now, window_hours=48.0)
+
+    assert restored == [(now - timedelta(hours=1), 1.0)]
+
+
+def test_restore_samples_coerces_timestamps_to_utc() -> None:
+    now = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+    raw = [
+        ["2026-02-15T11:00:00+01:00", 1.0],  # offset-aware -> 10:00 UTC
+        ["2026-02-15T09:00:00", 2.0],  # naive -> treated as UTC
+    ]
+
+    restored = _restore_samples(raw, now, window_hours=48.0)
+
+    assert restored == [
+        (datetime(2026, 2, 15, 10, 0, tzinfo=UTC), 1.0),
+        (datetime(2026, 2, 15, 9, 0, tzinfo=UTC), 2.0),
+    ]
 
 
 # ---------------------------------------------------------------------------

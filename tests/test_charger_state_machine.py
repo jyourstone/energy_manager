@@ -26,6 +26,7 @@ import pytest
 from custom_components.energy_manager.charger_state_machine import (
     CarDemand,
     ChargerAmpHysteresis,
+    ChargerCommand,
     ChargerController,
     ChargerDecision,
     ChargerInputs,
@@ -1058,13 +1059,6 @@ class TestTerminalStates:
         assert decision.notifications == ()
         assert decision.override_reason == f"terminal_{status}"
 
-    def test_terminal_status_makes_no_adjustments_even_if_power_nonzero(self):
-        """No stop command even if power is (anomalously) nonzero -- 'no
-        adjustments' per spec."""
-        inputs = _inputs(charger_status="error", charger_power_kw=3.5, force_charging=True)
-        decision = ChargerController().decide(inputs)
-        assert decision.commands == ()
-
     def test_terminal_status_resets_amp_hysteresis(self):
         """A fresh session after a terminal state must not inherit a stale
         hysteresis-applied value from the previous session."""
@@ -1090,6 +1084,85 @@ class TestTerminalStates:
         assert decision.mode == "idle"
         assert decision.commands == ()
         assert controller.sequence_state == "idle"
+
+
+# ---------------------------------------------------------------------------
+# Terminal-status physics defence: power draw beats a lying status entity
+# ---------------------------------------------------------------------------
+
+
+class TestTerminalStatusPhysicsDefence:
+    """A terminal status while the car draws power must NOT reset -- the
+    status entity is lying and supervision (incl. fuse Layer 1) must
+    continue until the draw actually stops."""
+
+    @pytest.mark.parametrize("status", ["disconnected", "completed", "error"])
+    def test_terminal_status_while_drawing_keeps_supervising(self, status):
+        decision = ChargerController().decide(
+            _inputs(charger_status=status, charger_power_kw=6.0)
+        )
+        assert decision.mode == "scheduled"
+        assert decision.override_reason != f"terminal_{status}"
+        # Supervision is live: the dynamic limit is still being managed.
+        assert [c.action for c in decision.commands] == ["set_dynamic_limit"]
+
+    def test_no_spurious_start_commands_during_lie(self):
+        decision = ChargerController().decide(
+            _inputs(charger_status="disconnected", charger_power_kw=6.0)
+        )
+        actions = [c.action for c in decision.commands]
+        assert "start" not in actions
+        assert "resume" not in actions
+
+    def test_disconnected_not_drawing_resets_unchanged(self):
+        decision = ChargerController().decide(
+            _inputs(charger_status="disconnected", charger_power_kw=0.0)
+        )
+        assert decision.mode == "idle"
+        assert decision.commands == ()
+        assert decision.override_reason == "terminal_disconnected"
+
+    def test_standby_draw_below_threshold_still_resets(self):
+        """0.3 kW is below POWER_ACTIVE_THRESHOLD_KW (0.5) -- not drawing,
+        so the terminal reset fires as before."""
+        decision = ChargerController().decide(
+            _inputs(charger_status="disconnected", charger_power_kw=0.3)
+        )
+        assert decision.mode == "idle"
+        assert decision.override_reason == "terminal_disconnected"
+
+    def test_fuse_layer1_reachable_during_status_lie(self):
+        """Emergency overload pause must still fire while the status entity
+        claims disconnected -- the whole point of the defence."""
+        decision = ChargerController().decide(
+            _inputs(
+                charger_status="disconnected",
+                charger_power_kw=6.0,
+                measured_worst_case_signed_amps=25.0,  # >= 20A fuse + 2A margin
+            )
+        )
+        assert decision.override_reason == "emergency_fuse_overload"
+        assert [c.action for c in decision.commands] == ["pause"]
+        assert decision.notifications
+
+    def test_one_tick_delayed_reset_after_real_unplug(self):
+        """During the lie the controller keeps supervising; the reset fires
+        one tick later, once the power draw actually stops."""
+        controller = ChargerController()
+        controller.decide(_inputs(charger_status="charging", charger_power_kw=6.0))
+        assert controller._amp_hysteresis.applied == 16.0
+        lying = controller.decide(
+            _inputs(charger_status="disconnected", charger_power_kw=6.0)
+        )
+        assert lying.override_reason != "terminal_disconnected"
+        assert controller._amp_hysteresis.applied == 16.0
+        unplugged = controller.decide(
+            _inputs(charger_status="disconnected", charger_power_kw=0.0)
+        )
+        assert unplugged.override_reason == "terminal_disconnected"
+        assert unplugged.mode == "idle"
+        assert unplugged.commands == ()
+        assert controller._amp_hysteresis.applied is None
 
 
 # ---------------------------------------------------------------------------
@@ -1606,6 +1679,262 @@ class TestGenericStuckDetection:
         )
         assert decision.stuck is True
         assert decision.commands[0].action == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Belief-gated command emission (Easee reconciler)
+# ---------------------------------------------------------------------------
+
+
+class TestBeliefGatedLimitEmission:
+    """set_dynamic_limit is emitted on value change or heartbeat -- never
+    per tick just because the power-derived current_dynamic_limit_amps
+    estimate (e.g. 15.95) fails to exactly match the 16.0 target."""
+
+    def _charging(self, now, **overrides):
+        defaults = {
+            "charger_status": "charging",
+            "charger_power_kw": 11.0,
+            "current_dynamic_limit_amps": 15.95,
+            "now": now,
+        }
+        defaults.update(overrides)
+        return _inputs(**defaults)
+
+    def test_steady_charge_emits_limit_once_then_silence(self):
+        controller = ChargerController()
+        d1 = controller.decide(self._charging(T0))
+        assert d1.commands == (ChargerCommand("set_dynamic_limit", 16.0),)
+        for seconds in (30, 60, 90):
+            d = controller.decide(self._charging(T0 + timedelta(seconds=seconds)))
+            assert d.commands == ()
+
+    def test_value_change_emits_once(self):
+        controller = ChargerController()
+        controller.decide(self._charging(T0))
+        # Headroom drops: fuse avail 20-2-8+0 = 10A -- a decrease, applied
+        # after the 5s decrease delay, emitted exactly once.
+        drop = {"measured_worst_case_signed_amps": 8.0, "current_dynamic_limit_amps": 0.0}
+        pending = controller.decide(self._charging(T0 + timedelta(seconds=30), **drop))
+        assert pending.commands == ()  # decrease still pending, applied still 16
+        applied = controller.decide(self._charging(T0 + timedelta(seconds=36), **drop))
+        assert applied.commands == (ChargerCommand("set_dynamic_limit", 10.0),)
+        silent = controller.decide(self._charging(T0 + timedelta(seconds=66), **drop))
+        assert silent.commands == ()
+
+    def test_heartbeat_reasserts_unchanged_limit(self):
+        controller = ChargerController()
+        controller.decide(self._charging(T0))
+        just_before = controller.decide(self._charging(T0 + timedelta(seconds=599)))
+        assert just_before.commands == ()
+        heartbeat = controller.decide(self._charging(T0 + timedelta(seconds=600)))
+        assert heartbeat.commands == (ChargerCommand("set_dynamic_limit", 16.0),)
+        after = controller.decide(self._charging(T0 + timedelta(seconds=630)))
+        assert after.commands == ()
+
+    def test_heartbeat_rewrites_applied_value_not_pending_increase(self):
+        """The heartbeat re-asserts what hysteresis has APPLIED -- it must
+        never leak a pending increase before amp_increase_delay_s."""
+        controller = ChargerController()
+        d1 = controller.decide(
+            self._charging(
+                T0,
+                measured_worst_case_signed_amps=8.0,
+                current_dynamic_limit_amps=0.0,
+                amp_increase_delay_s=1200.0,
+            )
+        )
+        assert d1.commands == (ChargerCommand("set_dynamic_limit", 10.0),)
+        # Headroom recovers -- computed 16A is now increase-pending (1200s).
+        controller.decide(
+            self._charging(T0 + timedelta(seconds=30), amp_increase_delay_s=1200.0)
+        )
+        heartbeat = controller.decide(
+            self._charging(T0 + timedelta(seconds=630), amp_increase_delay_s=1200.0)
+        )
+        assert heartbeat.commands == (ChargerCommand("set_dynamic_limit", 10.0),)
+        # Once the increase delay elapses, 16A goes out as a value change.
+        raised = controller.decide(
+            self._charging(T0 + timedelta(seconds=1230), amp_increase_delay_s=1200.0)
+        )
+        assert raised.commands == (ChargerCommand("set_dynamic_limit", 16.0),)
+
+    def test_sub_amp_jitter_does_not_resend_after_quantization(self):
+        """Fuse-bound capacity jitter (15.95 -> 16.0 -> 15.9) quantizes to
+        the same 15A -- no re-sends after the first emission."""
+        controller = ChargerController()
+
+        def tick(seconds, addback):
+            # fuse avail = 20 - 2 - 8 + addback -- jitters with the
+            # power-derived add-back estimate.
+            return controller.decide(
+                self._charging(
+                    T0 + timedelta(seconds=seconds),
+                    measured_worst_case_signed_amps=8.0,
+                    current_dynamic_limit_amps=addback,
+                )
+            )
+
+        first = tick(0, 5.95)  # capacity 15.95 -> emit floor 15A
+        assert first.commands == (ChargerCommand("set_dynamic_limit", 15.0),)
+        assert tick(30, 6.0).commands == ()  # 16.0 -- increase-pending
+        assert tick(60, 5.9).commands == ()  # 15.9 -- decrease-pending
+        assert tick(70, 5.9).commands == ()  # 15.9 applied -- still 15A
+
+    def test_limit_zero_gated_but_pause_reasserted_every_tick(self):
+        """The proactive 0A limit goes through the same belief (once, not
+        per tick); the safety pause while still drawing stays per-tick."""
+        controller = ChargerController()
+        overload = {
+            "force_charging": True,
+            "charger_status": "charging",
+            "charger_power_kw": 3.5,
+            "measured_worst_case_signed_amps": 19.0,
+        }
+        d1 = controller.decide(_inputs(now=T0, **overload))
+        assert [c.action for c in d1.commands] == ["set_dynamic_limit", "pause"]
+        d2 = controller.decide(_inputs(now=T0 + timedelta(seconds=30), **overload))
+        assert [c.action for c in d2.commands] == ["pause"]
+
+    def test_limit_zero_not_drawing_emits_once(self):
+        controller = ChargerController()
+        blocked = {
+            "force_charging": True,
+            "charger_status": "awaiting_start",
+            "charger_power_kw": 0.0,
+            "measured_worst_case_signed_amps": 100.0,
+        }
+        d1 = controller.decide(_inputs(now=T0, **blocked))
+        assert d1.commands == (ChargerCommand("set_dynamic_limit", 0.0),)
+        d2 = controller.decide(_inputs(now=T0 + timedelta(seconds=30), **blocked))
+        assert d2.commands == ()
+
+    def test_status_lie_while_drawing_keeps_belief_gating(self):
+        """Physics defence + belief gating together: while the status
+        entity lies terminal but the car still draws, supervision runs the
+        normal belief-gated emission path -- no per-tick re-sends, and the
+        heartbeat still fires through the lie."""
+        controller = ChargerController()
+        d1 = controller.decide(self._charging(T0))
+        assert d1.commands == (ChargerCommand("set_dynamic_limit", 16.0),)
+        # Status entity flips to a lying terminal state mid-draw.
+        lie = {"charger_status": "disconnected"}
+        d2 = controller.decide(self._charging(T0 + timedelta(seconds=30), **lie))
+        assert d2.override_reason != "terminal_disconnected"
+        assert d2.commands == ()  # unchanged limit stays gated during the lie
+        heartbeat = controller.decide(
+            self._charging(T0 + timedelta(seconds=600), **lie)
+        )
+        assert heartbeat.commands == (ChargerCommand("set_dynamic_limit", 16.0),)
+
+
+class TestStartResumeBeliefGating:
+    """start/resume is emitted once per attempt -- not repeated every tick
+    during ramp lag -- and re-issued only after command_stuck_timeout_s."""
+
+    def _waiting(self, now, **overrides):
+        defaults = {
+            "charger_status": "awaiting_start",
+            "charger_power_kw": 0.0,
+            "now": now,
+        }
+        defaults.update(overrides)
+        return _inputs(**defaults)
+
+    def test_start_not_reissued_during_ramp_lag(self):
+        controller = ChargerController()
+        d1 = controller.decide(self._waiting(T0))
+        assert [c.action for c in d1.commands] == ["start", "set_dynamic_limit"]
+        for seconds in (30, 59):
+            d = controller.decide(self._waiting(T0 + timedelta(seconds=seconds)))
+            assert d.commands == ()
+
+    def test_start_reissued_after_stuck_timeout(self):
+        controller = ChargerController()
+        controller.decide(self._waiting(T0))
+        decision = controller.decide(self._waiting(T0 + timedelta(seconds=61)))
+        assert [c.action for c in decision.commands] == ["start"]
+        assert decision.stuck is True
+
+    def test_resume_gated_like_start_when_paused(self):
+        controller = ChargerController()
+        d1 = controller.decide(self._waiting(T0, charger_status="paused"))
+        assert d1.commands[0].action == "resume"
+        d2 = controller.decide(
+            self._waiting(T0 + timedelta(seconds=30), charger_status="paused")
+        )
+        assert d2.commands == ()
+
+    def test_confirmed_draw_rearms_start_immediately(self):
+        """Once the start confirms (draw observed), a later external stop
+        may issue a fresh start without waiting out the stuck timeout."""
+        controller = ChargerController()
+        controller.decide(self._waiting(T0))
+        controller.decide(
+            self._waiting(
+                T0 + timedelta(seconds=10),
+                charger_status="charging",
+                charger_power_kw=3.5,
+            )
+        )
+        decision = controller.decide(self._waiting(T0 + timedelta(seconds=20)))
+        assert any(c.action == "start" for c in decision.commands)
+
+
+class TestUnauthorizedStopReassert:
+    def test_stop_reasserted_every_tick(self):
+        """Safety property: the unauthorized-draw stop is NOT belief-gated."""
+        controller = ChargerController()
+        for seconds in (0, 30, 60):
+            decision = controller.decide(
+                _inputs(
+                    cars=(),
+                    charger_status="charging",
+                    charger_power_kw=3.5,
+                    now=T0 + timedelta(seconds=seconds),
+                )
+            )
+            assert [c.action for c in decision.commands] == ["stop"]
+
+
+class TestBeliefReset:
+    def _charging(self, now):
+        return _inputs(
+            charger_status="charging",
+            charger_power_kw=11.0,
+            current_dynamic_limit_amps=15.95,
+            now=now,
+        )
+
+    def test_terminal_reset_clears_belief(self):
+        controller = ChargerController()
+        controller.decide(self._charging(T0))
+        assert controller.decide(self._charging(T0 + timedelta(seconds=30))).commands == ()
+        terminal = controller.decide(
+            _inputs(
+                charger_status="disconnected",
+                charger_power_kw=0.0,
+                now=T0 + timedelta(seconds=60),
+            )
+        )
+        assert terminal.override_reason == "terminal_disconnected"
+        # New session: the same 16A is re-emitted well before the heartbeat.
+        fresh = controller.decide(self._charging(T0 + timedelta(seconds=90)))
+        assert fresh.commands == (ChargerCommand("set_dynamic_limit", 16.0),)
+
+    def test_reset_command_belief_rearms_limit_and_start(self):
+        """The coordinator calls this on the control_enabled OFF->ON edge --
+        the first live tick must re-assert both the limit and the start."""
+        controller = ChargerController()
+        waiting = {"charger_status": "awaiting_start", "charger_power_kw": 0.0}
+        controller.decide(_inputs(now=T0, **waiting))
+        silent = controller.decide(_inputs(now=T0 + timedelta(seconds=30), **waiting))
+        assert silent.commands == ()
+        controller.reset_command_belief()
+        # 45s: still inside the stuck timeout, so without the reset this
+        # tick would stay silent.
+        rearmed = controller.decide(_inputs(now=T0 + timedelta(seconds=45), **waiting))
+        assert [c.action for c in rearmed.commands] == ["start", "set_dynamic_limit"]
 
 
 # ---------------------------------------------------------------------------

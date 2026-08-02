@@ -113,7 +113,8 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
 | Charger Status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
-| House Load *(diagnostic)* | Filtered house consumption (house consumption minus excluded power entities), with the BATT-15 rolling mean consumption as an attribute |
+| House Load *(diagnostic)* | Filtered house consumption (house consumption minus excluded power entities), with the BATT-15 rolling mean consumption as an attribute (rolling window persists across restarts) |
+| Forecast Accuracy *(diagnostic)* | Observe-only solar forecast accuracy tracking: daily forecast-vs-actual ratios and a suggested production factor (needs 7+ valid days; does not affect scheduling) |
 | Solar Balance *(diagnostic)* | Signed net solar balance (PV minus house load minus battery charging plus charger draw): positive means surplus available for the charger, negative means deficit. Raw value before the charger's own activation gating |
 
 ### Switches
@@ -144,6 +145,10 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Car Departure Time *(per car)* | Deadline used to compute that car's charging schedule |
 
 All number entities persist their value across Home Assistant restarts.
+
+## Repairs
+
+Persistent degraded conditions surface in **Settings → Repairs** instead of only the log: fuse-protection sensors continuously falling back to the assumed load (5+ minutes), and misconfigured charge/discharge limit entities (wrong domain). Issues clear automatically when the condition recovers.
 
 ## Diagnostics
 

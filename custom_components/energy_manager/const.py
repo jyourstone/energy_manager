@@ -115,6 +115,17 @@ DEFAULT_MEAN_CONSUMPTION_KW = 0.5
 # Forecast.Solar updates), not fixed-cadence, so without this the rolling
 # mean is skewed toward chatty sensors and the sample list grows unbounded.
 MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES = 1.0
+# Consumption-sample persistence (one HA Store per config entry) -- restored
+# at setup so the first refresh after a restart already uses the rolling
+# mean; saves are delayed to batch appends instead of writing every cycle.
+CONSUMPTION_STORAGE_VERSION = 1
+CONSUMPTION_STORAGE_SAVE_DELAY_SECONDS = 30.0
+
+# Stage-1 forecast-accuracy telemetry (observe-only) -- daily
+# forecast-vs-actual records persisted in their own Store (separate file
+# from the consumption samples by design; written once per day at the
+# local-midnight rollover).
+FORECAST_ACCURACY_STORAGE_VERSION = 1
 
 # --- BATT-14 economics number entities (RestoreNumber, hub-level) ---
 # Reuses MIN_PRICE_THRESHOLD/MAX_PRICE_THRESHOLD/PRICE_THRESHOLD_STEP above
@@ -151,6 +162,10 @@ CONF_ASSUMED_LOAD_AMPS = "assumed_load_amps"
 DEFAULT_ASSUMED_LOAD_AMPS = 10.0
 MIN_ASSUMED_LOAD_AMPS = 0
 MAX_ASSUMED_LOAD_AMPS = 63
+# Continuous-fallback duration before a Repairs issue is filed -- the
+# rate-limited log warning fires immediately; the issue is reserved for
+# persistent sensor outages, not transient blips
+FUSE_FALLBACK_ISSUE_THRESHOLD_SECONDS = 300.0
 
 # ESS (battery) charging current cap and self-consumption add-back
 CONF_MAX_ESS_CHARGE_AMPS = "max_ess_charge_amps"
@@ -294,6 +309,10 @@ DEFAULT_SOLAR_SAFETY_BUFFER_KW = 0.5
 DEFAULT_SOC_ROUND_UP = True
 DEFAULT_PHASE_SEQUENCE_STEP_TIMEOUT_SECONDS = 15.0
 DEFAULT_COMMAND_STUCK_TIMEOUT_SECONDS = 60.0
+# Heartbeat for re-asserting an unchanged dynamic limit (belief-gated
+# command emission -- without it, a limit the charger silently dropped
+# would never be re-written)
+DEFAULT_LIMIT_REASSERT_INTERVAL_SECONDS = 600.0
 
 # Easee coordinator update interval (seconds)
 EASEE_UPDATE_INTERVAL_SECONDS = 30
