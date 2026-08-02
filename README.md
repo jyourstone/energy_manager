@@ -108,12 +108,12 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 |--------|--------------|
 | Electricity Price | Current Nordpool price |
 | Battery Schedule | Full multi-cycle charge/discharge schedule with status and attributes |
-| Next Charging Slot | Timestamp of the next scheduled charge slot |
-| Next Discharging Slot | Timestamp of the next scheduled discharge slot |
-| EMS Status | Current SigenStor EMS mode and fuse headroom |
+| Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
+| Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
+| Battery EMS status | Current SigenStor EMS mode and fuse headroom |
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
-| Charger Status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
+| EV charger status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
 | House Load *(diagnostic)* | Filtered house consumption (house consumption minus excluded power entities), with the BATT-15 rolling mean consumption as an attribute (rolling window persists across restarts) |
 | Forecast Accuracy *(diagnostic)* | Observe-only solar forecast accuracy tracking: daily forecast-vs-actual ratios and a suggested production factor (needs 7+ valid days; does not affect scheduling) |
 | Solar Balance *(diagnostic)* | Signed net solar balance (PV minus house load minus battery charging plus charger draw): positive means surplus available for the charger, negative means deficit. Raw value before the charger's own activation gating |
@@ -123,16 +123,16 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Entity | Description |
 |--------|--------------|
 | Device control | Master observe-only switch (CORE-14); OFF means every coordinator still computes and publishes decisions, but no device command is actually sent |
-| Force charging | Forces the Easee charger to grid-charge regardless of schedule or solar state (EASE-03) |
+| EV charger force charging | Forces the Easee charger to grid-charge regardless of schedule or solar state (EASE-03) |
 
 ### Numbers
 
 | Entity | Description |
 |--------|--------------|
-| Charge Price Threshold | Spread threshold (SEK/kWh): a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
-| Discharge Price Threshold | Spread threshold (SEK/kWh): a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by the Battery Cycle Cost formula below when that is set above 0 |
-| Max Charge Power | Maximum battery charge power (kW) |
-| Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `battery_cycle_cost - grid_transfer_fee`, overriding the manual Discharge Price Threshold above (parity with the live system's economics formula). Default 0 (disabled) |
+| Battery charge price threshold | Spread threshold (SEK/kWh): a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
+| Battery discharge price threshold | Spread threshold (SEK/kWh): a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by the Battery Cycle Cost formula below when that is set above 0 |
+| Battery max charging power | Maximum battery charge power (kW) |
+| Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `battery_cycle_cost - grid_transfer_fee`, overriding the manual Battery discharge price threshold above (parity with the live system's economics formula). Default 0 (disabled) |
 | Grid Transfer Fee | Grid transfer fee (SEK/kWh); feeds the Battery Cycle Cost formula and the Actual Electricity Price sensor |
 | Electricity Company Fee | Electricity company fee (SEK/kWh); used only by the Actual Electricity Price sensor |
 | Grid charging target *(per car)* | Target state of charge for scheduled price-based charging |
@@ -149,9 +149,9 @@ All number entities persist their value across Home Assistant restarts.
 
 ## Battery → grid export arbitrage (BATT-17)
 
-Opt-in feature that sells battery energy to the grid during extreme price spikes. **Off by default**: with the *Export spike threshold* unset or 0, no export slot is ever scheduled and battery schedules are unchanged.
+Opt-in feature that sells battery energy to the grid during extreme price spikes. **Off by default**: with the *Battery export spike threshold* unset or 0, no export slot is ever scheduled and battery schedules are unchanged.
 
-- **Export spike threshold** — a number entity (like the charge/discharge thresholds): the price spread above the period's cheapest hour at or above which a slot may become an export slot. Adapts automatically when the overall price level shifts. Set to 0 to disable (default). The **Export reserve battery level** number entity (default 20%) is the SOC floor below which the battery never sells.
+- **Battery export spike threshold** — a number entity (like the charge/discharge thresholds): the price spread above the period's cheapest hour at or above which a slot may become an export slot. Adapts automatically when the overall price level shifts. Set to 0 to disable (default). The **Battery export reserve level** number entity (default 20%) is the SOC floor below which the battery never sells.
 - **Export reserve SOC (%)** — never export below this battery level (default 20%). Enforced twice: the scheduler's export energy budget only plans with energy above the floor, and at runtime the floor is re-checked every 30 s — export drops back to self-consumption at or below the floor, or whenever the battery SOC sensor is unavailable.
 - **Fuse-capped export power** — the discharge limit commanded during an export slot is capped at `(fuse rating − safety buffer) × 3 × 230 V`, without adding house load (house load can sit on a single phase, so the cap is derived per-phase-safe). The plant's own discharge limit is never commanded during export: a 20 A main fuse with the default 1 A safety buffer gives a ~13.1 kW ceiling.
 - **Qualification** — a slot only exports when its spread above the period's cheapest hour is at or above the threshold AND selling now beats buying the same energy back later: `spot > (cheapest future spot + grid transfer fee + electricity company fee) / 0.9 + battery cycle cost` (0.9 = assumed round-trip efficiency). Export never demotes a scheduled self-consumption discharge slot worth more per kWh.
