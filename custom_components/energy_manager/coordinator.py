@@ -78,8 +78,6 @@ from .const import (
     CONF_ESS_INCREASE_DELAY,
     CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EXCLUDED_POWER_ENTITIES,
-    CONF_EXPORT_RESERVE_SOC_PCT,
-    CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
     CONF_FUSE_SAFETY_BUFFER_AMPS,
@@ -500,6 +498,10 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         self.charge_threshold: float = DEFAULT_CHARGE_THRESHOLD
         self.discharge_threshold: float = DEFAULT_DISCHARGE_THRESHOLD
         self.max_charge_power_w: float = DEFAULT_MAX_CHARGE_POWER_KW * 1000
+        # BATT-17 export arbitrage -- number entities like their sibling
+        # knobs; 0 = feature off
+        self.export_spike_threshold: float = 0.0
+        self.export_reserve_soc_pct: float = DEFAULT_EXPORT_RESERVE_SOC_PCT
 
         # BATT-14 economics -- updated by NumberEntity instances after setup
         self.battery_cycle_cost: float = DEFAULT_BATTERY_CYCLE_COST
@@ -649,19 +651,13 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
         )
 
-        # 5b. BATT-17 export arbitrage inputs -- threshold missing/None/0
-        #     all mean the feature is OFF (scheduler output bit-identical)
-        export_spike_threshold = self.config_entry.options.get(
-            CONF_EXPORT_SPIKE_THRESHOLD
-        )
+        # 5b. BATT-17 export arbitrage inputs -- number-entity knobs like
+        #     the sibling thresholds; 0 means the feature is OFF
+        #     (scheduler output bit-identical)
         export_spike_threshold = (
-            float(export_spike_threshold) if export_spike_threshold else None
-        )  # missing/None/0 all mean OFF
-        export_reserve_soc_pct = float(
-            self.config_entry.options.get(
-                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
-            )
+            self.export_spike_threshold if self.export_spike_threshold > 0 else None
         )
+        export_reserve_soc_pct = self.export_reserve_soc_pct
         fuse_rating_amps = float(
             self.config_entry.options.get(
                 CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
@@ -1599,11 +1595,6 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._excluded_power_entities: list[str] = (
             entry.options.get(CONF_EXCLUDED_POWER_ENTITIES, []) or []
         )
-        self._export_reserve_soc_pct: float = float(
-            entry.options.get(
-                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
-            )
-        )
 
         # Shared fuse arbiter (Phase 5): identical grid-sensor read/fallback
         # logic reused by EaseeCoordinator -- see FuseSensorReader.
@@ -1777,7 +1768,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     fuse_rating_amps=self._fuse_rating_amps,
                     safety_buffer_amps=self._safety_buffer_amps,
                     battery_soc_pct=battery_soc,
-                    export_reserve_soc_pct=self._export_reserve_soc_pct,
+                    export_reserve_soc_pct=(
+                        self._battery_coordinator.export_reserve_soc_pct
+                    ),
                     soc_available=self._soc_strictly_available(),
                     pv_power_kw=pv_power_w / 1000.0,
                     max_limit_kw=MAX_CHARGE_LIMIT_KW,

@@ -85,10 +85,12 @@ def test_keys_only_in_detected_are_included() -> None:
 
 
 class TestExportTranslationKeys:
-    """BATT-17: export arbitrage fields are present in every translation file.
+    """BATT-17: export knobs are number ENTITIES, translated in every file.
 
-    Pure JSON check -- keeps strings.json, en.json and sv.json key-synchronized
-    for the config wizard's economics step and the options flow's battery step.
+    Pure JSON check -- keeps strings.json, en.json and sv.json
+    key-synchronized for the export number entities, and pins that the
+    retired options-flow fields never come back (they moved to number
+    entities alongside the sibling threshold knobs).
     """
 
     _COMPONENT_DIR = (
@@ -96,31 +98,38 @@ class TestExportTranslationKeys:
         / "custom_components"
         / "energy_manager"
     )
-    _EXPORT_KEYS = ("export_spike_threshold", "export_reserve_soc_pct")
+    _ENTITY_KEYS = ("export_spike_threshold", "export_reserve_soc")
+    _RETIRED_FORM_KEYS = ("export_spike_threshold", "export_reserve_soc_pct")
 
     @pytest.mark.parametrize(
         "filename",
         ["strings.json", "translations/en.json", "translations/sv.json"],
     )
-    def test_export_keys_in_all_form_sections(self, filename: str) -> None:
-        """Both export keys exist in data and data_description of both steps."""
+    def test_export_entity_names_translated(self, filename: str) -> None:
+        """Both export number entities have a translated name."""
         content = json.loads(
             (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
         )
-        sections = {
-            "config.step.economics.data": content["config"]["step"]["economics"][
-                "data"
-            ],
-            "config.step.economics.data_description": content["config"]["step"][
-                "economics"
-            ]["data_description"],
-            "options.step.battery.data": content["options"]["step"]["battery"][
-                "data"
-            ],
-            "options.step.battery.data_description": content["options"]["step"][
-                "battery"
-            ]["data_description"],
-        }
-        for section_name, section in sections.items():
-            for key in self._EXPORT_KEYS:
-                assert key in section, f"{key} missing in {filename} {section_name}"
+        numbers = content["entity"]["number"]
+        for key in self._ENTITY_KEYS:
+            assert key in numbers, f"{key} missing in {filename} entity.number"
+            assert numbers[key].get("name"), f"{key} name empty in {filename}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_export_form_fields_retired(self, filename: str) -> None:
+        """The old options-flow fields stay removed from both form steps."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        for step in (
+            content["config"]["step"]["economics"],
+            content["options"]["step"]["battery"],
+        ):
+            for section in ("data", "data_description"):
+                for key in self._RETIRED_FORM_KEYS:
+                    assert key not in step.get(section, {}), (
+                        f"{key} should be retired from {filename}"
+                    )

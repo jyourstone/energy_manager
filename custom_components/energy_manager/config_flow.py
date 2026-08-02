@@ -77,8 +77,6 @@ from .const import (
     CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EV_ENABLED,
     CONF_EXCLUDED_POWER_ENTITIES,
-    CONF_EXPORT_RESERVE_SOC_PCT,
-    CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
     CONF_FUSE_SAFETY_BUFFER_AMPS,
@@ -119,7 +117,6 @@ from .const import (
     DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
     DEFAULT_ESTIMATED_CHARGE_POWER_KW,
-    DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_FUSE_RATING_AMPS,
     DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_AMPS,
@@ -153,7 +150,6 @@ from .const import (
     MAX_MIN_CHARGE_AMPS,
     MAX_PEAK_GAP_HOURS,
     MAX_PHASE_SWITCH_THRESHOLD_KW,
-    MAX_EXPORT_SPIKE_THRESHOLD,
     MAX_PRICE_THRESHOLD,
     MAX_PRODUCTION_FACTOR,
     MAX_SAFETY_BUFFER_AMPS,
@@ -832,12 +828,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data[CONF_MAX_CHARGE_POWER] = user_input.get(
                 CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER_KW
             )
-            self._data[CONF_EXPORT_SPIKE_THRESHOLD] = user_input.get(
-                CONF_EXPORT_SPIKE_THRESHOLD, 0.0
-            )
-            self._data[CONF_EXPORT_RESERVE_SOC_PCT] = user_input.get(
-                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
-            )
             return await self._async_route_finish()
 
         schema = vol.Schema(
@@ -872,24 +862,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                         max=MAX_CHARGE_POWER_KW,
                         step=CHARGE_POWER_STEP_KW,
                         unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
-                    CONF_EXPORT_SPIKE_THRESHOLD, default=0.0
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0.0,
-                        max=MAX_EXPORT_SPIKE_THRESHOLD,
-                        step=0.01,
-                        unit_of_measurement="SEK/kWh",
-                    )
-                ),
-                vol.Optional(
-                    CONF_EXPORT_RESERVE_SOC_PCT,
-                    default=DEFAULT_EXPORT_RESERVE_SOC_PCT,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0.0, max=95.0, step=1, unit_of_measurement="%"
                     )
                 ),
             }
@@ -1045,12 +1017,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_MAX_CHARGE_POWER: self._data.get(
                 CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER_KW
             ),
-            CONF_EXPORT_SPIKE_THRESHOLD: self._data.get(
-                CONF_EXPORT_SPIKE_THRESHOLD, 0.0
-            ),
-            CONF_EXPORT_RESERVE_SOC_PCT: self._data.get(
-                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
-            ),
         }
         return self.async_create_entry(
             title="Energy Manager",
@@ -1192,12 +1158,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             self._options[CONF_PEAK_GAP_HOURS] = user_input.get(
                 CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
             )
-            self._options[CONF_EXPORT_SPIKE_THRESHOLD] = user_input.get(
-                CONF_EXPORT_SPIKE_THRESHOLD, 0.0
-            )
-            self._options[CONF_EXPORT_RESERVE_SOC_PCT] = user_input.get(
-                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
-            )
 
             # Route to EMS step (battery is enabled, so EMS config is relevant)
             return await self.async_step_ems()
@@ -1277,27 +1237,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                         max=MAX_PEAK_GAP_HOURS,
                         step=0.5,
                         unit_of_measurement="h",
-                    )
-                ),
-                vol.Optional(
-                    CONF_EXPORT_SPIKE_THRESHOLD,
-                    default=self._options.get(CONF_EXPORT_SPIKE_THRESHOLD, 0.0),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0.0,
-                        max=MAX_EXPORT_SPIKE_THRESHOLD,
-                        step=0.01,
-                        unit_of_measurement="SEK/kWh",
-                    )
-                ),
-                vol.Optional(
-                    CONF_EXPORT_RESERVE_SOC_PCT,
-                    default=self._options.get(
-                        CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0.0, max=95.0, step=1, unit_of_measurement="%"
                     )
                 ),
             }

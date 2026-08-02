@@ -288,6 +288,7 @@ def build_battery_schedule(
     _optimize_schedule(
         slots=slots,
         peaks=peaks,
+        now=now,
         battery_capacity_kwh=battery_capacity_kwh,
         current_soc_pct=current_soc_pct,
         charge_threshold=charge_threshold,
@@ -827,6 +828,7 @@ def _solar_energy_kwh(
 def _optimize_schedule(
     slots: list[_SlotInfo],
     peaks: list[list[_SlotInfo]],
+    now: datetime,
     battery_capacity_kwh: float,
     current_soc_pct: float,
     charge_threshold: float,
@@ -858,6 +860,18 @@ def _optimize_schedule(
     max_usable_energy_kwh = max(0.0, max_energy_kwh - min_energy_kwh)
     current_energy_kwh = (current_soc_pct / 100.0) * battery_capacity_kwh
 
+    # BATT-18: elapsed slots are display-only. current_soc_pct describes
+    # the battery NOW -- "spending" it on already-past peaks would enter
+    # future planning with a phantom-empty battery and grid-charge for
+    # energy the battery actually still holds. Fully-elapsed peaks are
+    # dropped; partially-elapsed peaks keep only their future slots.
+    peaks = [
+        [s for s in peak if s.end > now]
+        for peak in peaks
+        if peak[-1].end > now
+    ]
+    peaks = [p for p in peaks if p]
+
     if not peaks:
         # No discharge opportunities -- nothing to charge for either.
         return
@@ -872,15 +886,36 @@ def _optimize_schedule(
     ]
 
     # Precompute each peak's pre-window (the charging gap before it) and the
-    # solar recharge expected to accumulate during that gap (BATT-15a).
+    # solar recharge expected to accumulate during that gap (BATT-15a),
+    # plus the solar expected DURING the peak itself (BATT-18): on extreme
+    # spread days even midday prices clear the discharge threshold, so
+    # morning/midday/evening candidates bridge into one mega-peak whose
+    # pre-window is the night -- without the intra-peak credit the entire
+    # day's solar becomes invisible to the deficit and the optimizer grid
+    # charges overnight for an evening a sunny forecast already covers.
     window_bounds: list[tuple[datetime, datetime]] = []
     peak_recharge: list[float] = []
+    peak_solar_during: list[float] = []
     for idx, peak in enumerate(peaks):
         window_start = slots[0].start if idx == 0 else peaks[idx - 1][-1].end
         window_end = peak[0].start
         window_bounds.append((window_start, window_end))
 
-        peak_recharge.append(_solar_energy_kwh(window_start, window_end, solar_windows))
+        # Solar credit clamps to now (BATT-18): solar that already arrived
+        # is part of current_soc_pct. (Charge candidates instead filter on
+        # slot end > now, so the in-progress slot stays chargeable.)
+        peak_recharge.append(
+            _solar_energy_kwh(max(window_start, now), window_end, solar_windows)
+        )
+        # Capped at the peak's own need: intra-peak solar can serve the
+        # house during the peak but surplus beyond that is bounded by the
+        # battery's ceiling, which the virtual-energy cap already models.
+        peak_solar_during.append(
+            min(
+                _solar_energy_kwh(peak[0].start, peak[-1].end, solar_windows),
+                peak_energy_needed[idx],
+            )
+        )
 
     virtual_energy = current_energy_kwh
 
@@ -894,16 +929,21 @@ def _optimize_schedule(
         available = max(0.0, virtual_energy - min_energy_kwh)
 
         # BATT-15b: reserve energy for FUTURE, MORE EXPENSIVE peaks (net of
-        # their own upcoming solar recharge) so an early cheap peak cannot
-        # drain what a later, pricier peak needs.
+        # their own upcoming solar recharge AND their own intra-peak solar,
+        # BATT-18) so an early cheap peak cannot drain what a later,
+        # pricier peak needs.
         reserved_for_future = sum(
-            max(0.0, peak_energy_needed[j] - peak_recharge[j])
+            max(
+                0.0,
+                peak_energy_needed[j] - peak_recharge[j] - peak_solar_during[j],
+            )
             for j in range(idx + 1, len(peaks))
             if peak_max_price[j] > peak_max_price[idx]
         )
 
         adjusted_available = available - reserved_for_future
-        energy_deficit = max(0.0, peak_energy_needed[idx] - adjusted_available)
+        effective_need = peak_energy_needed[idx] - peak_solar_during[idx]
+        energy_deficit = max(0.0, effective_need - adjusted_available)
         energy_deficit *= 1 + (charge_buffer_pct / 100.0)
         energy_deficit = min(energy_deficit, max_usable_energy_kwh)
 
@@ -916,6 +956,7 @@ def _optimize_schedule(
             s
             for s in slots
             if s.action == "idle"
+            and s.end > now
             and window_start <= s.start < window_end
             and (peak_max_price[idx] - s.price) > charge_threshold
         ]
