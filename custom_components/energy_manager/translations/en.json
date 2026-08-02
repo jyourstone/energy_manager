@@ -361,20 +361,20 @@
       "battery_schedule": {
         "name": "Battery Schedule"
       },
-      "next_charging_slot": {
-        "name": "Next Charging Slot"
+      "battery_next_charging_slot": {
+        "name": "Battery next charging slot"
       },
-      "next_discharging_slot": {
-        "name": "Next Discharging Slot"
+      "battery_next_discharging_slot": {
+        "name": "Battery next discharging slot"
       },
-      "ems_status": {
-        "name": "EMS Status"
+      "battery_ems_status": {
+        "name": "Battery EMS status"
       },
       "car_schedule": {
         "name": "Car Charging Schedule"
       },
-      "charger_status": {
-        "name": "Charger Status"
+      "ev_charger_status": {
+        "name": "EV charger status"
       },
       "actual_electricity_price": {
         "name": "Actual Electricity Price"
@@ -390,14 +390,14 @@
       }
     },
     "number": {
-      "charge_price_threshold": {
-        "name": "Charge Price Threshold"
+      "battery_charge_price_threshold": {
+        "name": "Battery charge price threshold"
       },
-      "discharge_price_threshold": {
-        "name": "Discharge Price Threshold"
+      "battery_discharge_price_threshold": {
+        "name": "Battery discharge price threshold"
       },
-      "max_charge_power": {
-        "name": "Max Charging Power"
+      "battery_max_charge_power": {
+        "name": "Battery max charging power"
       },
       "car_target_soc": {
         "name": "Grid charging target"
@@ -417,11 +417,11 @@
       "electricity_company_fee": {
         "name": "Electricity Company Fee"
       },
-      "export_spike_threshold": {
-        "name": "Export spike threshold"
+      "battery_export_spike_threshold": {
+        "name": "Battery export spike threshold"
       },
-      "export_reserve_soc": {
-        "name": "Export reserve battery level"
+      "battery_export_reserve_soc": {
+        "name": "Battery export reserve level"
       }
     },
     "time": {
@@ -433,8 +433,8 @@
       "control_enabled": {
         "name": "Device control"
       },
-      "force_charging": {
-        "name": "Force charging"
+      "ev_charger_force_charging": {
+        "name": "EV charger force charging"
       }
     }
   },

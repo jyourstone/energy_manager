@@ -98,7 +98,7 @@ class TestExportTranslationKeys:
         / "custom_components"
         / "energy_manager"
     )
-    _ENTITY_KEYS = ("export_spike_threshold", "export_reserve_soc")
+    _ENTITY_KEYS = ("battery_export_spike_threshold", "battery_export_reserve_soc")
     _RETIRED_FORM_KEYS = ("export_spike_threshold", "export_reserve_soc_pct")
 
     @pytest.mark.parametrize(

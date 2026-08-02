@@ -132,7 +132,7 @@ class ForceChargingSwitch(SwitchEntity, RestoreEntity):
     """
 
     _attr_has_entity_name = True
-    _attr_translation_key = "force_charging"
+    _attr_translation_key = "ev_charger_force_charging"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_should_poll = False
 

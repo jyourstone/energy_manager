@@ -361,20 +361,20 @@
       "battery_schedule": {
         "name": "Batterischema"
       },
-      "next_charging_slot": {
-        "name": "Nästa laddningstillfälle"
+      "battery_next_charging_slot": {
+        "name": "Batteriets nästa laddningstillfälle"
       },
-      "next_discharging_slot": {
-        "name": "Nästa urladdningstillfälle"
+      "battery_next_discharging_slot": {
+        "name": "Batteriets nästa urladdningstillfälle"
       },
-      "ems_status": {
-        "name": "EMS-status"
+      "battery_ems_status": {
+        "name": "Batteriets EMS-status"
       },
       "car_schedule": {
         "name": "Bilens laddningsschema"
       },
-      "charger_status": {
-        "name": "Laddarstatus"
+      "ev_charger_status": {
+        "name": "Elbilsladdarens status"
       },
       "actual_electricity_price": {
         "name": "Faktiskt elpris"
@@ -390,14 +390,14 @@
       }
     },
     "number": {
-      "charge_price_threshold": {
-        "name": "Priströskel för laddning"
+      "battery_charge_price_threshold": {
+        "name": "Batteriets priströskel för laddning"
       },
-      "discharge_price_threshold": {
-        "name": "Priströskel för urladdning"
+      "battery_discharge_price_threshold": {
+        "name": "Batteriets priströskel för urladdning"
       },
-      "max_charge_power": {
-        "name": "Max laddningseffekt"
+      "battery_max_charge_power": {
+        "name": "Batteriets max laddningseffekt"
       },
       "car_target_soc": {
         "name": "Nätladdningsmål"
@@ -417,10 +417,10 @@
       "electricity_company_fee": {
         "name": "Elhandelsavgift"
       },
-      "export_spike_threshold": {
-        "name": "Tröskel för exportpristopp"
+      "battery_export_spike_threshold": {
+        "name": "Batteriets tröskel för exportpristopp"
       },
-      "export_reserve_soc": {
+      "battery_export_reserve_soc": {
         "name": "Reserverad batterinivå vid export"
       }
     },
@@ -433,8 +433,8 @@
       "control_enabled": {
         "name": "Enhetsstyrning"
       },
-      "force_charging": {
-        "name": "Tvinga laddning"
+      "ev_charger_force_charging": {
+        "name": "Tvinga laddning av elbil"
       }
     }
   },

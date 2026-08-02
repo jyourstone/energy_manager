@@ -112,7 +112,7 @@ class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "charge_price_threshold"
+    _attr_translation_key = "battery_charge_price_threshold"
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
@@ -162,7 +162,7 @@ class BatteryDischargeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "discharge_price_threshold"
+    _attr_translation_key = "battery_discharge_price_threshold"
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
@@ -212,7 +212,7 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "max_charge_power"
+    _attr_translation_key = "battery_max_charge_power"
     _attr_native_min_value = MIN_CHARGE_POWER_KW
     _attr_native_max_value = MAX_CHARGE_POWER_KW
     _attr_native_step = CHARGE_POWER_STEP_KW
@@ -603,7 +603,7 @@ class ExportSpikeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "export_spike_threshold"
+    _attr_translation_key = "battery_export_spike_threshold"
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_EXPORT_SPIKE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
@@ -659,7 +659,7 @@ class ExportReserveSoc(EnergyManagerEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "export_reserve_soc"
+    _attr_translation_key = "battery_export_reserve_soc"
     _attr_native_min_value = 0.0
     _attr_native_max_value = 95.0
     _attr_native_step = 1.0

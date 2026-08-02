@@ -235,7 +235,7 @@ class NextChargeSensor(EnergyManagerEntity, SensorEntity):
     device class). Attributes expose the slot price and end time.
     """
 
-    _attr_translation_key = "next_charging_slot"
+    _attr_translation_key = "battery_next_charging_slot"
     _attr_icon = "mdi:battery-charging"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -289,7 +289,7 @@ class NextDischargeSensor(EnergyManagerEntity, SensorEntity):
     device class). Attributes expose the slot price and end time.
     """
 
-    _attr_translation_key = "next_discharging_slot"
+    _attr_translation_key = "battery_next_discharging_slot"
     _attr_icon = "mdi:battery-arrow-down"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -445,7 +445,7 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
     (dry-run) status (CORE-14).
     """
 
-    _attr_translation_key = "ems_status"
+    _attr_translation_key = "battery_ems_status"
     _attr_icon = "mdi:lightning-bolt"
 
     def __init__(
@@ -511,7 +511,7 @@ class EaseeChargerStatusSensor(EnergyManagerEntity, SensorEntity):
     the last suppressed command (CORE-14).
     """
 
-    _attr_translation_key = "charger_status"
+    _attr_translation_key = "ev_charger_status"
     _attr_icon = "mdi:ev-station"
 
     def __init__(
