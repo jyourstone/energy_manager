@@ -1779,6 +1779,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     battery_soc_pct=battery_soc,
                     export_reserve_soc_pct=self._export_reserve_soc_pct,
                     soc_available=self._soc_strictly_available(),
+                    pv_power_kw=pv_power_w / 1000.0,
                     max_limit_kw=MAX_CHARGE_LIMIT_KW,
                 )
                 if export_limit_kw is None:
@@ -1896,10 +1897,18 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 raising = (
                     live_limit is None or target_discharge_limit > live_limit
                 )
-            if raising and (
-                self._last_sent_mode == "command_discharging"
-                or self._plant_mode_is_command_discharging()
+            if (
+                raising
+                and result.target_mode != "command_discharging"
+                and (
+                    self._last_sent_mode == "command_discharging"
+                    or self._plant_mode_is_command_discharging()
+                )
             ):
+                # While we are INTENTIONALLY in an export slot the target
+                # is the fuse-safe cap itself, so raises to it are fine
+                # (e.g. the PV term shrinking as clouds arrive) -- the
+                # guard only holds raises during an unconfirmed EXIT.
                 # Export-mode exit not yet confirmed: either the mode send
                 # failed/was suppressed, or it succeeded but the inverter's
                 # select entity still READS Command Discharging (Modbus

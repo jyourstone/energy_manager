@@ -264,6 +264,7 @@ def compute_export_limit_kw(
     battery_soc_pct: float,
     export_reserve_soc_pct: float,
     soc_available: bool,
+    pv_power_kw: float = 0.0,
     max_limit_kw: float = 15.0,
 ) -> float | None:
     """Compute the fuse-capped discharge limit for a BATT-17 export slot.
@@ -296,6 +297,13 @@ def compute_export_limit_kw(
         battery_soc_pct: Current battery state of charge (0-100).
         export_reserve_soc_pct: Never export at or below this SOC.
         soc_available: Whether the SOC sensor has a real value right now.
+        pv_power_kw: Live PV production in kW. PV and battery share the
+            same grid connection on a hybrid inverter, so concurrent PV
+            output is subtracted from the battery's export allowance --
+            otherwise a sunny export slot could push combined injection
+            past the fuse (Greptile PR #7). Negative readings clamp to 0.
+            Re-sampled every cycle; PV drops only raise the cap (safe
+            direction is instant, the raise is re-asserted declaratively).
         max_limit_kw: Hard ceiling on the returned limit (hardware max).
 
     Returns:
@@ -307,6 +315,7 @@ def compute_export_limit_kw(
     if battery_soc_pct <= export_reserve_soc_pct:
         return None
     fuse_cap_kw = (fuse_rating_amps - safety_buffer_amps) * 3 * 0.230
+    fuse_cap_kw -= max(0.0, pv_power_kw)
     return max(0.0, min(fuse_cap_kw, max_limit_kw))
 
 

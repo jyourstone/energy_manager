@@ -932,6 +932,43 @@ class TestComputeExportLimitKw:
         assert isinstance(result, float)
         assert result == pytest.approx(13.11)
 
+    def test_concurrent_pv_shrinks_cap(self):
+        """Live PV shares the grid connection: 5 kW PV shrinks the 13.11 kW
+        cap to 8.11 kW so combined injection stays fuse-safe."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+            pv_power_kw=5.0,
+        )
+        assert result == pytest.approx(8.11)
+
+    def test_pv_exceeding_cap_clamps_to_zero(self):
+        """PV alone above the fuse cap leaves zero battery export."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+            pv_power_kw=14.0,
+        )
+        assert result == 0.0
+
+    def test_negative_pv_reading_ignored(self):
+        """A negative PV reading never inflates the cap."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+            pv_power_kw=-2.0,
+        )
+        assert result == pytest.approx(13.11)
+
     def test_max_limit_kw_clamp_honored(self):
         """A 63A fuse would allow 42.8 kW -- clamped to max_limit_kw."""
         result = compute_export_limit_kw(
