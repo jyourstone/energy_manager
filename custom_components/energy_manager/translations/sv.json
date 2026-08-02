@@ -435,7 +435,7 @@
   "issues": {
     "fuse_sensor_fallback": {
       "title": "Säkringsskyddet använder reservläge",
-      "description": "Säkringsskyddet har saknat aktuella nätströmsvärden ({sensor}) i mer än 5 minuter och använder det konfigurerade reservbeteendet '{behavior}'. Kontrollera nätsensorerna eller uppdatera dem i Energy Managers EMS-inställningar."
+      "description": "Säkringsskyddet har saknat aktuella nätströmsvärden ({sensor}) i mer än 5 minuter och använder det konfigurerade reservbeteendet {behavior}. Kontrollera nätsensorerna eller uppdatera dem i Energy Managers EMS-inställningar."
     },
     "charge_limit_wrong_domain": {
       "title": "Entiteten för laddningsgräns är ingen number-entitet",

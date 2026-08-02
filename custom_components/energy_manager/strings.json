@@ -435,7 +435,7 @@
   "issues": {
     "fuse_sensor_fallback": {
       "title": "Fuse protection running on fallback",
-      "description": "Fuse protection has been running without live grid readings ({sensor}) for more than 5 minutes and is using the configured '{behavior}' fallback. Check the grid sensors, or update them in the Energy Manager EMS options."
+      "description": "Fuse protection has been running without live grid readings ({sensor}) for more than 5 minutes and is using the configured {behavior} fallback. Check the grid sensors, or update them in the Energy Manager EMS options."
     },
     "charge_limit_wrong_domain": {
       "title": "Charge limit entity is not a number entity",
