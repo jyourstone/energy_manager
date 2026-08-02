@@ -1881,10 +1881,21 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             and target_discharge_limit is not None
             and target_discharge_limit != self._last_sent_discharge_limit
         ):
-            raising = (
-                self._last_sent_discharge_limit is not None
-                and target_discharge_limit > self._last_sent_discharge_limit
-            )
+            if self._last_sent_discharge_limit is not None:
+                raising = (
+                    target_discharge_limit > self._last_sent_discharge_limit
+                )
+            else:
+                # Restart with an unknown send baseline (Greptile PR #7
+                # round 3): compare against the entity's LIVE state so a
+                # restart while the plant sits in Command Discharging
+                # cannot bypass the raise-guard below. An unreadable state
+                # counts as raising (conservative); a lower target (e.g.
+                # the 0.0 gate-closed clamp) still sends immediately.
+                live_limit = self._read_discharge_limit_state()
+                raising = (
+                    live_limit is None or target_discharge_limit > live_limit
+                )
             if raising and (
                 self._last_sent_mode == "command_discharging"
                 or self._plant_mode_is_command_discharging()
@@ -1955,6 +1966,16 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         """
         return _read_control_enabled(self.config_entry)
 
+    def _read_discharge_limit_state(self) -> float | None:
+        """The discharge-limit entity's live state in kW, or None."""
+        state = self.hass.states.get(self._discharge_limit_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
     def _discharge_limit_reads_at_most(self, limit_kw: float) -> bool:
         """True when the discharge-limit entity's LIVE state is <= limit_kw.
 
@@ -1966,13 +1987,8 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         hold the mode, retry next cycle (costs at most one 30s tick of
         sale time).
         """
-        state = self.hass.states.get(self._discharge_limit_entity)
-        if state is None or state.state in ("unavailable", "unknown"):
-            return False
-        try:
-            return float(state.state) <= limit_kw + 0.001
-        except (TypeError, ValueError):
-            return False
+        live = self._read_discharge_limit_state()
+        return live is not None and live <= limit_kw + 0.001
 
     def _plant_mode_is_command_discharging(self) -> bool:
         """True when the EMS select entity currently READS a discharging mode.
