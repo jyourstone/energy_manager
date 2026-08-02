@@ -105,14 +105,15 @@ async def async_setup_entry(
 class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
     """Number entity for the battery charge price threshold.
 
-    When the electricity price is at or below this value, the battery
-    will charge from the grid. Value persists across restarts.
+    When the electricity price is at or below the peak's max price minus
+    this spread, the battery will charge from the grid. Value persists
+    across restarts.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "battery_charge_price_threshold"
+    _attr_translation_key = "battery_charge_spread_threshold"
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
@@ -155,14 +156,17 @@ class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
 class BatteryDischargeThreshold(EnergyManagerEntity, RestoreNumber):
     """Number entity for the battery discharge price threshold.
 
-    When the electricity price is at or above this value, the battery
-    will discharge to the home. Value persists across restarts.
+    Price spread above the horizon's cheapest slot at or above which the
+    battery will discharge to the home. Value persists across restarts.
+    Overridden (entity shown unavailable) while Battery Cycle Cost > 0,
+    since the scheduler then derives the effective threshold from the
+    cycle-cost formula instead of this manual value.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "battery_discharge_price_threshold"
+    _attr_translation_key = "battery_discharge_spread_threshold"
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
@@ -178,6 +182,16 @@ class BatteryDischargeThreshold(EnergyManagerEntity, RestoreNumber):
         """Initialize the discharge threshold entity."""
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_discharge_price_threshold"
+
+    @property
+    def available(self) -> bool:
+        """Unavailable while battery cycle cost overrides this threshold.
+
+        When battery_cycle_cost > 0 the scheduler derives the discharge
+        threshold from the cycle-cost formula and this manual value is
+        ignored -- greying the entity out makes the override visible.
+        """
+        return super().available and self.coordinator.battery_cycle_cost <= 0
 
     async def async_added_to_hass(self) -> None:
         """Restore previous value on startup, or use default."""
@@ -603,7 +617,7 @@ class ExportSpikeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX
     _attr_should_poll = False
-    _attr_translation_key = "battery_export_spike_threshold"
+    _attr_translation_key = "battery_export_spread_threshold"
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_EXPORT_SPIKE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP

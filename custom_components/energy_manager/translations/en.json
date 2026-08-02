@@ -370,6 +370,9 @@
       "battery_ems_status": {
         "name": "Battery EMS status"
       },
+      "battery_effective_discharge_threshold": {
+        "name": "Battery effective discharge threshold"
+      },
       "car_schedule": {
         "name": "Car Charging Schedule"
       },
@@ -390,11 +393,11 @@
       }
     },
     "number": {
-      "battery_charge_price_threshold": {
-        "name": "Battery charge price threshold"
+      "battery_charge_spread_threshold": {
+        "name": "Battery charge spread threshold"
       },
-      "battery_discharge_price_threshold": {
-        "name": "Battery discharge price threshold"
+      "battery_discharge_spread_threshold": {
+        "name": "Battery discharge spread threshold"
       },
       "battery_max_charge_power": {
         "name": "Battery max charging power"
@@ -417,8 +420,8 @@
       "electricity_company_fee": {
         "name": "Electricity Company Fee"
       },
-      "battery_export_spike_threshold": {
-        "name": "Battery export spike threshold"
+      "battery_export_spread_threshold": {
+        "name": "Battery export spread threshold"
       },
       "battery_export_reserve_soc": {
         "name": "Battery export reserve level"

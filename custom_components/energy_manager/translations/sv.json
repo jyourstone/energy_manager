@@ -370,6 +370,9 @@
       "battery_ems_status": {
         "name": "Batteriets EMS-status"
       },
+      "battery_effective_discharge_threshold": {
+        "name": "Batteriets effektiva urladdningströskel"
+      },
       "car_schedule": {
         "name": "Bilens laddningsschema"
       },
@@ -390,11 +393,11 @@
       }
     },
     "number": {
-      "battery_charge_price_threshold": {
-        "name": "Batteriets priströskel för laddning"
+      "battery_charge_spread_threshold": {
+        "name": "Batteriets prisskillnadströskel för laddning"
       },
-      "battery_discharge_price_threshold": {
-        "name": "Batteriets priströskel för urladdning"
+      "battery_discharge_spread_threshold": {
+        "name": "Batteriets prisskillnadströskel för urladdning"
       },
       "battery_max_charge_power": {
         "name": "Batteriets max laddningseffekt"
@@ -417,8 +420,8 @@
       "electricity_company_fee": {
         "name": "Elhandelsavgift"
       },
-      "battery_export_spike_threshold": {
-        "name": "Batteriets tröskel för exportpristopp"
+      "battery_export_spread_threshold": {
+        "name": "Batteriets prisskillnadströskel för export"
       },
       "battery_export_reserve_soc": {
         "name": "Reserverad batterinivå vid export"
