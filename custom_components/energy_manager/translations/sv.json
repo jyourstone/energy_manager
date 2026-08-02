@@ -141,7 +141,7 @@
           "grid_transfer_fee": "Elnätsbolagets överföringsavgift som läggs på spotpriset.",
           "electricity_company_fee": "Elbolagets påslag som läggs på spotpriset.",
           "max_charge_power": "Maximal effekt vid nätladdning av husbatteriet.",
-          "export_spike_threshold": "Spotpris vid eller över vilket batteriet får sälja till nätet. 0 inaktiverar exportarbitrage (standard).",
+          "export_spike_threshold": "Prisskillnad över periodens billigaste timme vid eller över vilken batteriet får sälja till nätet (anpassar sig automatiskt när den allmänna prisnivån ändras). 0 inaktiverar exportarbitrage (standard).",
           "export_reserve_soc_pct": "Exportera aldrig under denna batterinivå."
         }
       },
@@ -259,7 +259,7 @@
           "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
           "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
           "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp.",
-          "export_spike_threshold": "Spotpris vid eller över vilket batteriet får sälja till nätet. 0 inaktiverar exportarbitrage (standard).",
+          "export_spike_threshold": "Prisskillnad över periodens billigaste timme vid eller över vilken batteriet får sälja till nätet (anpassar sig automatiskt när den allmänna prisnivån ändras). 0 inaktiverar exportarbitrage (standard).",
           "export_reserve_soc_pct": "Exportera aldrig under denna batterinivå."
         }
       },

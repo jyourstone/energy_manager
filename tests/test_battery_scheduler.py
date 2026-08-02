@@ -1618,22 +1618,45 @@ class TestExportQualification:
         assert result.schedule[4].action == "export"
         assert result.export_slot_count == 1
 
-    def test_spike_exactly_at_threshold_qualifies(self):
-        """The threshold is inclusive: price == threshold may export."""
+    def test_spread_exactly_at_threshold_qualifies(self):
+        """The threshold is inclusive: spread == threshold may export.
+
+        Spike 5.0 over a 0.5 floor = spread 4.5."""
         result = _build(
-            _spike_slots(), **{**EXPORT_KWARGS, "export_spike_threshold": 5.0}
+            _spike_slots(), **{**EXPORT_KWARGS, "export_spike_threshold": 4.5}
         )
 
         assert result.schedule[4].action == "export"
 
+    def test_threshold_is_spread_not_absolute_price(self):
+        """Regime shift: sustained-high week (floor 4.0, spike 10.0) with
+        threshold 5.0 -- only the 10.0 slot (spread 6.0) exports; a 5.8
+        slot (spread 1.8) does NOT, even though its absolute price is
+        above 5.0. The threshold keeps meaning 'exceptional spike' when
+        the whole price level shifts."""
+        prices = [(h, 4.0) for h in range(8)]
+        prices[3] = (3, 5.8)
+        prices[5] = (5, 10.0)
+        result = _build(
+            _make_slots(prices),
+            current_soc_pct=90.0,
+            **{**EXPORT_KWARGS, "export_spike_threshold": 5.0},
+        )
+
+        actions = {s.start.hour: s.action for s in result.schedule}
+        assert actions[5] == "export"
+        assert actions[3] != "export"
+
     def test_failing_replacement_check_blocks_export(self):
         """Spike 2.0 with future min 1.6: 2.0 < (1.6 + 0.85) / 0.9 + 0.2
-        = 2.92 -> selling now loses to buying back later, no export."""
+        = 2.92 -> selling now loses to buying back later, no export.
+        Threshold 1.2 < spread 1.3 so the replacement check (not the
+        threshold) is the blocker under test."""
         prices = [(h, 0.7) for h in range(4)] + [(4, 2.0)] + [
             (h, 1.6) for h in range(5, 8)
         ]
         result = _build(
-            _make_slots(prices), **{**EXPORT_KWARGS, "export_spike_threshold": 1.5}
+            _make_slots(prices), **{**EXPORT_KWARGS, "export_spike_threshold": 1.2}
         )
 
         assert _export_slots(result) == []
