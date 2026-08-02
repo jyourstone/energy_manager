@@ -1618,22 +1618,45 @@ class TestExportQualification:
         assert result.schedule[4].action == "export"
         assert result.export_slot_count == 1
 
-    def test_spike_exactly_at_threshold_qualifies(self):
-        """The threshold is inclusive: price == threshold may export."""
+    def test_spread_exactly_at_threshold_qualifies(self):
+        """The threshold is inclusive: spread == threshold may export.
+
+        Spike 5.0 over a 0.5 floor = spread 4.5."""
         result = _build(
-            _spike_slots(), **{**EXPORT_KWARGS, "export_spike_threshold": 5.0}
+            _spike_slots(), **{**EXPORT_KWARGS, "export_spike_threshold": 4.5}
         )
 
         assert result.schedule[4].action == "export"
 
+    def test_threshold_is_spread_not_absolute_price(self):
+        """Regime shift: sustained-high week (floor 4.0, spike 10.0) with
+        threshold 5.0 -- only the 10.0 slot (spread 6.0) exports; a 5.8
+        slot (spread 1.8) does NOT, even though its absolute price is
+        above 5.0. The threshold keeps meaning 'exceptional spike' when
+        the whole price level shifts."""
+        prices = [(h, 4.0) for h in range(8)]
+        prices[3] = (3, 5.8)
+        prices[5] = (5, 10.0)
+        result = _build(
+            _make_slots(prices),
+            current_soc_pct=90.0,
+            **{**EXPORT_KWARGS, "export_spike_threshold": 5.0},
+        )
+
+        actions = {s.start.hour: s.action for s in result.schedule}
+        assert actions[5] == "export"
+        assert actions[3] != "export"
+
     def test_failing_replacement_check_blocks_export(self):
         """Spike 2.0 with future min 1.6: 2.0 < (1.6 + 0.85) / 0.9 + 0.2
-        = 2.92 -> selling now loses to buying back later, no export."""
+        = 2.92 -> selling now loses to buying back later, no export.
+        Threshold 1.2 < spread 1.3 so the replacement check (not the
+        threshold) is the blocker under test."""
         prices = [(h, 0.7) for h in range(4)] + [(4, 2.0)] + [
             (h, 1.6) for h in range(5, 8)
         ]
         result = _build(
-            _make_slots(prices), **{**EXPORT_KWARGS, "export_spike_threshold": 1.5}
+            _make_slots(prices), **{**EXPORT_KWARGS, "export_spike_threshold": 1.2}
         )
 
         assert _export_slots(result) == []
@@ -1868,6 +1891,24 @@ class TestExportPastSlots:
         # Gate scan runs from now (hour 0, idle): the hour-4 export slot
         # reserves (2.0 export + 1.0 house) * 1h = 3.0 kWh.
         assert result.reserved_energy_kwh >= 3.0
+
+    def test_spread_baseline_ignores_elapsed_cheap_hours(self):
+        """Greptile PR #8: a dead cheap morning must not inflate the
+        afternoon's spreads. Past min 0.1, future floor 2.0, future high
+        5.4, threshold 4.0: spread vs the dead 0.1 would be 5.3 (fires),
+        vs the future floor it is 3.4 (does not). Replacement cost is
+        (2.0 + 0.85) / 0.9 + 0.2 = 3.37 < 5.4, so the threshold -- not
+        the economics -- is the mechanism under test."""
+        prices = [(h, 0.1) for h in range(14)] + [(h, 2.0) for h in range(14, 24)]
+        prices[19] = (19, 5.4)
+        result = _build(
+            _make_slots(prices),
+            now=self._NOW_1400,
+            current_soc_pct=90.0,
+            **{**EXPORT_KWARGS, "export_spike_threshold": 4.0},
+        )
+
+        assert _export_slots(result) == []
 
     def test_next_export_slot_populated(self):
         """next_export_slot points at the upcoming export slot."""

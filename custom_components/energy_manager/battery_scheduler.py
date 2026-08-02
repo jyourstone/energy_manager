@@ -221,10 +221,12 @@ def build_battery_schedule(
         peak_gap_hours: Hours gap to separate peak groups.
         min_soc_pct: Minimum SOC to maintain (0-100).
         max_soc_pct: Maximum SOC target (0-100).
-        export_spike_threshold: Spot price in SEK/kWh at or above which a
-            slot may become an export slot (BATT-17). None or <= 0 disables
-            export arbitrage entirely -- output is bit-identical to a build
-            without these kwargs.
+        export_spike_threshold: Price spread (per kWh) above the horizon's
+            cheapest slot at or above which a slot may become an export
+            slot (BATT-17) -- same spread convention as the BATT-15
+            discharge threshold. None or <= 0 disables export arbitrage
+            entirely -- output is bit-identical to a build without these
+            kwargs.
         export_reserve_soc_pct: SOC floor (0-100) below which export is
             never scheduled -- the export energy budget only spends what
             lies above this reserve.
@@ -989,15 +991,26 @@ def _mark_export_slots(
     both (a discharge slot's own house-need is released back when the
     slot itself converts, and merit-order demotions release theirs).
 
-    A slot qualifies when its price is at or above the spike threshold
-    AND selling now beats buying the same energy back at the cheapest
-    future slot (replacement cost includes fees, round-trip losses and
-    cycle wear). A slot with no future slot in the horizon never
-    qualifies (SEM rule: cannot prove profitable -> hold). Only
-    "discharge"/"idle" slots are eligible; charge/solar_charge slots are
-    never converted. Mutates slots in place.
+    A slot qualifies when its SPREAD above the horizon's cheapest price
+    is at or above the spike threshold AND selling now beats buying the
+    same energy back at the cheapest future slot (replacement cost
+    includes fees, round-trip losses and cycle wear). The spread basis
+    matches the BATT-15 discharge classification: an absolute threshold
+    would silently change meaning when the whole price level shifts
+    (sustained-high weeks would make every slot "a spike"), while the
+    spread self-adapts to the current period. A slot with no future slot
+    in the horizon never qualifies (SEM rule: cannot prove profitable ->
+    hold). Only "discharge"/"idle" slots are eligible; charge/
+    solar_charge slots are never converted. Mutates slots in place.
     """
     fees = grid_transfer_fee + electricity_company_fee
+    # Spread baseline over FUTURE slots only (Greptile PR #8): an elapsed
+    # cheap morning would otherwise inflate every remaining slot's spread
+    # and let ordinary later prices qualify as "spikes".
+    remaining_prices = [s.price for s in slots if s.end > now]
+    if not remaining_prices:
+        return
+    horizon_min_price = min(remaining_prices)
 
     # Only slots that have not yet ended participate -- as candidates, as
     # already-committed discharge energy, or as demotion fodder. A past
@@ -1010,7 +1023,7 @@ def _mark_export_slots(
             continue
         if s.action not in ("discharge", "idle"):
             continue
-        if s.price < export_spike_threshold:
+        if s.price - horizon_min_price < export_spike_threshold:
             continue
         future_prices = [x.price for x in slots if x.start >= s.end]
         if not future_prices:
