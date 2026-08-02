@@ -29,6 +29,8 @@ from .const import (
     CHARGE_POWER_STEP_KW,
     CONF_BATTERY_CYCLE_COST,
     CONF_ELECTRICITY_COMPANY_FEE,
+    CONF_EXPORT_RESERVE_SOC_PCT,
+    CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_GRID_TRANSFER_FEE,
     CONF_MAX_CHARGE_POWER,
     DEFAULT_BATTERY_CYCLE_COST,
@@ -37,11 +39,13 @@ from .const import (
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
     DEFAULT_ELECTRICITY_COMPANY_FEE,
+    DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_TARGET_SOC_PCT,
     MAX_CAR_MAX_CHARGE_POWER_KW,
     MAX_CHARGE_POWER_KW,
+    MAX_EXPORT_SPIKE_THRESHOLD,
     MAX_PRICE_THRESHOLD,
     MAX_TARGET_SOC_PCT,
     MIN_CAR_MAX_CHARGE_POWER_KW,
@@ -81,6 +85,8 @@ async def async_setup_entry(
             BatteryCycleCost(battery_coordinator, entry),
             GridTransferFee(battery_coordinator, entry),
             ElectricityCompanyFee(battery_coordinator, entry),
+            ExportSpikeThreshold(battery_coordinator, entry),
+            ExportReserveSoc(battery_coordinator, entry),
         ])
 
     # Car number entities (one set per car subentry)
@@ -585,4 +591,114 @@ class CarMaxChargePower(CarEntity, RestoreNumber):
         self._attr_native_value = value
         self.async_write_ha_state()
         self.coordinator.max_charge_power_kw = value
+        await self.coordinator.async_request_refresh()
+class ExportSpikeThreshold(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the BATT-17 export spike threshold.
+
+    Price spread above the period's cheapest upcoming hour at or above
+    which the battery may sell to the grid. 0 disables export arbitrage
+    (the default). Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "export_spike_threshold"
+    _attr_native_min_value = MIN_PRICE_THRESHOLD
+    _attr_native_max_value = MAX_EXPORT_SPIKE_THRESHOLD
+    _attr_native_step = PRICE_THRESHOLD_STEP
+    _attr_native_unit_of_measurement = "SEK/kWh"
+
+    _default_value = 0.0
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the export spike threshold entity."""
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_export_spike_threshold"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_EXPORT_SPIKE_THRESHOLD, self._default_value
+                )
+                or self._default_value
+            )
+        self.coordinator.export_spike_threshold = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the export spike threshold and trigger recalculation.
+
+        Args:
+            value: New spread threshold in SEK/kWh (0 disables export).
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.export_spike_threshold = value
+        await self.coordinator.async_request_refresh()
+
+
+class ExportReserveSoc(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the BATT-17 export reserve SOC floor.
+
+    The battery never sells to the grid at or below this state of charge.
+    Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "export_reserve_soc"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 95.0
+    _attr_native_step = 1.0
+    _attr_native_unit_of_measurement = "%"
+
+    _default_value = DEFAULT_EXPORT_RESERVE_SOC_PCT
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the export reserve SOC entity."""
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_export_reserve_soc"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_EXPORT_RESERVE_SOC_PCT, self._default_value
+                )
+            )
+        self.coordinator.export_reserve_soc_pct = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the export reserve SOC floor and trigger recalculation.
+
+        Args:
+            value: New reserve floor in percent SOC.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.export_reserve_soc_pct = value
         await self.coordinator.async_request_refresh()

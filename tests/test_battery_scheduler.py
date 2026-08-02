@@ -621,9 +621,13 @@ class TestCurrentAction:
             now=datetime(2026, 2, 15, 2, 30, 0, tzinfo=UTC),
         )
 
+        # BATT-18: past slots are display-only, so by 17:30 the battery
+        # must actually HOLD the energy (it charged during the real
+        # morning) -- planning can no longer pretend to charge in elapsed
+        # cheap hours to fund the evening peak.
         result_discharging = _build(
             slots,
-            current_soc_pct=10.0,
+            current_soc_pct=80.0,
             mean_consumption_kw=1.0,
             estimated_charge_power_kw=1.0,
             max_charge_power_w=1000.0,
@@ -1595,6 +1599,90 @@ def _spike_slots() -> list[dict]:
     prices = [(h, 0.5) for h in range(8)]
     prices[4] = (4, 5.0)
     return _make_slots(prices)
+
+
+class TestIntraPeakSolarCredit:
+    """BATT-18: solar arriving DURING a peak reduces its charge deficit.
+
+    On extreme spread days even midday prices clear the discharge
+    threshold, bridging morning/midday/evening into one mega-peak whose
+    pre-window is the night -- without the intra-peak credit the whole
+    day's solar was invisible and the optimizer grid-charged overnight.
+    """
+
+    def _bridged_day(self, *, solar_wh: float) -> BatteryScheduleResult:
+        # h0-5 cheap night, h6-21 one bridged peak (all 1.5 over the 0.2
+        # floor), h22-23 cheap. Solar window 06-20 covers the peak.
+        prices = [0.2] * 6 + [1.5] * 16 + [0.2] * 2
+        return _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC),
+            current_soc_pct=20.0,
+            mean_consumption_kw=1.0,
+            estimated_charge_power_kw=1.0,
+            max_charge_power_w=1000.0,
+            solar_forecast_remaining_wh=solar_wh,
+            production_factor=1.0,
+            dawn=datetime(2026, 2, 15, 6, 0, 0, tzinfo=UTC),
+            dusk=datetime(2026, 2, 15, 20, 0, 0, tzinfo=UTC),
+        )
+
+    def test_intra_peak_solar_reduces_night_charging(self):
+        """14 kWh of solar inside the bridged peak nearly eliminates the
+        night charge deficit; without solar the full deficit charges."""
+        sunny = self._bridged_day(solar_wh=14000.0)
+        cloudy = self._bridged_day(solar_wh=0.0)
+
+        sunny_charges = len(_charge_slots(sunny))
+        cloudy_charges = len(_charge_slots(cloudy))
+        assert cloudy_charges >= 5
+        assert sunny_charges < cloudy_charges
+        assert sunny_charges <= 3
+
+
+class TestPastSlotsDisplayOnly:
+    """BATT-18: elapsed slots never participate in the optimizer.
+
+    current_soc_pct describes the battery NOW -- spending it on already
+    past peaks entered future planning with a phantom-empty battery and
+    grid-charged for energy the battery still holds.
+    """
+
+    def test_past_peak_does_not_drain_virtual_battery(self):
+        """Battery full at noon; the elapsed morning peak must not drain
+        the virtual battery, so the evening peak needs no grid charge."""
+        # h0-5 night 0.2 (past), h6-9 morning peak 2.0 (PAST), h10-17
+        # midday 0.3 idle, h18-21 evening peak 2.0, h22-23 cheap 0.2.
+        prices = [0.2] * 6 + [2.0] * 4 + [0.3] * 8 + [2.0] * 4 + [0.2] * 2
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+            current_soc_pct=100.0,
+            mean_consumption_kw=1.0,
+            estimated_charge_power_kw=1.0,
+            max_charge_power_w=1000.0,
+        )
+
+        assert _charge_slots(result) == []
+        evening = [
+            s for s in result.schedule if 18 <= s.start.hour <= 21
+        ]
+        assert all(s.action == "discharge" for s in evening)
+
+    def test_partially_elapsed_peak_keeps_future_slots(self):
+        """Inside a peak at 19:00: only its remaining slots count."""
+        prices = [0.2] * 18 + [2.0] * 4 + [0.2] * 2
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 19, 30, 0, tzinfo=UTC),
+            current_soc_pct=50.0,
+            mean_consumption_kw=1.0,
+            estimated_charge_power_kw=1.0,
+            max_charge_power_w=1000.0,
+        )
+
+        assert result.current_action == "discharge"
+        assert result.discharging_slot_count >= 2
 
 
 class TestExportQualification:
