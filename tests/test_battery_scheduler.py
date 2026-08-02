@@ -15,12 +15,15 @@ BATT-15 SEMANTIC CHANGE (this is a deliberate port, not a regression):
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import ClassVar
 
 from custom_components.energy_manager.battery_scheduler import (
     BatteryScheduleResult,
     ScheduleSlot,
+    _estimate_solar_rate_kw,
     _normalize_daylight_window,
     _overlap_hours,
+    _resolve_solar_windows,
     build_battery_schedule,
     compute_discharge_gate,
     compute_effective_discharge_threshold,
@@ -1029,3 +1032,538 @@ class TestDischargeGate:
         assert gate.allowed is False
         assert gate.reason == "no_schedule"
         assert gate.reserved_energy_kwh == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 16: BATT-16 _resolve_solar_windows (multi-window solar model)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSolarWindows:
+    """Unit tests for _resolve_solar_windows, the BATT-16 window resolver.
+
+    sun.sun only describes ONE upcoming daylight window, so the resolver
+    must attribute the right forecast to it: in the evening both next_dawn
+    and next_dusk already point at tomorrow (the window IS tomorrow's), while
+    during daytime/morning the window is today's and a synthetic +24h
+    tomorrow window is appended when tomorrow's forecast is available.
+    """
+
+    DAWN = datetime(2026, 2, 15, 8, 0, tzinfo=UTC)
+    DUSK = datetime(2026, 2, 15, 16, 0, tzinfo=UTC)
+    TOMORROW_START = datetime(2026, 2, 16, 0, 0, tzinfo=UTC)
+
+    def test_morning_yields_today_and_tomorrow_windows(self):
+        """Morning (window is today's): today's window carries the remaining
+        forecast and a +24h-shifted window carries tomorrow's forecast."""
+        windows = _resolve_solar_windows(
+            dawn=self.DAWN,
+            dusk=self.DUSK,
+            solar_forecast_remaining_wh=8000.0,
+            solar_forecast_tomorrow_wh=16000.0,
+            production_factor=0.8,
+            tomorrow_start=self.TOMORROW_START,
+        )
+
+        w0 = (self.DAWN, self.DUSK)
+        w1 = (self.DAWN + timedelta(hours=24), self.DUSK + timedelta(hours=24))
+        assert windows == [
+            (w0, _estimate_solar_rate_kw(8000.0, 0.8, w0)),
+            (w1, _estimate_solar_rate_kw(16000.0, 0.8, w1)),
+        ]
+
+    def test_evening_window_is_tomorrows_and_uses_tomorrow_forecast(self):
+        """Evening (w0_is_tomorrow): the single resolved window starts after
+        tomorrow_start, so it must carry TOMORROW's forecast energy -- and no
+        additional +24h window may be appended (a naive shift would misplace
+        tomorrow's energy beyond the 48h horizon)."""
+        dawn = self.DAWN + timedelta(hours=24)  # next_dawn already tomorrow
+        dusk = self.DUSK + timedelta(hours=24)  # next_dusk already tomorrow
+
+        windows = _resolve_solar_windows(
+            dawn=dawn,
+            dusk=dusk,
+            solar_forecast_remaining_wh=4000.0,
+            solar_forecast_tomorrow_wh=16000.0,
+            production_factor=0.8,
+            tomorrow_start=self.TOMORROW_START,
+        )
+
+        w0 = (dawn, dusk)
+        assert windows == [(w0, _estimate_solar_rate_kw(16000.0, 0.8, w0))]
+
+    def test_evening_fallback_without_tomorrow_uses_remaining_today(self):
+        """Evening with tomorrow sensors absent: the resolved (tomorrow's)
+        window falls back to the remaining-today reading -- the exact
+        pre-BATT-16 behavior."""
+        dawn = self.DAWN + timedelta(hours=24)
+        dusk = self.DUSK + timedelta(hours=24)
+
+        windows = _resolve_solar_windows(
+            dawn=dawn,
+            dusk=dusk,
+            solar_forecast_remaining_wh=4000.0,
+            solar_forecast_tomorrow_wh=None,
+            production_factor=0.8,
+            tomorrow_start=self.TOMORROW_START,
+        )
+
+        w0 = (dawn, dusk)
+        assert windows == [(w0, _estimate_solar_rate_kw(4000.0, 0.8, w0))]
+
+    def test_missing_dawn_or_dusk_returns_empty(self):
+        """No resolvable daylight window degrades to [] (polar day/night,
+        sun.sun unavailable) -- same degrade path as before BATT-16."""
+        assert (
+            _resolve_solar_windows(
+                dawn=None,
+                dusk=self.DUSK,
+                solar_forecast_remaining_wh=8000.0,
+                solar_forecast_tomorrow_wh=16000.0,
+                production_factor=0.8,
+                tomorrow_start=self.TOMORROW_START,
+            )
+            == []
+        )
+        assert (
+            _resolve_solar_windows(
+                dawn=self.DAWN,
+                dusk=None,
+                solar_forecast_remaining_wh=8000.0,
+                solar_forecast_tomorrow_wh=16000.0,
+                production_factor=0.8,
+                tomorrow_start=self.TOMORROW_START,
+            )
+            == []
+        )
+
+    def test_no_tomorrow_start_keeps_legacy_single_window(self):
+        """tomorrow_start=None with no tomorrow forecast reproduces the
+        legacy single-window output exactly."""
+        windows = _resolve_solar_windows(
+            dawn=self.DAWN,
+            dusk=self.DUSK,
+            solar_forecast_remaining_wh=8000.0,
+            solar_forecast_tomorrow_wh=None,
+            production_factor=0.8,
+            tomorrow_start=None,
+        )
+
+        w0 = (self.DAWN, self.DUSK)
+        assert windows == [(w0, _estimate_solar_rate_kw(8000.0, 0.8, w0))]
+
+    def test_no_tomorrow_start_appends_tomorrow_window_only_when_forecast_given(self):
+        """tomorrow_start=None cannot flag the window as tomorrow's, so the
+        daytime path applies: the +24h window appears only when a tomorrow
+        forecast is actually passed."""
+        windows = _resolve_solar_windows(
+            dawn=self.DAWN,
+            dusk=self.DUSK,
+            solar_forecast_remaining_wh=8000.0,
+            solar_forecast_tomorrow_wh=16000.0,
+            production_factor=0.8,
+            tomorrow_start=None,
+        )
+
+        assert len(windows) == 2
+        assert windows[1][0] == (
+            self.DAWN + timedelta(hours=24),
+            self.DUSK + timedelta(hours=24),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 17: BATT-16 exact arithmetic -- pre-peak gap spanning two windows
+# ---------------------------------------------------------------------------
+
+
+class TestGapSpanningTwoWindows:
+    """A pre-peak gap spanning both solar windows accrues exactly
+    rate0 x overlap0 + rate1 x overlap1 kWh of recharge (BATT-16)."""
+
+    def test_recharge_sums_rate_times_overlap_across_both_windows(self):
+        """Exact arithmetic, all quantities chosen to be float-exact.
+
+        Setup: 48h slots, now = day-15 00:00 (before dawn), battery at the
+        10% SOC floor (0 kWh available), mean consumption 1.0 kW, and a
+        prohibitive charge_threshold so no grid charging can confound the
+        count. Single peak: day-16 hours 12-19 (8 slots, 8 kWh need).
+
+        Windows: W0 = day-15 08:00-16:00 with remaining 2500 Wh x 0.8 =
+        2.0 kWh over 8h -> rate0 = 0.25 kW; W1 = W0 + 24h with tomorrow
+        10000 Wh x 0.8 = 8.0 kWh over 8h -> rate1 = 1.0 kW.
+
+        The gap before the peak is [day-15 00:00, day-16 12:00): it overlaps
+        all 8h of W0 and the first 4h of W1, so recharge =
+        0.25*8 + 1.0*4 = 6.0 kWh -> exactly 6 of the 8 peak slots discharge.
+        Without the tomorrow kwargs only W0 contributes (2.0 kWh -> 2 slots),
+        so the difference of 4 slots is exactly rate1 x overlap1.
+        """
+        p1 = [0.5] * 24
+        p2 = [0.5] * 12 + [3.0] * 8 + [0.5] * 4
+        slots = _make_24h_slots(p1) + _make_24h_slots(p2, day=16)
+        common = {
+            "charge_threshold": 10.0,  # no charge candidates anywhere
+            "current_soc_pct": 10.0,
+            "mean_consumption_kw": 1.0,
+            "solar_forecast_remaining_wh": 2500.0,
+            "production_factor": 0.8,
+            "dawn": datetime(2026, 2, 15, 8, 0, tzinfo=UTC),
+            "dusk": datetime(2026, 2, 15, 16, 0, tzinfo=UTC),
+        }
+
+        without_tomorrow = _build(slots, **common)
+        with_tomorrow = _build(
+            slots,
+            **common,
+            solar_forecast_tomorrow_wh=10000.0,
+            tomorrow_start=datetime(2026, 2, 16, 0, 0, tzinfo=UTC),
+        )
+
+        assert _charge_slots(with_tomorrow) == []
+        assert len(_discharge_slots(without_tomorrow)) == 2
+        assert len(_discharge_slots(with_tomorrow)) == 6, (
+            "recharge = rate0*8h + rate1*4h = 2.0 + 4.0 = 6.0 kWh must serve "
+            "exactly 6 of the 8 peak slots"
+        )
+        # The tomorrow window's exact contribution: rate1 (1.0 kW) x 4h overlap.
+        assert (
+            len(_discharge_slots(with_tomorrow))
+            - len(_discharge_slots(without_tomorrow))
+        ) == 4
+
+
+# ---------------------------------------------------------------------------
+# Test 18: BATT-16 tomorrow-solar integration (48h scheduling)
+# ---------------------------------------------------------------------------
+
+
+class TestTomorrowSolarScheduling:
+    """48h integration: tomorrow's solar forecast feeds the schedule."""
+
+    def test_evening_over_reservation_bug_resolved_by_tomorrow_forecast(self):
+        """THE BATT-16 bug scenario: evening, remaining-today = 0, expensive
+        day-16 peak. Without tomorrow's forecast the resolved (tomorrow's)
+        daylight window carries 0 Wh, so the scheduler grid-charges tonight
+        for a peak the sun will actually cover. With the tomorrow forecast
+        the same window carries 8 kWh and tonight's grid charging must
+        strictly shrink (here: to zero).
+        """
+        p1 = [0.8] * 20 + [0.4] * 4  # tonight's cheap hours 20-23
+        p2 = [0.4] * 8 + [0.8] * 9 + [3.0] * 4 + [0.8] * 3  # peak hours 17-20
+        slots = _make_24h_slots(p1) + _make_24h_slots(p2, day=16)
+        common = {
+            "current_soc_pct": 20.0,
+            "mean_consumption_kw": 1.0,
+            "estimated_charge_power_kw": 1.0,
+            "max_charge_power_w": 1000.0,
+            "now": datetime(2026, 2, 15, 20, 0, 0, tzinfo=UTC),
+            "solar_forecast_remaining_wh": 0.0,  # evening: nothing left today
+            "production_factor": 0.8,
+            # Evening: sun.sun's next dawn AND dusk both point at tomorrow.
+            "dawn": datetime(2026, 2, 16, 8, 0, tzinfo=UTC),
+            "dusk": datetime(2026, 2, 16, 16, 0, tzinfo=UTC),
+        }
+
+        without_tomorrow = _build(slots, **common)
+        with_tomorrow = _build(
+            slots,
+            **common,
+            solar_forecast_tomorrow_wh=10000.0,
+            tomorrow_start=datetime(2026, 2, 16, 0, 0, tzinfo=UTC),
+        )
+
+        assert with_tomorrow.charging_slot_count < without_tomorrow.charging_slot_count
+        assert len(_charge_slots(with_tomorrow)) < len(_charge_slots(without_tomorrow))
+        # The day-16 peak stays fully served either way -- with the forecast
+        # it is funded by solar recharge instead of tonight's grid charging.
+        for result in (without_tomorrow, with_tomorrow):
+            peak = [s for s in result.schedule if s.price == 3.0]
+            assert all(s.action == "discharge" for s in peak)
+
+    def test_batt15b_reservation_netted_by_tomorrow_solar(self):
+        """BATT-15b integration: tomorrow's forecast covers the day-16 peak.
+
+        Tonight's cheap peak (day-15 21-22, max 2.0) precedes tomorrow's
+        pricier peak (day-16 18-21, max 3.5, 4 kWh need). Without the
+        tomorrow forecast, BATT-15b reserves tomorrow's FULL need at
+        tonight's peak (adjusted available goes negative) and recruits
+        redundant grid charging. With the forecast, the netting
+        max(0, need - recharge) collapses the reservation to zero: today's
+        cheap peak discharges at least as much (fully served straight from
+        the battery), tomorrow's pricier peak is funded by its own solar
+        window, and the redundant grid charging disappears entirely.
+        """
+        p1 = [0.8] * 20 + [0.4, 2.0, 2.0, 0.4]  # tonight's cheap peak 21-22
+        p2 = [0.4] * 8 + [0.8] * 10 + [3.5] * 4 + [0.8] * 2  # peak hours 18-21
+        slots = _make_24h_slots(p1) + _make_24h_slots(p2, day=16)
+        common = {
+            "current_soc_pct": 30.0,
+            "mean_consumption_kw": 1.0,
+            "estimated_charge_power_kw": 1.0,
+            "max_charge_power_w": 1000.0,
+            "now": datetime(2026, 2, 15, 20, 0, 0, tzinfo=UTC),
+            "solar_forecast_remaining_wh": 0.0,
+            "production_factor": 0.8,
+            "dawn": datetime(2026, 2, 16, 8, 0, tzinfo=UTC),
+            "dusk": datetime(2026, 2, 16, 16, 0, tzinfo=UTC),
+        }
+
+        without_tomorrow = _build(slots, **common)
+        with_tomorrow = _build(
+            slots,
+            **common,
+            solar_forecast_tomorrow_wh=10000.0,
+            tomorrow_start=datetime(2026, 2, 16, 0, 0, tzinfo=UTC),
+        )
+
+        def _todays_peak_discharges(result):
+            return [
+                s for s in result.schedule if s.price == 2.0 and s.action == "discharge"
+            ]
+
+        # Today's cheap peak discharges at least as much and stays fully
+        # served -- the collapsed reservation must not starve it.
+        assert len(_todays_peak_discharges(with_tomorrow)) >= len(
+            _todays_peak_discharges(without_tomorrow)
+        )
+        assert len(_todays_peak_discharges(with_tomorrow)) == 2
+        # Tomorrow's pricier peak is fully served by its own solar window.
+        peak2 = [s for s in with_tomorrow.schedule if s.price == 3.5]
+        assert all(s.action == "discharge" for s in peak2)
+        # The over-reservation's redundant grid charging is gone.
+        assert len(_charge_slots(with_tomorrow)) < len(_charge_slots(without_tomorrow))
+        assert _charge_slots(with_tomorrow) == []
+
+
+# ---------------------------------------------------------------------------
+# Test 19: BATT-16 discharge gate with solar windows
+# ---------------------------------------------------------------------------
+
+
+class TestDischargeGateSolarWindows:
+    """compute_discharge_gate's net-of-solar reservation (BATT-16)."""
+
+    _GATE_COMMON: ClassVar[dict[str, float]] = {
+        "effective_discharge_threshold": 1.0,
+        "battery_capacity_kwh": 10.0,
+        "mean_consumption_kw": 1.0,
+    }
+
+    def _reservation_schedule(self):
+        """Current idle slot with good spread, then one discharge slot."""
+        return [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                price=2.0,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 11, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                price=1.5,
+                action="discharge",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 12, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 13, 0, 0, tzinfo=UTC),
+                price=0.3,
+                action="idle",
+            ),
+        ]
+
+    def _overnight_schedule(self, with_early_discharge=False):
+        """Evening idle 'now' slot, then tomorrow-evening discharge slots
+        that follow tomorrow's daylight window with no charge slot between.
+
+        With with_early_discharge=True an additional discharge slot is
+        placed TONIGHT (before any solar arrives).
+        """
+        schedule = [
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 20, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 21, 0, 0, tzinfo=UTC),
+                price=2.0,
+                action="idle",
+            ),
+            ScheduleSlot(
+                start=datetime(2026, 2, 15, 21, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 2, 15, 22, 0, 0, tzinfo=UTC),
+                price=0.5,
+                action="idle",
+            ),
+        ]
+        if with_early_discharge:
+            schedule.append(
+                ScheduleSlot(
+                    start=datetime(2026, 2, 15, 22, 0, 0, tzinfo=UTC),
+                    end=datetime(2026, 2, 15, 23, 0, 0, tzinfo=UTC),
+                    price=2.5,
+                    action="discharge",
+                )
+            )
+        for hour in (18, 19, 20, 21):
+            schedule.append(
+                ScheduleSlot(
+                    start=datetime(2026, 2, 16, hour, 0, 0, tzinfo=UTC),
+                    end=datetime(2026, 2, 16, hour + 1, 0, 0, tzinfo=UTC),
+                    price=3.5,
+                    action="discharge",
+                )
+            )
+        return schedule
+
+    # Tomorrow's daylight window delivering 1.0 kW between 08:00 and 16:00.
+    _TOMORROW_WINDOWS: ClassVar[
+        list[tuple[tuple[datetime, datetime], float]]
+    ] = [
+        (
+            (
+                datetime(2026, 2, 16, 8, 0, 0, tzinfo=UTC),
+                datetime(2026, 2, 16, 16, 0, 0, tzinfo=UTC),
+            ),
+            1.0,
+        )
+    ]
+
+    def test_none_solar_windows_matches_legacy_gate_exactly(self):
+        """solar_windows=None must reproduce the gross-reservation gate
+        byte-identically, in both the blocked and the allowed regime."""
+        now = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+        schedule = self._reservation_schedule()
+
+        for soc, expected_reason in (
+            (10.0, "reserved_for_peak"),
+            (50.0, "spread_above_threshold"),
+        ):
+            legacy = compute_discharge_gate(
+                schedule=schedule,
+                now=now,
+                battery_soc_pct=soc,
+                **self._GATE_COMMON,
+            )
+            explicit_none = compute_discharge_gate(
+                schedule=schedule,
+                now=now,
+                battery_soc_pct=soc,
+                solar_windows=None,
+                **self._GATE_COMMON,
+            )
+
+            assert explicit_none == legacy
+            assert explicit_none.reason == expected_reason
+            assert explicit_none.reserved_energy_kwh == 1.0
+
+    def test_overnight_solar_refill_unblocks_reserved_for_peak(self):
+        """The guaranteed-to-fire regression scenario: tomorrow's peak has no
+        preceding charge slot (the sun makes grid charging redundant), so the
+        gross reservation accumulates its full 4 kWh and blocks tonight's
+        self-consumption. With solar_windows, the 8 kWh arriving before the
+        peak nets the reservation to zero and the gate must open."""
+        now = datetime(2026, 2, 15, 20, 30, 0, tzinfo=UTC)
+        schedule = self._overnight_schedule()
+
+        without_windows = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            battery_soc_pct=20.0,
+            **self._GATE_COMMON,
+        )
+        with_windows = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            battery_soc_pct=20.0,
+            solar_windows=self._TOMORROW_WINDOWS,
+            **self._GATE_COMMON,
+        )
+
+        assert without_windows.allowed is False
+        assert without_windows.reason == "reserved_for_peak"
+        assert without_windows.reserved_energy_kwh == 4.0
+
+        assert with_windows.allowed is True
+        assert with_windows.reason == "spread_above_threshold"
+        assert with_windows.reserved_energy_kwh == 0.0
+
+    def test_prefix_max_late_solar_does_not_cover_early_discharge(self):
+        """Solar arriving AFTER an early discharge slot cannot cover it: the
+        prefix-max keeps that slot's 1 kWh reserved even though the total
+        solar over the horizon (8 kWh) dwarfs the total need (5 kWh). A
+        naive whole-horizon netting would wrongly open the gate here."""
+        now = datetime(2026, 2, 15, 20, 30, 0, tzinfo=UTC)
+        schedule = self._overnight_schedule(with_early_discharge=True)
+
+        gate = compute_discharge_gate(
+            schedule=schedule,
+            now=now,
+            battery_soc_pct=20.0,
+            solar_windows=self._TOMORROW_WINDOWS,
+            **self._GATE_COMMON,
+        )
+
+        assert gate.allowed is False
+        assert gate.reason == "reserved_for_peak"
+        assert gate.reserved_energy_kwh == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Test 20: BATT-16 defaults are byte-identical to pre-BATT-16 behavior
+# ---------------------------------------------------------------------------
+
+
+class TestTomorrowKwargsIdentity:
+    """Passing the new kwargs as None must not change any output at all."""
+
+    @staticmethod
+    def _assert_identical(a: BatteryScheduleResult, b: BatteryScheduleResult):
+        assert a.schedule == b.schedule
+        assert a.charging_slot_count == b.charging_slot_count
+        assert a.discharging_slot_count == b.discharging_slot_count
+        assert a.next_charging_slot == b.next_charging_slot
+        assert a.next_discharging_slot == b.next_discharging_slot
+        assert a.current_action == b.current_action
+        assert a.target_ems_mode == b.target_ems_mode
+        assert a.discharge_allowed == b.discharge_allowed
+        assert a.discharge_gate_reason == b.discharge_gate_reason
+        assert a.reserved_energy_kwh == b.reserved_energy_kwh
+
+    def test_identity_without_any_solar_inputs(self):
+        """A plain charge/discharge scenario with no solar inputs."""
+        prices = [0.30] * 6 + [0.80] * 6 + [2.50] * 6 + [0.70] * 6
+        slots = _make_24h_slots(prices)
+
+        base = _build(slots, current_soc_pct=10.0)
+        with_none_kwargs = _build(
+            slots,
+            current_soc_pct=10.0,
+            solar_forecast_tomorrow_wh=None,
+            tomorrow_start=None,
+        )
+
+        self._assert_identical(base, with_none_kwargs)
+
+    def test_identity_with_today_solar_inputs(self):
+        """The single-window BATT-15a solar path (remaining forecast plus
+        dawn/dusk) must also be untouched by the None kwargs."""
+        prices = [0.20] * 12 + [2.50] * 4 + [0.90] * 8
+        slots = _make_24h_slots(prices)
+        common = {
+            "current_soc_pct": 20.0,
+            "mean_consumption_kw": 1.0,
+            "estimated_charge_power_kw": 3.0,
+            "solar_forecast_remaining_wh": 8000.0,
+            "production_factor": 0.8,
+            "dawn": datetime(2026, 2, 15, 7, 0, tzinfo=UTC),
+            "dusk": datetime(2026, 2, 15, 15, 0, tzinfo=UTC),
+        }
+
+        base = _build(slots, **common)
+        with_none_kwargs = _build(
+            slots,
+            **common,
+            solar_forecast_tomorrow_wh=None,
+            tomorrow_start=None,
+        )
+
+        self._assert_identical(base, with_none_kwargs)

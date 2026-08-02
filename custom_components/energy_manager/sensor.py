@@ -212,6 +212,7 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
             "target_ems_mode": data.target_ems_mode,
             "last_calculated": data.last_calculated.isoformat(),
             "solar_forecast_used": data.solar_forecast_used,
+            "solar_forecast_tomorrow_used": data.solar_forecast_tomorrow_used,
             "discharge_allowed": data.discharge_allowed,
             "discharge_gate_reason": data.discharge_gate_reason,
             "reserved_energy_kwh": round(data.reserved_energy_kwh, 2),

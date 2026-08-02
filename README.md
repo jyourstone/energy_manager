@@ -61,6 +61,7 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 - Home Assistant 2025.3.0 or newer (config subentry support)
 - A Nordpool sensor (native or HACS integration), configured and providing prices
 - Optional: a SigenStor battery inverter for home battery scheduling + EMS control
+- Optional: the [Forecast.Solar](https://www.home-assistant.io/integrations/forecast_solar/) integration (a separate integration that must be installed and configured on its own) for solar-aware battery scheduling. Solar-aware scheduling additionally relies on Home Assistant's built-in [Sun](https://www.home-assistant.io/integrations/sun/) integration (`sun.sun`) — part of `default_config` and enabled on standard installs. If it has been removed, solar forecast data is ignored: the schedule still works, just without solar awareness
 - Optional: an Easee charger and/or a supported car integration (Skoda Connect, VW We Connect) for EV charging
 
 ## Installation
@@ -92,7 +93,7 @@ Click the button above, or add it manually via **Settings** -> **Devices & Servi
 
 **Step 2 — Modules:** Choose which modules to enable — Home Battery and/or EV Charging. Both are optional and independent; you can enable just one.
 
-**Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, one or more Forecast.Solar "remaining today" entities for solar-aware scheduling (e.g. separate east + west arrays — their readings are summed), plus the BATT-15 algorithm tuning options (charge buffer %, solar production factor, estimated charge power, and peak-grouping gap). Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
+**Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, one or more Forecast.Solar "remaining today" entities for solar-aware scheduling (e.g. separate east + west arrays — their readings are summed), plus the BATT-15 algorithm tuning options (charge buffer %, solar production factor, estimated charge power, and peak-grouping gap). Matching Forecast.Solar "tomorrow" sensors are derived automatically from the configured "remaining today" sensors, so 48h planning also accounts for tomorrow's sun. Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
 
 **Step 4 — EV Charging** *(if enabled)*: Charger status and power entities, auto-detected from an Easee integration if present, plus the charger's device ID (auto-detected) used to address the Easee control services. Also configures charger amp limits, grid charging power cap, phase-switch and solar-charging thresholds, and an optional notify service for charger safety alerts — all pre-filled with tuned defaults and grouped with the advanced options at the end of the step.
 

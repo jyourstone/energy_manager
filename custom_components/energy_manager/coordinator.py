@@ -358,6 +358,10 @@ class BatteryScheduleData:
             or "" when discharge is allowed.
         reserved_energy_kwh: Energy the scheduler is holding back for a
             later, more expensive peak.
+        solar_forecast_tomorrow_used: Whether tomorrow's solar forecast
+            (auto-derived Forecast.Solar tomorrow sensors, BATT-16) was
+            incorporated. solar_forecast_used keeps its exact BATT-13
+            remaining-today meaning.
     """
 
     current_state: str
@@ -374,6 +378,7 @@ class BatteryScheduleData:
     discharge_allowed: bool = True
     discharge_gate_reason: str = ""
     reserved_energy_kwh: float = 0.0
+    solar_forecast_tomorrow_used: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +466,10 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # BATT-15 in-memory rolling house-consumption samples (~48h window)
         self._consumption_samples: list[tuple[datetime, float]] = []
 
+        # BATT-16 one-time INFO log guards (log on first occurrence only)
+        self._logged_no_tomorrow_entities = False
+        self._logged_sun_unavailable = False
+
     async def _async_setup(self) -> None:
         """Register listeners for coordinator chaining and entity state changes.
 
@@ -483,8 +492,15 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
 
         # Listen for Forecast.Solar entity state changes (BATT-13: one or
         # more entities -- _get_forecast_solar_entities() tolerates the
-        # pre-multi-forecast plain-string config shape too)
-        solar_entities = self._get_forecast_solar_entities()
+        # pre-multi-forecast plain-string config shape too). BATT-16 also
+        # subscribes the auto-derived tomorrow entities, deduplicated so no
+        # entity is double-subscribed.
+        today_entities = self._get_forecast_solar_entities()
+        solar_entities = list(
+            dict.fromkeys(
+                today_entities + derive_tomorrow_forecast_entities(today_entities)
+            )
+        )
         if solar_entities:
             self.config_entry.async_on_unload(
                 async_track_state_change_event(
@@ -528,8 +544,10 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         current_soc = self._read_soc()
 
         # 4. Sum remaining-today production across all configured
-        #    Forecast.Solar sensors (BATT-13)
+        #    Forecast.Solar sensors (BATT-13), plus tomorrow's production
+        #    across the auto-derived tomorrow sensors (BATT-16)
         solar_forecast_remaining_wh = self._get_solar_forecast_remaining_wh()
+        solar_forecast_tomorrow_wh = self._get_solar_forecast_tomorrow_wh()
 
         # 5. Read battery capacity and BATT-15 tuning options from entry options
         battery_capacity_kwh = self.config_entry.options.get(
@@ -554,6 +572,26 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
 
         # 7. Read dawn/dusk from sun.sun (BATT-15a)
         dawn, dusk = _read_sun_dawn_dusk(self.hass)
+        if (
+            (dawn is None or dusk is None)
+            and self._get_forecast_solar_entities()
+            and not self._logged_sun_unavailable
+        ):
+            self._logged_sun_unavailable = True
+            _LOGGER.info(
+                "Forecast.Solar entities are configured but sun.sun is "
+                "unavailable or missing next_dawn/next_dusk attributes; "
+                "the solar forecast will be ignored until the Sun "
+                "integration provides them"
+            )
+
+        # BATT-16: UTC instant of the next local midnight -- the scheduler's
+        # boundary between today's and tomorrow's daylight windows. Must be
+        # start_of_local_day(now + 1 day); the start_of_local_day() +
+        # timedelta(days=1) variant is 1h off on DST-transition days.
+        tomorrow_start = dt_util.as_utc(
+            dt_util.start_of_local_day(dt_util.now() + timedelta(days=1))
+        )
 
         # 8. BATT-14: derive the effective discharge threshold from economics
         #    (overrides self.discharge_threshold when battery_cycle_cost > 0)
@@ -576,9 +614,11 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             estimated_charge_power_kw=estimated_charge_power_kw,
             charge_buffer_pct=charge_buffer_pct,
             solar_forecast_remaining_wh=solar_forecast_remaining_wh,
+            solar_forecast_tomorrow_wh=solar_forecast_tomorrow_wh,
             production_factor=production_factor,
             dawn=dawn,
             dusk=dusk,
+            tomorrow_start=tomorrow_start,
             peak_gap_hours=peak_gap_hours,
             min_soc_pct=DEFAULT_MIN_SOC_PCT,
             max_soc_pct=DEFAULT_MAX_SOC_PCT,
@@ -613,6 +653,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             discharge_allowed=result.discharge_allowed,
             discharge_gate_reason=result.discharge_gate_reason,
             reserved_energy_kwh=result.reserved_energy_kwh,
+            solar_forecast_tomorrow_used=solar_forecast_tomorrow_wh is not None,
         )
 
     def _read_soc(self) -> float:
@@ -658,7 +699,48 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             Total remaining production in Wh, or None if no sensors are
             configured or none currently have a valid numeric state.
         """
-        entity_ids = self._get_forecast_solar_entities()
+        return self._read_solar_forecast_wh(self._get_forecast_solar_entities())
+
+    def _get_solar_forecast_tomorrow_wh(self) -> float | None:
+        """Sum tomorrow's production across the auto-derived Forecast.Solar
+        tomorrow sensors (BATT-16).
+
+        Entity IDs are derived from the configured remaining-today sensors
+        (see derive_tomorrow_forecast_entities) -- zero new config. Logs a
+        one-time INFO when today sensors are configured but none map to a
+        tomorrow counterpart (renamed / non-Forecast.Solar entity IDs).
+
+        Returns:
+            Total tomorrow production in Wh, or None if nothing is
+            derivable or no derived sensor currently has a valid numeric
+            state.
+        """
+        today_entities = self._get_forecast_solar_entities()
+        tomorrow_entities = derive_tomorrow_forecast_entities(today_entities)
+        if (
+            today_entities
+            and not tomorrow_entities
+            and not self._logged_no_tomorrow_entities
+        ):
+            self._logged_no_tomorrow_entities = True
+            _LOGGER.info(
+                "Could not derive tomorrow Forecast.Solar entities from %s "
+                "(expected IDs containing 'energy_production_today_remaining'); "
+                "tomorrow's solar forecast will not feed the battery schedule",
+                today_entities,
+            )
+        return self._read_solar_forecast_wh(tomorrow_entities)
+
+    def _read_solar_forecast_wh(self, entity_ids: list[str]) -> float | None:
+        """Read the given Forecast.Solar sensors and sum them into a Wh total.
+
+        Args:
+            entity_ids: Forecast.Solar entity IDs to read.
+
+        Returns:
+            Total production in Wh, or None if entity_ids is empty or none
+            currently have a valid numeric state.
+        """
         if not entity_ids:
             return None
 
@@ -744,6 +826,31 @@ def sum_solar_forecast_wh(readings: list[tuple[float, str]]) -> float:
             value *= 1000.0
         total += value
     return total
+
+
+def derive_tomorrow_forecast_entities(entity_ids: list[str]) -> list[str]:
+    """Derive Forecast.Solar tomorrow entity IDs from remaining-today ones (BATT-16).
+
+    Forecast.Solar names its sensors stably, so a substring replacement of
+    ``energy_production_today_remaining`` with ``energy_production_tomorrow``
+    maps each configured remaining-today sensor to its tomorrow counterpart
+    -- the multi-array ``_2`` suffix carries through unchanged. Entity IDs
+    without the expected substring (renamed or non-Forecast.Solar sensors)
+    are dropped. Pure and HA-free so it can be unit tested directly.
+
+    Args:
+        entity_ids: Configured remaining-today Forecast.Solar entity IDs.
+
+    Returns:
+        Derived tomorrow entity IDs, possibly empty.
+    """
+    return [
+        entity_id.replace(
+            "energy_production_today_remaining", "energy_production_tomorrow"
+        )
+        for entity_id in entity_ids
+        if "energy_production_today_remaining" in entity_id
+    ]
 
 
 def _prune_samples(
