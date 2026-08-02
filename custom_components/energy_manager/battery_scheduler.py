@@ -354,6 +354,7 @@ def build_battery_schedule(
         mean_consumption_kw=mean_consumption_kw,
         min_soc_pct=min_soc_pct,
         solar_windows=solar_windows,
+        export_power_kw=export_power_kw,
     )
 
     return BatteryScheduleResult(
@@ -414,6 +415,7 @@ def compute_discharge_gate(
     mean_consumption_kw: float,
     min_soc_pct: float = 10.0,
     solar_windows: list[tuple[tuple[datetime, datetime], float]] | None = None,
+    export_power_kw: float = 0.0,
 ) -> DischargeGate:
     """Determine whether self-consumption discharge is currently allowed.
 
@@ -443,6 +445,10 @@ def compute_discharge_gate(
             arrive before each discharge slot (prefix-max over future
             discharge slots, BATT-16); None preserves the gross-reservation
             behavior exactly.
+        export_power_kw: Planned grid-injection power for BATT-17 export
+            slots (kW). Future export slots reserve at
+            (export_power_kw + mean_consumption_kw); 0.0 (the default)
+            still reserves an export slot's house-load share.
 
     Returns:
         DischargeGate describing whether discharge is currently allowed.
@@ -482,11 +488,17 @@ def compute_discharge_gate(
             # A planned recharge resets the reservation -- discharging
             # before a refill is fine.
             break
-        # Future "export" slots intentionally neither break nor accumulate
-        # here -- the export reserve-SOC floor covers their protection.
-        if slot.action == "discharge":
+        # Future "export" slots reserve like discharge slots, at their full
+        # rate (export power + house load served by the battery). Without
+        # this, gate-open self-consumption on idle slots could spend the
+        # above-reserve-floor energy the export plan counted on, and the
+        # runtime SOC check would then cancel the sale (lost revenue).
+        if slot.action in ("discharge", "export"):
             duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
-            needed_energy_kwh += mean_consumption_kw * duration_hours
+            rate_kw = mean_consumption_kw
+            if slot.action == "export":
+                rate_kw += export_power_kw
+            needed_energy_kwh += rate_kw * duration_hours
             if solar_windows is None:
                 reserved_energy_kwh = needed_energy_kwh
             else:

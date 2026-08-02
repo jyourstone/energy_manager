@@ -672,8 +672,10 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
                 CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
             )
         )
-        # Planning-time grid-injection power (kW): fuse cap only -- the
-        # house-load add-back happens at runtime in the EMS coordinator
+        # Planning-time grid-injection power (kW): the per-phase-safe fuse
+        # cap, matching compute_export_limit_kw (no house-load add-back --
+        # house load can be single-phase, so adding total load could push
+        # an unloaded phase past its rating)
         export_power_kw = max(
             0.0, (fuse_rating_amps - fuse_safety_buffer_amps) * 3 * 0.230
         )
@@ -1817,11 +1819,12 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 entity_max = (
                     limit_state.attributes.get("max") if limit_state else None
                 )
-                target_discharge_limit = (
-                    min(float(entity_max), MAX_CHARGE_LIMIT_KW)
-                    if entity_max is not None
-                    else MAX_CHARGE_LIMIT_KW
-                )
+                try:
+                    target_discharge_limit = min(
+                        float(entity_max), MAX_CHARGE_LIMIT_KW
+                    )
+                except (TypeError, ValueError):
+                    target_discharge_limit = MAX_CHARGE_LIMIT_KW
             else:
                 target_discharge_limit = 0.0
 
@@ -1881,11 +1884,16 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 self._last_sent_discharge_limit is not None
                 and target_discharge_limit > self._last_sent_discharge_limit
             )
-            if raising and self._last_sent_mode == "command_discharging":
-                # Export-mode exit not yet confirmed (the mode send failed
-                # or was suppressed): the plant may still be in Command
-                # Discharging, so never raise the limit toward entity max
-                # until the mode change is confirmed. Retries next cycle.
+            if raising and (
+                self._last_sent_mode == "command_discharging"
+                or self._plant_mode_is_command_discharging()
+            ):
+                # Export-mode exit not yet confirmed: either the mode send
+                # failed/was suppressed, or it succeeded but the inverter's
+                # select entity still READS Command Discharging (Modbus
+                # apply latency -- Greptile PR #7). Never raise the limit
+                # toward entity max while the plant may still be
+                # discharging. Retries next cycle.
                 _LOGGER.debug(
                     "Holding discharge limit at %.1f kW until export-mode "
                     "exit is confirmed",
@@ -1945,6 +1953,23 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         _read_control_enabled() (shared with EaseeCoordinator).
         """
         return _read_control_enabled(self.config_entry)
+
+    def _plant_mode_is_command_discharging(self) -> bool:
+        """True when the EMS select entity currently READS a discharging mode.
+
+        The raise-guard in step 8b must not trust _last_sent_mode alone: a
+        successful select_option service call can precede the inverter
+        actually applying the mode (Modbus latency), and raising the
+        discharge limit in that window would briefly allow uncapped export.
+        Unknown/unavailable states return False (the normal non-export
+        state; the guard's other arm covers failed sends).
+        """
+        if not self._ems_select_entity:
+            return False
+        state = self.hass.states.get(self._ems_select_entity)
+        if state is None:
+            return False
+        return state.state == EMS_MODE_MAP.get("command_discharging")
 
     def _soc_strictly_available(self) -> bool:
         """True only when the SOC entity's state parses to a finite number.

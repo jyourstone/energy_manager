@@ -133,7 +133,7 @@
           "grid_transfer_fee": "Elnätets överföringsavgift (per kWh)",
           "electricity_company_fee": "Elbolagets påslag (per kWh)",
           "max_charge_power": "Max laddeffekt för batteriet",
-          "export_spike_threshold": "Tröskel för exportpristopp (SEK/kWh)",
+          "export_spike_threshold": "Tröskel för exportpristopp (per kWh)",
           "export_reserve_soc_pct": "Reserv-SOC för export (%)"
         },
         "data_description": {
@@ -247,7 +247,7 @@
           "production_factor": "Solprognosfaktor",
           "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
           "peak_gap_hours": "Gap mellan toppar (h)",
-          "export_spike_threshold": "Tröskel för exportpristopp (SEK/kWh)",
+          "export_spike_threshold": "Tröskel för exportpristopp (per kWh)",
           "export_reserve_soc_pct": "Reserv-SOC för export (%)"
         },
         "data_description": {

@@ -133,7 +133,7 @@
           "grid_transfer_fee": "Grid transfer fee (per kWh)",
           "electricity_company_fee": "Electricity company fee (per kWh)",
           "max_charge_power": "Max battery charging power",
-          "export_spike_threshold": "Export spike threshold (SEK/kWh)",
+          "export_spike_threshold": "Export spike threshold (per kWh)",
           "export_reserve_soc_pct": "Export reserve SOC (%)"
         },
         "data_description": {
@@ -247,7 +247,7 @@
           "production_factor": "Solar production factor",
           "estimated_charge_power_kw": "Estimated charge power (kW)",
           "peak_gap_hours": "Peak grouping gap (h)",
-          "export_spike_threshold": "Export spike threshold (SEK/kWh)",
+          "export_spike_threshold": "Export spike threshold (per kWh)",
           "export_reserve_soc_pct": "Export reserve SOC (%)"
         },
         "data_description": {

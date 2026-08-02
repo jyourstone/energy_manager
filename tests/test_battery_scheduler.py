@@ -1857,6 +1857,18 @@ class TestExportPastSlots:
         actions = {s.start.hour: s.action for s in result.schedule}
         assert actions[19] == "export"
 
+    def test_future_export_slot_reserves_energy_in_gate(self):
+        """CodeRabbit PR #7: a future export slot must reserve its energy
+        (export power + house load) in the discharge gate, or gate-open
+        self-consumption on idle slots could drain the energy the export
+        plan counted on before the sale fires."""
+        result = _build(_spike_slots(), **EXPORT_KWARGS)
+
+        assert result.schedule[4].action == "export"
+        # Gate scan runs from now (hour 0, idle): the hour-4 export slot
+        # reserves (2.0 export + 1.0 house) * 1h = 3.0 kWh.
+        assert result.reserved_energy_kwh >= 3.0
+
     def test_next_export_slot_populated(self):
         """next_export_slot points at the upcoming export slot."""
         result = _build(_spike_slots(), **EXPORT_KWARGS)
