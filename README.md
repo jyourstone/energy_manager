@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/logo.png" alt="Energy Manager logo" width="140">
+  <img src="https://raw.githubusercontent.com/jyourstone/energy_manager/main/images/logo.png" alt="Energy Manager logo" width="140">
 </p>
 
 <h1 align="center">Energy Manager</h1>
@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/hacs/integration"><img src="https://img.shields.io/badge/HACS-Default-41BDF5.svg" alt="HACS"></a>
   <a href="https://github.com/jyourstone/energy_manager/releases"><img src="https://img.shields.io/github/v/release/jyourstone/energy_manager" alt="Release"></a>
   <a href="https://github.com/jyourstone/energy_manager/blob/main/LICENSE"><img src="https://img.shields.io/github/license/jyourstone/energy_manager" alt="License"></a>
   <a href="https://buymeacoffee.com/jyourstone"><img src="https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
@@ -66,14 +67,14 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 
 ## Installation
 
-### HACS (custom repository)
+### HACS (Recommended)
 
-Energy Manager is not yet in the HACS default store. Add it as a custom repository:
+Energy Manager is in the HACS default store:
 
-[![Add custom repository to your Home Assistant instance.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jyourstone&repository=energy_manager&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jyourstone&repository=energy_manager&category=integration)
 
-1. Click the button above, or in HACS go to **Integrations** -> the **⋮** menu -> **Custom repositories**, and add `jyourstone/energy_manager` as category **Integration**
-2. Search for **Energy Manager** in HACS and click **Install**
+1. Click the button above, or search for **Energy Manager** in HACS
+2. Click **Download**
 3. Restart Home Assistant
 
 ### Manual
