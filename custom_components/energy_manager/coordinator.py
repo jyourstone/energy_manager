@@ -24,11 +24,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -42,6 +45,8 @@ from .battery_scheduler import (
 )
 from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
 from .charger_state_machine import (
+    POWER_ACTIVE_THRESHOLD_KW,
+    TERMINAL_STATUSES,
     CarDemand,
     ChargerCommand,
     ChargerController,
@@ -98,6 +103,8 @@ from .const import (
     CONF_SOLAR_ACTIVATION_DELAY,
     CONF_SOLAR_DEACTIVATION_DELAY,
     CONF_SOLAR_START_THRESHOLD_KW,
+    CONSUMPTION_STORAGE_SAVE_DELAY_SECONDS,
+    CONSUMPTION_STORAGE_VERSION,
     DEFAULT_AMP_DECREASE_DELAY_SECONDS,
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_ASSUMED_LOAD_AMPS,
@@ -120,6 +127,7 @@ from .const import (
     DEFAULT_FUSE_RATING_AMPS,
     DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
     DEFAULT_GRID_TRANSFER_FEE,
+    DEFAULT_LIMIT_REASSERT_INTERVAL_SECONDS,
     DEFAULT_MAX_CHARGE_AMPS,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_ESS_CHARGE_AMPS,
@@ -141,10 +149,13 @@ from .const import (
     DEFAULT_SOLAR_SAFETY_BUFFER_KW,
     DEFAULT_SOLAR_START_THRESHOLD_KW,
     DEFAULT_TARGET_SOC_PCT,
+    DOMAIN,
     EASEE_UPDATE_INTERVAL_SECONDS,
     EMS_MODE_MAP,
     EMS_UPDATE_INTERVAL_SECONDS,
     FALLBACK_STALE_THRESHOLD_MINUTES,
+    FORECAST_ACCURACY_STORAGE_VERSION,
+    FUSE_FALLBACK_ISSUE_THRESHOLD_SECONDS,
     MAX_CHARGE_LIMIT_KW,
     MEAN_CONSUMPTION_WINDOW_HOURS,
     MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES,
@@ -160,9 +171,26 @@ from .ems_controller import (
     compute_available_ess_amps,
     compute_ems_state,
     resolve_current_sensor_fallback,
+    should_file_fallback_issue,
     worst_case_signed_amps,
 )
+from .forecast_accuracy import (
+    MAX_SAMPLE_GAP_MINUTES,
+    DailyAccuracyRecord,
+    accumulate_energy_kwh,
+    append_day,
+    is_before_dawn,
+    restore_history,
+    serialize_history,
+)
 from .nordpool_adapter import async_get_prices
+from .repairs import (
+    ISSUE_CHARGE_LIMIT_WRONG_DOMAIN,
+    ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN,
+    ISSUE_FUSE_SENSOR_FALLBACK,
+    async_clear_issue,
+    async_report_issue,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -463,8 +491,31 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         self.grid_transfer_fee: float = DEFAULT_GRID_TRANSFER_FEE
         self.electricity_company_fee: float = DEFAULT_ELECTRICITY_COMPANY_FEE
 
-        # BATT-15 in-memory rolling house-consumption samples (~48h window)
+        # BATT-15 rolling house-consumption samples (~48h window), persisted
+        # across restarts via HA Store -- restored in _async_setup, saved
+        # (delayed) whenever a new sample is appended
         self._consumption_samples: list[tuple[datetime, float]] = []
+        self._consumption_store: Store = Store(
+            hass,
+            CONSUMPTION_STORAGE_VERSION,
+            consumption_storage_key(entry.entry_id),
+        )
+
+        # Stage-1 forecast-accuracy telemetry (observe-only): pre-dawn
+        # Forecast.Solar snapshot + daily PV kWh accumulator, rolled into
+        # one DailyAccuracyRecord at local midnight and persisted in a
+        # dedicated Store (one write per day, at rollover). Feeds only the
+        # diagnostic sensor -- never the scheduler.
+        self.forecast_accuracy_history: list[DailyAccuracyRecord] = []
+        self._fa_store: Store = Store(
+            hass,
+            FORECAST_ACCURACY_STORAGE_VERSION,
+            forecast_accuracy_storage_key(entry.entry_id),
+        )
+        self._fa_day: date = dt_util.now().date()
+        self._fa_snapshot_kwh: float | None = None
+        self._fa_accumulated_kwh: float = 0.0
+        self._fa_last_pv_sample: tuple[datetime, float] | None = None
 
         # BATT-16 one-time INFO log guards (log on first occurrence only)
         self._logged_no_tomorrow_entities = False
@@ -475,6 +526,23 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
 
         Called once during async_config_entry_first_refresh.
         """
+        # BATT-15: restore persisted consumption samples so the FIRST
+        # refresh after a restart already uses the rolling mean
+        try:
+            restored = await self._consumption_store.async_load()
+            self._consumption_samples = _restore_samples(
+                restored, dt_util.utcnow(), MEAN_CONSUMPTION_WINDOW_HOURS
+            )
+        except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
+            self._consumption_samples = []
+
+        # Stage-1 forecast accuracy: restore the persisted daily records
+        try:
+            restored_history = await self._fa_store.async_load()
+            self.forecast_accuracy_history = restore_history(restored_history)
+        except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
+            self.forecast_accuracy_history = []
+
         # Chain to PriceCoordinator: recalculate when prices update
         self._unsub_price = self._price_coordinator.async_add_listener(
             self._handle_price_update
@@ -584,6 +652,12 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
                 "the solar forecast will be ignored until the Sun "
                 "integration provides them"
             )
+
+        # 7b. Stage-1 forecast-accuracy telemetry (observe-only): daily PV
+        #     accumulation, pre-dawn forecast snapshot, midnight rollover.
+        #     Feeds only the diagnostic sensor -- no scheduler input
+        #     depends on it.
+        await self._track_forecast_accuracy(dawn)
 
         # BATT-16: UTC instant of the next local midnight -- the scheduler's
         # boundary between today's and tomorrow's daylight windows. Must be
@@ -791,6 +865,15 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
                 last_sample_at, now, MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES
             ):
                 self._consumption_samples.append((now, current_kw))
+                # Persist (delayed, batched -- only when a sample is
+                # actually appended, never every refresh). The lambda must
+                # re-read self._consumption_samples at save time: the prune
+                # below rebinds the attribute, so capturing the list object
+                # here would serialize a stale snapshot.
+                self._consumption_store.async_delay_save(
+                    lambda: _serialize_samples(self._consumption_samples),
+                    CONSUMPTION_STORAGE_SAVE_DELAY_SECONDS,
+                )
 
         self._consumption_samples = _prune_samples(
             self._consumption_samples, now, MEAN_CONSUMPTION_WINDOW_HOURS
@@ -803,6 +886,97 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         if current_kw is not None:
             return current_kw
         return DEFAULT_MEAN_CONSUMPTION_KW
+
+    async def async_flush_consumption_store(self) -> None:
+        """Write pending consumption samples now, cancelling any delayed save.
+
+        Called on entry unload: an in-flight async_delay_save would
+        otherwise fire AFTER async_remove_entry deletes the file (re-creating
+        the orphan it exists to prevent), or land after a reload's fresh
+        coordinator already loaded the store (dropping the last samples).
+        Store.async_save cancels the pending delayed listener.
+        """
+        try:
+            await self._consumption_store.async_save(
+                _serialize_samples(self._consumption_samples)
+            )
+        except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
+            _LOGGER.debug("Consumption store flush failed on unload: %s", err)
+
+    async def _track_forecast_accuracy(self, dawn: datetime | None) -> None:
+        """Run one observe-only forecast-accuracy telemetry step (Stage 1).
+
+        At the first update past local midnight: append yesterday's record
+        (skipped when no pre-dawn snapshot was captured -- e.g. forecast
+        entities unavailable all morning, or HA restarted mid-day), reset
+        the accumulator, and persist the history in the day's single Store
+        write. Every update: retry the pre-dawn Forecast.Solar snapshot
+        until dawn, and trapezoid-integrate the PV power entity into the
+        daily actual-kWh accumulator (unavailable readings are skipped,
+        never treated as zero).
+
+        Args:
+            dawn: sun.sun's next_dawn (UTC-aware), or None if unavailable.
+        """
+        # Without a PV power entity there is no actual-production signal:
+        # every day would accumulate 0.0 kWh and, after MIN_VALID_DAYS,
+        # confidently suggest the clamped minimum factor. Skip entirely.
+        pv_entity = self.config_entry.options.get(CONF_PV_POWER_ENTITY, "")
+        if not pv_entity:
+            return
+
+        now = dt_util.utcnow()
+        today = dt_util.as_local(now).date()
+
+        if today != self._fa_day:
+            if self._fa_snapshot_kwh is not None:
+                self.forecast_accuracy_history = append_day(
+                    self.forecast_accuracy_history,
+                    DailyAccuracyRecord(
+                        self._fa_day,
+                        self._fa_snapshot_kwh,
+                        self._fa_accumulated_kwh,
+                    ),
+                )
+            self._fa_day = today
+            self._fa_snapshot_kwh = None
+            self._fa_accumulated_kwh = 0.0
+            self._fa_last_pv_sample = None
+            try:
+                await self._fa_store.async_save(
+                    serialize_history(self.forecast_accuracy_history)
+                )
+            except Exception as err:  # noqa: BLE001 -- telemetry must never fail the refresh
+                _LOGGER.warning(
+                    "Forecast accuracy history could not be saved: %s", err
+                )
+
+        # Before dawn, remaining-today equals the full day total, so the
+        # BATT-13 remaining-today read path doubles as the day-total read.
+        # Keep refreshing (max) while pre-dawn: the first post-midnight
+        # reading can be Forecast.Solar's stale pre-rollover leftover (~0);
+        # freezing it would drop or heavily bias the whole day.
+        if is_before_dawn(
+            today, dt_util.as_local(dawn).date() if dawn else None
+        ):
+            forecast_wh = self._get_solar_forecast_remaining_wh()
+            if forecast_wh is not None:
+                kwh = forecast_wh / 1000.0
+                self._fa_snapshot_kwh = (
+                    kwh
+                    if self._fa_snapshot_kwh is None
+                    else max(self._fa_snapshot_kwh, kwh)
+                )
+
+        pv_kw = (
+            _read_power_kw(self.hass, pv_entity)
+            if _entity_has_value(self.hass, pv_entity)
+            else None
+        )
+        delta_kwh, self._fa_last_pv_sample = accumulate_energy_kwh(
+            self._fa_last_pv_sample, now, pv_kw, MAX_SAMPLE_GAP_MINUTES
+        )
+        self._fa_accumulated_kwh += delta_kwh
 
 
 def sum_solar_forecast_wh(readings: list[tuple[float, str]]) -> float:
@@ -862,6 +1036,65 @@ def _prune_samples(
     """
     cutoff = now - timedelta(hours=window_hours)
     return [(t, v) for t, v in samples if t >= cutoff]
+
+
+def consumption_storage_key(entry_id: str) -> str:
+    """Storage key for a config entry's persisted BATT-15 consumption samples.
+
+    Shared with __init__.async_remove_entry so entry removal deletes the
+    same .storage file this coordinator writes.
+    """
+    return f"{DOMAIN}.{entry_id}-consumption"
+
+
+def forecast_accuracy_storage_key(entry_id: str) -> str:
+    """Storage key for a config entry's Stage-1 forecast-accuracy history.
+
+    Deliberately a separate Store from the consumption samples (different
+    lifecycle: one write per day at rollover vs. delayed batched writes).
+    Shared with __init__.async_remove_entry so entry removal deletes the
+    same .storage file this coordinator writes.
+    """
+    return f"{DOMAIN}.{entry_id}-forecast_accuracy"
+
+
+def _serialize_samples(samples: list[tuple[datetime, float]]) -> list[list]:
+    """Serialize consumption samples to a JSON-storable shape.
+
+    Pure and HA-free so it can be unit tested directly.
+    """
+    return [[t.isoformat(), v] for t, v in samples]
+
+
+def _restore_samples(
+    raw: object, now: datetime, window_hours: float
+) -> list[tuple[datetime, float]]:
+    """Restore consumption samples persisted by _serialize_samples().
+
+    Tolerates None/garbage (returns []), skips malformed entries, drops
+    future-dated timestamps, coerces timestamps to UTC, and reuses
+    _prune_samples() so anything outside the rolling window is discarded.
+    Pure and HA-free so it can be unit tested directly.
+    """
+    if not isinstance(raw, list):
+        return []
+    samples: list[tuple[datetime, float]] = []
+    for entry in raw:
+        try:
+            ts_raw, value = entry
+            ts = datetime.fromisoformat(ts_raw)
+            kw = float(value)
+        except (TypeError, ValueError):
+            continue
+        ts = (
+            ts.replace(tzinfo=timezone.utc)
+            if ts.tzinfo is None
+            else ts.astimezone(timezone.utc)
+        )
+        if ts > now:
+            continue
+        samples.append((ts, kw))
+    return _prune_samples(samples, now, window_hours)
 
 
 def _should_sample_consumption(
@@ -1105,6 +1338,10 @@ class FuseSensorReader:
         self._sensor_fail_behavior = sensor_fail_behavior
         self._assumed_load_amps = assumed_load_amps
         self._sensor_warned = False
+        # Monotonic timestamp of the first read in the current uninterrupted
+        # fallback streak (None while reads succeed) -- drives the Repairs
+        # issue for persistent sensor outages.
+        self._fallback_since: float | None = None
 
     def read_grid_current_amps(self) -> tuple[float, bool]:
         """Read grid power and return (signed worst-case phase current, sensor_blocked).
@@ -1133,18 +1370,22 @@ class FuseSensorReader:
         if all(phase_entities):
             if all(_entity_has_value(self._hass, e) for e in phase_entities):
                 amps = [self._read_signed_power_amps(e, 230.0) for e in phase_entities]
-                self._sensor_warned = False
+                self._note_read_success()
                 return worst_case_signed_amps(amps), False
             return self._apply_fallback("grid phase current sensors")
 
         if self._grid_power_entity:
             if _entity_has_value(self._hass, self._grid_power_entity):
                 amps = self._read_signed_power_amps(self._grid_power_entity, 3.0 * 230.0)
-                self._sensor_warned = False
+                self._note_read_success()
                 return amps, False
             return self._apply_fallback("grid power sensor")
 
-        return self._apply_fallback("grid power sensor (not configured)")
+        # No grid sensors configured at all is a valid (if degraded) setup,
+        # not a sensor outage -- warn once but never file the Repairs issue.
+        return self._apply_fallback(
+            "grid power sensor (not configured)", file_issue=False
+        )
 
     def _read_signed_power_amps(self, entity_id: str, divisor: float) -> float:
         """Read a power sensor and convert to signed amps.
@@ -1160,12 +1401,45 @@ class FuseSensorReader:
                 power *= 1000.0
         return power / divisor
 
-    def _apply_fallback(self, sensor_description: str) -> tuple[float, bool]:
-        """Apply the configured fail-behavior and log a rate-limited warning."""
+    def _note_read_success(self) -> None:
+        """Reset fallback tracking and clear the Repairs issue after a good read."""
+        self._sensor_warned = False
+        if self._fallback_since is not None:
+            self._fallback_since = None
+            async_clear_issue(self._hass, ISSUE_FUSE_SENSOR_FALLBACK)
+
+    def _apply_fallback(
+        self, sensor_description: str, *, file_issue: bool = True
+    ) -> tuple[float, bool]:
+        """Apply the configured fail-behavior and log a rate-limited warning.
+
+        Files a Repairs issue once the fallback has been continuously
+        active for FUSE_FALLBACK_ISSUE_THRESHOLD_SECONDS -- re-evaluated on
+        every read (not behind the one-time log guard) so a condition that
+        recovers and then degrades again is re-filed. file_issue=False
+        suppresses the issue (not the warning) for the no-sensors-configured
+        path, which is a valid configuration rather than an outage.
+        """
         result = resolve_current_sensor_fallback(
             fail_behavior=self._sensor_fail_behavior,
             assumed_load_amps=self._assumed_load_amps,
         )
+        now = monotonic()
+        if self._fallback_since is None:
+            self._fallback_since = now
+        if file_issue and should_file_fallback_issue(
+            self._fallback_since, now, FUSE_FALLBACK_ISSUE_THRESHOLD_SECONDS
+        ):
+            async_report_issue(
+                self._hass,
+                ISSUE_FUSE_SENSOR_FALLBACK,
+                ir.IssueSeverity.WARNING,
+                ISSUE_FUSE_SENSOR_FALLBACK,
+                {
+                    "sensor": sensor_description,
+                    "behavior": self._sensor_fail_behavior,
+                },
+            )
         if not self._sensor_warned:
             _LOGGER.warning(
                 "Fuse protection: %s unavailable -- applying '%s' fallback (%s). "
@@ -1284,8 +1558,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             increase_delay_seconds=self._ess_increase_delay_seconds
         )
 
-        # Rate-limit the charge-limit-entity-wrong-domain error (logged once)
+        # Rate-limit the limit-entity-wrong-domain errors (logged once each)
         self._charge_limit_domain_warned: bool = False
+        self._discharge_limit_domain_warned: bool = False
 
         # Change detection for command deduplication
         self._last_sent_mode: str | None = None
@@ -1673,7 +1948,16 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # Defense in depth: the configured entity must be a writable number.*
         # setpoint. A sensor-domain "rated_*" capability entity would fail
         # number.set_value (see phase41 UAT bug 2) -- refuse to call it.
+        # The Repairs issue is driven from the raw condition on every call
+        # (not behind the one-time log guard) so it tracks the live state.
         if not self._charge_limit_entity.startswith("number."):
+            async_report_issue(
+                self.hass,
+                ISSUE_CHARGE_LIMIT_WRONG_DOMAIN,
+                ir.IssueSeverity.ERROR,
+                ISSUE_CHARGE_LIMIT_WRONG_DOMAIN,
+                {"entity_id": self._charge_limit_entity},
+            )
             if not self._charge_limit_domain_warned:
                 _LOGGER.error(
                     "Charge limit entity %s is not in the 'number' domain -- "
@@ -1683,6 +1967,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 )
                 self._charge_limit_domain_warned = True
             return False
+        async_clear_issue(self.hass, ISSUE_CHARGE_LIMIT_WRONG_DOMAIN)
 
         # Check entity availability
         state = self.hass.states.get(self._charge_limit_entity)
@@ -1738,15 +2023,27 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             return False
 
         # Defense in depth: the configured entity must be a writable number.*
-        # setpoint (mirrors the charge limit entity check).
+        # setpoint (mirrors the charge limit entity check, including the
+        # one-time log guard -- without it this re-logs every cycle since
+        # _last_sent_discharge_limit only advances on success).
         if not self._discharge_limit_entity.startswith("number."):
-            _LOGGER.error(
-                "Discharge limit entity %s is not in the 'number' domain -- "
-                "skipping command. Reconfigure the discharge limit entity to "
-                "a writable number.* setpoint.",
-                self._discharge_limit_entity,
+            async_report_issue(
+                self.hass,
+                ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN,
+                ir.IssueSeverity.ERROR,
+                ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN,
+                {"entity_id": self._discharge_limit_entity},
             )
+            if not self._discharge_limit_domain_warned:
+                _LOGGER.error(
+                    "Discharge limit entity %s is not in the 'number' domain -- "
+                    "skipping command. Reconfigure the discharge limit entity to "
+                    "a writable number.* setpoint.",
+                    self._discharge_limit_entity,
+                )
+                self._discharge_limit_domain_warned = True
             return False
+        async_clear_issue(self.hass, ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN)
 
         # Check entity availability
         state = self.hass.states.get(self._discharge_limit_entity)
@@ -2545,6 +2842,14 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         # Observe-only mode (CORE-14): most recently suppressed dry-run command
         self._last_suppressed_command: str | None = None
 
+        # Previous control_enabled reading -- an OFF->ON edge (cutover)
+        # resets the controller's sent-command belief so the first live
+        # tick re-asserts the limit and start state.
+        self._prev_control_enabled = False
+
+        # One-time WARNING guard: terminal status while the car draws power
+        self._logged_terminal_status_while_drawing = False
+
     async def _async_setup(self) -> None:
         """Register listeners for immediate response to charger state changes.
 
@@ -2573,8 +2878,25 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             EaseeData with the current charger state and control information.
         """
         now = dt_util.utcnow()
+        control_enabled = self._is_control_enabled()
+        if control_enabled and not self._prev_control_enabled:
+            self._controller.reset_command_belief()
+        self._prev_control_enabled = control_enabled
         charger_status = self._read_charger_status()
         charger_power_kw = self._read_charger_power_kw()
+        if (
+            charger_status in TERMINAL_STATUSES
+            and charger_power_kw > POWER_ACTIVE_THRESHOLD_KW
+            and not self._logged_terminal_status_while_drawing
+        ):
+            self._logged_terminal_status_while_drawing = True
+            _LOGGER.warning(
+                "Charger status entity reports %r while the charger draws "
+                "%.1f kW; trusting the power reading and keeping fuse "
+                "supervision engaged",
+                charger_status,
+                charger_power_kw,
+            )
         current_phase_mode = self._read_current_phase_mode()
         l_current, sensor_blocked = self._fuse_reader.read_grid_current_amps()
         current_dynamic_limit_amps = _estimate_charger_current_amps(
@@ -2627,6 +2949,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             amp_decrease_delay_s=self._amp_decrease_delay_s,
             phase_sequence_step_timeout_s=DEFAULT_PHASE_SEQUENCE_STEP_TIMEOUT_SECONDS,
             command_stuck_timeout_s=DEFAULT_COMMAND_STUCK_TIMEOUT_SECONDS,
+            limit_reassert_interval_s=DEFAULT_LIMIT_REASSERT_INTERVAL_SECONDS,
         )
 
         decision = self._controller.decide(inputs)
@@ -2651,7 +2974,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             target_phase_mode=decision.target_phase_mode,
             sequence_state=decision.sequence_state,
             stuck=decision.stuck,
-            dry_run=not self._is_control_enabled(),
+            dry_run=not control_enabled,
             last_suppressed_command=self._last_suppressed_command,
             notification_count=len(decision.notifications),
             override_reason=decision.override_reason,
@@ -2771,9 +3094,20 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         return tuple(demands)
 
     async def _execute_commands(self, commands: tuple[ChargerCommand, ...]) -> None:
-        """Execute each ChargerCommand through the observe-only choke point."""
-        for command in commands:
-            await self._execute_one_command(command)
+        """Execute each ChargerCommand through the observe-only choke point.
+
+        A failed service call means the charger may never have received the
+        command, so the controller's sent-command belief is forgotten before
+        re-raising -- the next tick re-asserts afresh instead of trusting a
+        belief the hardware never confirmed (worst case would otherwise be
+        the full 600s heartbeat with a stale dynamic limit).
+        """
+        try:
+            for command in commands:
+                await self._execute_one_command(command)
+        except Exception:
+            self._controller.reset_command_belief()
+            raise
 
     async def _execute_one_command(self, command: ChargerCommand) -> None:
         """Translate and send (or suppress) one ChargerCommand."""

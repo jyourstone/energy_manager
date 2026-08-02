@@ -370,6 +370,31 @@ def resolve_current_sensor_fallback(
     )
 
 
+def should_file_fallback_issue(
+    fallback_since: float | None,
+    now: float,
+    threshold_seconds: float,
+) -> bool:
+    """Decide whether a continuous sensor fallback warrants a Repairs issue.
+
+    The rate-limited log warning fires on the first failed read; the
+    Repairs issue is reserved for persistent outages, so it is only filed
+    once the fallback has been continuously active for threshold_seconds.
+
+    Args:
+        fallback_since: Monotonic timestamp (seconds) of the first read in
+            the current uninterrupted fallback streak, or None if the last
+            read succeeded.
+        now: Current monotonic timestamp in seconds.
+        threshold_seconds: Continuous-fallback duration required to file.
+
+    Returns:
+        True when the fallback has been active for at least
+        threshold_seconds.
+    """
+    return fallback_since is not None and now - fallback_since >= threshold_seconds
+
+
 def car_demands_priority_charging(cars: list[tuple[bool, bool]]) -> bool:
     """Return True if any car has an active charge slot AND is home+plugged.
 

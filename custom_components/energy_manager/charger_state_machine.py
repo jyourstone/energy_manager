@@ -142,6 +142,10 @@ class ChargerInputs:
         command_stuck_timeout_s: Seconds allowed for a plain start/resume or
             pause/stop command to show an observable effect before the
             stuck flag is raised.
+        limit_reassert_interval_s: Heartbeat interval for re-asserting an
+            unchanged dynamic limit -- belief-gated emission re-sends the
+            applied limit this often even without a value change, so a
+            limit the charger silently dropped is eventually re-written.
     """
 
     charger_status: str
@@ -175,6 +179,7 @@ class ChargerInputs:
     amp_decrease_delay_s: float = 5.0
     phase_sequence_step_timeout_s: float = 15.0
     command_stuck_timeout_s: float = 60.0
+    limit_reassert_interval_s: float = 600.0
 
 
 @dataclass(frozen=True)
@@ -558,6 +563,11 @@ class ChargerController:
         self._last_command_expect_active: bool | None = None
         self._last_command_at: datetime | None = None
         self._stuck: bool = False
+        # Belief about what was last actually emitted (Easee reconciler) --
+        # commands are re-sent on value change or heartbeat, never per tick.
+        self._last_sent_limit: float | None = None
+        self._last_limit_sent_at: datetime | None = None
+        self._last_start_sent_at: datetime | None = None
 
     @property
     def sequence_state(self) -> str:
@@ -585,7 +595,10 @@ class ChargerController:
             or inputs.charger_power_kw > POWER_ACTIVE_THRESHOLD_KW
         )
 
-        if inputs.charger_status in TERMINAL_STATUSES:
+        # Physics beats status: a terminal status while the car still draws
+        # power is a lying status entity -- keep supervising (fuse Layer 1
+        # stays reachable) and only reset once the draw actually stops.
+        if inputs.charger_status in TERMINAL_STATUSES and not is_drawing:
             self._reset_all()
             return ChargerDecision(
                 mode="idle",
@@ -599,6 +612,10 @@ class ChargerController:
             )
 
         self._resolve_command_tracking(is_drawing, now, inputs.command_stuck_timeout_s)
+        if is_drawing:
+            # A confirmed draw completes any start/resume attempt -- a later
+            # external stop may trigger a fresh start/resume immediately.
+            self._last_start_sent_at = None
 
         demanding = [c for c in inputs.cars if c.active_slot and c.home_and_plugged]
         present = [c for c in inputs.cars if c.home_and_plugged]
@@ -715,7 +732,9 @@ class ChargerController:
         # we are not going to charge regardless (capacity collapsed to 0 or
         # into the below-minimum dead zone).
         if raw <= 0.0:
-            commands_list: list[ChargerCommand] = [ChargerCommand("set_dynamic_limit", 0.0)]
+            commands_list: list[ChargerCommand] = []
+            if self._emit_limit(0.0, now, inputs.limit_reassert_interval_s):
+                commands_list.append(ChargerCommand("set_dynamic_limit", 0.0))
             notifications: tuple[str, ...] = ()
             if is_drawing:
                 commands_list.append(ChargerCommand("pause"))
@@ -794,12 +813,17 @@ class ChargerController:
         hysteresis_target = clamp_amps(hysteresis_target, inputs.min_amps, inputs.max_amps)
 
         commands_out: list[ChargerCommand] = []
-        if not is_drawing:
+        if not is_drawing and self._should_emit_start(now, inputs.command_stuck_timeout_s):
             action = "resume" if inputs.charger_status == PAUSED_STATUS else "start"
             commands_out.append(ChargerCommand(action))
             self._note_command_expectation(True, now)
-        if hysteresis_target != inputs.current_dynamic_limit_amps:
-            commands_out.append(ChargerCommand("set_dynamic_limit", hysteresis_target))
+        # Quantize to whole amps (floor) -- Easee's API takes integer amps,
+        # and comparing against our own last-sent belief (instead of the
+        # power-derived current_dynamic_limit_amps estimate) is what stops
+        # sub-amp jitter from re-sending the limit every tick.
+        quantized_target = float(math.floor(hysteresis_target))
+        if self._emit_limit(quantized_target, now, inputs.limit_reassert_interval_s):
+            commands_out.append(ChargerCommand("set_dynamic_limit", quantized_target))
 
         return ChargerDecision(
             mode=mode,
@@ -899,13 +923,17 @@ class ChargerController:
                     inputs.amp_decrease_delay_s,
                 )
                 final_target = clamp_amps(final_target, inputs.min_amps, inputs.max_amps)
+                final_quantized = float(math.floor(final_target))
+                # Always emitted (the switch choreography ends with a limit
+                # write) but recorded so the main path's belief stays true.
+                self._note_limit_sent(final_quantized, now)
                 self._sequence_state = "idle"
                 self._pending_phase_mode = None
                 return ChargerDecision(
                     mode=self._sequence_mode,
                     target_amps=final_target,
                     target_phase_mode=inputs.current_phase_mode,
-                    commands=(ChargerCommand("set_dynamic_limit", final_target),),
+                    commands=(ChargerCommand("set_dynamic_limit", final_quantized),),
                     notifications=(),
                     sequence_state="set_limit",
                     stuck=False,
@@ -973,6 +1001,59 @@ class ChargerController:
             override_reason=reason,
         )
 
+    # -- Belief-gated command emission (Easee reconciler) ----------------
+
+    def _emit_limit(self, target: float, now: datetime, reassert_interval_s: float) -> bool:
+        """Whether a set_dynamic_limit for target should be sent this tick.
+
+        target must already be quantized to whole amps. Emits when the
+        value differs from the last-sent belief (decreases included --
+        fuse-driven drops always go out immediately) or when the heartbeat
+        interval has elapsed since the last actual send.
+        """
+        if (
+            self._last_sent_limit is not None
+            and target == self._last_sent_limit
+            and self._last_limit_sent_at is not None
+            and (now - self._last_limit_sent_at).total_seconds() < reassert_interval_s
+        ):
+            return False
+        self._note_limit_sent(target, now)
+        return True
+
+    def _note_limit_sent(self, target: float, now: datetime) -> None:
+        """Record a set_dynamic_limit emission in the belief."""
+        self._last_sent_limit = target
+        self._last_limit_sent_at = now
+
+    def _should_emit_start(self, now: datetime, stuck_timeout_s: float) -> bool:
+        """Whether a start/resume should be (re-)sent this tick.
+
+        Sent once per attempt -- during ramp lag (not yet drawing) the
+        command is not repeated; only after command_stuck_timeout_s without
+        an observable effect is it re-issued. Kept separate from the
+        generic stuck tracker, which deliberately never resets its own
+        clock and therefore cannot pace retries.
+        """
+        if (
+            self._last_start_sent_at is not None
+            and (now - self._last_start_sent_at).total_seconds() < stuck_timeout_s
+        ):
+            return False
+        self._last_start_sent_at = now
+        return True
+
+    def reset_command_belief(self) -> None:
+        """Forget the sent-command belief -- next tick re-asserts afresh.
+
+        Called by the coordinator on the control_enabled OFF->ON edge:
+        commands "sent" while observe-only never reached the charger, so
+        cutover must start with a clean limit/start re-assert.
+        """
+        self._last_sent_limit = None
+        self._last_limit_sent_at = None
+        self._last_start_sent_at = None
+
     # -- Generic stuck-command tracking (outside phase-switch sequences) --
 
     def _note_command_expectation(self, expect_active: bool, now: datetime) -> None:
@@ -1014,3 +1095,4 @@ class ChargerController:
         self._last_command_expect_active = None
         self._last_command_at = None
         self._stuck = False
+        self.reset_command_belief()

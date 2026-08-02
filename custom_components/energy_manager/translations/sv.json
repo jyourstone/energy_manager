@@ -384,6 +384,9 @@
       },
       "solar_surplus": {
         "name": "Solbalans"
+      },
+      "forecast_accuracy": {
+        "name": "Solprognosens träffsäkerhet"
       }
     },
     "number": {
@@ -427,6 +430,20 @@
       "force_charging": {
         "name": "Tvinga laddning"
       }
+    }
+  },
+  "issues": {
+    "fuse_sensor_fallback": {
+      "title": "Säkringsskyddet använder reservläge",
+      "description": "Säkringsskyddet har saknat aktuella nätströmsvärden ({sensor}) i mer än 5 minuter och använder det konfigurerade reservbeteendet '{behavior}'. Kontrollera nätsensorerna eller uppdatera dem i Energy Managers EMS-inställningar."
+    },
+    "charge_limit_wrong_domain": {
+      "title": "Entiteten för laddningsgräns är ingen number-entitet",
+      "description": "Den konfigurerade entiteten för laddningsgräns {entity_id} tillhör inte domänen 'number', så laddningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers EMS-inställningar."
+    },
+    "discharge_limit_wrong_domain": {
+      "title": "Entiteten för urladdningsgräns är ingen number-entitet",
+      "description": "Den konfigurerade entiteten för urladdningsgräns {entity_id} tillhör inte domänen 'number', så urladdningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers EMS-inställningar."
     }
   }
 }

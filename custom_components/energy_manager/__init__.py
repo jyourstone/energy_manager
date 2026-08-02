@@ -13,13 +13,16 @@ import logging
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_BATTERY_ENABLED,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_EV_ENABLED,
     CONFIG_VERSION,
+    CONSUMPTION_STORAGE_VERSION,
     DOMAIN,
+    FORECAST_ACCURACY_STORAGE_VERSION,
     MODULE_BATTERY,
     MODULE_EV,
     SUBENTRY_TYPE_CAR,
@@ -32,7 +35,10 @@ from .coordinator import (
     EnergyManagerConfigEntry,
     EnergyManagerData,
     PriceCoordinator,
+    consumption_storage_key,
+    forecast_accuracy_storage_key,
 )
+from .repairs import ALL_ISSUE_IDS, async_clear_issue
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -191,6 +197,18 @@ async def async_unload_entry(
     Returns:
         True if unload was successful.
     """
+    # Repairs issues are re-detected every update cycle -- clear them all
+    # on unload so nothing stale survives a reload or reconfiguration.
+    for issue_id in ALL_ISSUE_IDS:
+        async_clear_issue(hass, issue_id)
+
+    # Flush the pending delayed consumption save so it cannot fire after
+    # async_remove_entry deletes the file, or after a reload's fresh
+    # coordinator has already loaded the store.
+    battery_coordinator = getattr(entry.runtime_data, "battery_coordinator", None)
+    if battery_coordinator is not None:
+        await battery_coordinator.async_flush_consumption_store()
+
     forwarded = getattr(entry.runtime_data, "forwarded_platforms", None)
     if forwarded is not None:
         platforms = [Platform(p) for p in forwarded]
@@ -199,6 +217,29 @@ async def async_unload_entry(
     if platforms:
         return await hass.config_entries.async_unload_platforms(entry, platforms)
     return True
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, entry: EnergyManagerConfigEntry
+) -> None:
+    """Delete this entry's persisted Store files when the entry is removed.
+
+    Keeps entry removal (e.g. HACS uninstall) from orphaning .storage
+    files. One (version, key) pair per Store the integration creates --
+    a future second Store is a one-line append here.
+
+    Args:
+        hass: Home Assistant instance.
+        entry: The config entry being removed.
+    """
+    for version, key in (
+        (CONSUMPTION_STORAGE_VERSION, consumption_storage_key(entry.entry_id)),
+        (
+            FORECAST_ACCURACY_STORAGE_VERSION,
+            forecast_accuracy_storage_key(entry.entry_id),
+        ),
+    ):
+        await Store(hass, version, key).async_remove()
 
 
 async def async_migrate_entry(

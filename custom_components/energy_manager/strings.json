@@ -384,6 +384,9 @@
       },
       "solar_surplus": {
         "name": "Solar Balance"
+      },
+      "forecast_accuracy": {
+        "name": "Solar Forecast Accuracy"
       }
     },
     "number": {
@@ -427,6 +430,20 @@
       "force_charging": {
         "name": "Force charging"
       }
+    }
+  },
+  "issues": {
+    "fuse_sensor_fallback": {
+      "title": "Fuse protection running on fallback",
+      "description": "Fuse protection has been running without live grid readings ({sensor}) for more than 5 minutes and is using the configured '{behavior}' fallback. Check the grid sensors, or update them in the Energy Manager EMS options."
+    },
+    "charge_limit_wrong_domain": {
+      "title": "Charge limit entity is not a number entity",
+      "description": "The configured charge limit entity {entity_id} is not in the 'number' domain, so charge limit commands are skipped. Select a writable number entity in the Energy Manager EMS options."
+    },
+    "discharge_limit_wrong_domain": {
+      "title": "Discharge limit entity is not a number entity",
+      "description": "The configured discharge limit entity {entity_id} is not in the 'number' domain, so discharge limit commands are skipped. Select a writable number entity in the Energy Manager EMS options."
     }
   }
 }
