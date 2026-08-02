@@ -24,6 +24,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from .battery_scheduler import compute_effective_discharge_threshold
 from .coordinator import (
     BatteryScheduleData,
     CarChargingData,
@@ -71,6 +72,7 @@ async def async_setup_entry(
             NextDischargeSensor(battery_coordinator, entry),
             ActualPriceSensor(battery_coordinator, price_coordinator, entry),
             ForecastAccuracySensor(battery_coordinator, entry),
+            EffectiveDischargeThresholdSensor(battery_coordinator, entry),
         ])
 
     # EMS status sensor (when EMS coordinator exists)
@@ -434,6 +436,63 @@ class ForecastAccuracySensor(EnergyManagerEntity, SensorEntity):
             "ratio_14d": round(ratio_14d, 3) if ratio_14d is not None else None,
             "valid_days": len(ratios),
             "history": serialize_history(history),
+        }
+
+
+class EffectiveDischargeThresholdSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for the discharge spread threshold actually in use.
+
+    State is the spread threshold the scheduler actually uses. When the
+    battery cycle cost is > 0 it is derived as
+    max(0, cycle_cost - grid_transfer_fee) and OVERRIDES the manual
+    threshold number entity; otherwise the manual value passes through
+    unchanged.
+    """
+
+    _attr_translation_key = "battery_effective_discharge_threshold"
+    _attr_icon = "mdi:battery-arrow-down-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = "SEK/kWh"
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the effective discharge threshold sensor.
+
+        Args:
+            coordinator: The BatteryScheduleCoordinator providing the
+                discharge_threshold, battery_cycle_cost, and
+                grid_transfer_fee attributes.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_battery_effective_discharge_threshold"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the discharge threshold actually in use by the scheduler."""
+        return compute_effective_discharge_threshold(
+            self.coordinator.discharge_threshold,
+            self.coordinator.battery_cycle_cost,
+            self.coordinator.grid_transfer_fee,
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return whether the threshold is manual or cycle-cost derived."""
+        source = (
+            "cycle_cost_derived"
+            if self.coordinator.battery_cycle_cost > 0
+            else "manual"
+        )
+        return {
+            "source": source,
+            "battery_cycle_cost": self.coordinator.battery_cycle_cost,
+            "grid_transfer_fee": self.coordinator.grid_transfer_fee,
+            "manual_threshold": self.coordinator.discharge_threshold,
         }
 
 

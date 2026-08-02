@@ -98,7 +98,13 @@ class TestExportTranslationKeys:
         / "custom_components"
         / "energy_manager"
     )
-    _ENTITY_KEYS = ("battery_export_spike_threshold", "battery_export_reserve_soc")
+    _ENTITY_KEYS = (
+        ("number", "battery_export_spread_threshold"),
+        ("number", "battery_export_reserve_soc"),
+        ("number", "battery_charge_spread_threshold"),
+        ("number", "battery_discharge_spread_threshold"),
+        ("sensor", "battery_effective_discharge_threshold"),
+    )
     _RETIRED_FORM_KEYS = ("export_spike_threshold", "export_reserve_soc_pct")
 
     @pytest.mark.parametrize(
@@ -106,14 +112,14 @@ class TestExportTranslationKeys:
         ["strings.json", "translations/en.json", "translations/sv.json"],
     )
     def test_export_entity_names_translated(self, filename: str) -> None:
-        """Both export number entities have a translated name."""
+        """The export/threshold entities have a translated name in each file."""
         content = json.loads(
             (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
         )
-        numbers = content["entity"]["number"]
-        for key in self._ENTITY_KEYS:
-            assert key in numbers, f"{key} missing in {filename} entity.number"
-            assert numbers[key].get("name"), f"{key} name empty in {filename}"
+        for domain, key in self._ENTITY_KEYS:
+            block = content["entity"][domain]
+            assert key in block, f"{key} missing in {filename} entity.{domain}"
+            assert block[key].get("name"), f"{key} name empty in {filename}"
 
     @pytest.mark.parametrize(
         "filename",
