@@ -14,6 +14,7 @@ The EMSCoordinator (Plan 03-02) will call compute_ems_state() and handle all I/O
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -28,7 +29,7 @@ class EMSDecision:
 
     Attributes:
         target_mode: EMS mode to set -- "command_charging",
-            "max_self_consumption", or "standby".
+            "command_discharging", "max_self_consumption", or "standby".
         charge_limit_kw: Safe charging limit in kW (fuse-limited).
             Only non-zero when target_mode is "command_charging".
         fuse_headroom_amps: Available fuse headroom in amps. Always >= 0.
@@ -167,7 +168,12 @@ def compute_ems_state(
 
     Args:
         target_ems_mode: Schedule-driven target mode from BatteryScheduleCoordinator.
-            One of "command_charging", "max_self_consumption", "standby", "idle".
+            One of "command_charging", "command_discharging",
+            "max_self_consumption", "standby", "idle". "command_discharging"
+            (BATT-17 export) passes through untouched with charge_limit_kw
+            forced to 0.0 like every other non-charging mode. Car priority
+            intentionally does not override export -- battery export offsets
+            car import at the meter, never adds fuse load.
         current_l_amps: Signed worst-case phase current in amps. Positive means
             import (load on the fuse); negative means export (adds headroom).
         fuse_rating_amps: Installed fuse rating in amps.
@@ -250,6 +256,58 @@ def compute_ems_state(
         fuse_headroom_amps=headroom,
         override_reason=None,
     )
+
+
+def compute_export_limit_kw(
+    fuse_rating_amps: float,
+    safety_buffer_amps: float,
+    battery_soc_pct: float,
+    export_reserve_soc_pct: float,
+    soc_available: bool,
+    max_limit_kw: float = 15.0,
+) -> float | None:
+    """Compute the fuse-capped discharge limit for a BATT-17 export slot.
+
+    The plant's own discharge limit (14.4 kW) exceeds the 13.8 kW ceiling of
+    a 20 A main fuse -- commanding export at the entity max would trip the
+    fuse, so this cap is mandatory: total battery output is bounded by
+    (fuse - buffer) x 3 phases x 230 V. House load is deliberately NOT
+    added on top: the battery exports balanced across phases while house
+    load may sit on a single phase, so a total-load add-back could push an
+    unloaded phase past its per-phase rating. Capping total output at the
+    per-phase-derived ceiling keeps every phase <= (fuse - buffer) amps
+    regardless of load distribution (at the cost of up to house-load kW of
+    export capacity).
+
+    Fail-safe rules:
+    - soc_available False, or a non-finite SOC value (NaN from a Modbus or
+      template glitch), returns None (export must not run) -- an unknown
+      SOC must never enable export; the coordinator's 50.0 default read
+      would otherwise sail past a 20% reserve floor.
+    - battery_soc_pct at or below export_reserve_soc_pct returns None --
+      the runtime reserve-floor stop, re-checked every cycle.
+
+    The SigenStor inverter's own backup/min-SOC (hardware floor) is a
+    documented README precondition, not checked here.
+
+    Args:
+        fuse_rating_amps: Installed main fuse rating in amps.
+        safety_buffer_amps: Amps reserved as safety margin on the fuse.
+        battery_soc_pct: Current battery state of charge (0-100).
+        export_reserve_soc_pct: Never export at or below this SOC.
+        soc_available: Whether the SOC sensor has a real value right now.
+        max_limit_kw: Hard ceiling on the returned limit (hardware max).
+
+    Returns:
+        The discharge limit in kW to command during export, or None when
+        export must not run.
+    """
+    if not soc_available or not math.isfinite(battery_soc_pct):
+        return None
+    if battery_soc_pct <= export_reserve_soc_pct:
+        return None
+    fuse_cap_kw = (fuse_rating_amps - safety_buffer_amps) * 3 * 0.230
+    return max(0.0, min(fuse_cap_kw, max_limit_kw))
 
 
 def clamp_amps(

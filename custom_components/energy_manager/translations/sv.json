@@ -132,13 +132,17 @@
           "battery_cycle_cost": "Batteriets cykelkostnad (per kWh)",
           "grid_transfer_fee": "Elnätets överföringsavgift (per kWh)",
           "electricity_company_fee": "Elbolagets påslag (per kWh)",
-          "max_charge_power": "Max laddeffekt för batteriet"
+          "max_charge_power": "Max laddeffekt för batteriet",
+          "export_spike_threshold": "Tröskel för exportpristopp (SEK/kWh)",
+          "export_reserve_soc_pct": "Reserv-SOC för export (%)"
         },
         "data_description": {
           "battery_cycle_cost": "Slitagekostnad per laddad kWh. Över 0 härleds urladdningströskeln automatiskt som cykelkostnad minus överföringsavgift.",
           "grid_transfer_fee": "Elnätsbolagets överföringsavgift som läggs på spotpriset.",
           "electricity_company_fee": "Elbolagets påslag som läggs på spotpriset.",
-          "max_charge_power": "Maximal effekt vid nätladdning av husbatteriet."
+          "max_charge_power": "Maximal effekt vid nätladdning av husbatteriet.",
+          "export_spike_threshold": "Spotpris vid eller över vilket batteriet får sälja till nätet. 0 inaktiverar exportarbitrage (standard).",
+          "export_reserve_soc_pct": "Exportera aldrig under denna batterinivå."
         }
       },
       "finish": {
@@ -242,7 +246,9 @@
           "charge_buffer_pct": "Laddningsbuffert (%)",
           "production_factor": "Solprognosfaktor",
           "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
-          "peak_gap_hours": "Gap mellan toppar (h)"
+          "peak_gap_hours": "Gap mellan toppar (h)",
+          "export_spike_threshold": "Tröskel för exportpristopp (SEK/kWh)",
+          "export_reserve_soc_pct": "Reserv-SOC för export (%)"
         },
         "data_description": {
           "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
@@ -252,7 +258,9 @@
           "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
           "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
           "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
-          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp."
+          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp.",
+          "export_spike_threshold": "Spotpris vid eller över vilket batteriet får sälja till nätet. 0 inaktiverar exportarbitrage (standard).",
+          "export_reserve_soc_pct": "Exportera aldrig under denna batterinivå."
         }
       },
       "ems": {
