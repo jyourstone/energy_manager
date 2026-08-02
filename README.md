@@ -133,7 +133,7 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Battery charge spread threshold | Spread (SEK/kWh): a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
 | Battery discharge spread threshold | Spread (SEK/kWh): a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by the Battery Cycle Cost formula below when that is set above 0 -- the entity shows as unavailable while overridden |
 | Battery max charging power | Maximum battery charge power (kW) |
-| Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `battery_cycle_cost - grid_transfer_fee`, overriding the manual Battery discharge spread threshold above (which shows as unavailable while overridden) (parity with the live system's economics formula). Default 0 (disabled) |
+| Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `max(0, battery_cycle_cost - grid_transfer_fee)` — clamped to 0 when the fee exceeds the cycle cost, in which case any spread above the horizon minimum qualifies — overriding the manual Battery discharge spread threshold above (which shows as unavailable while overridden) (parity with the live system's economics formula). Default 0 (disabled) |
 | Grid Transfer Fee | Grid transfer fee (SEK/kWh); feeds the Battery Cycle Cost formula and the Actual Electricity Price sensor |
 | Electricity Company Fee | Electricity company fee (SEK/kWh); used only by the Actual Electricity Price sensor |
 | Grid charging target *(per car)* | Target state of charge for scheduled price-based charging |
