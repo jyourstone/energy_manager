@@ -30,13 +30,22 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
        tomorrow's when a tomorrow forecast is available -- BATT-16) are
        relabeled "solar_charge" -- a cosmetic distinction only (EMS treats
        both the same way) communicating that the draw could be covered by PV.
-    6. Derive current action and EMS mode from the slot containing 'now'.
+    6. BATT-17 export arbitrage post-pass (opt-in, off by default): when an
+       export spike threshold is configured, qualifying spike slots are
+       relabeled "export" after optimization -- funded by a reserve-floored
+       energy budget and a unified merit order that may demote cheaper
+       discharge slots to idle.
+    7. Derive current action and EMS mode from the slot containing 'now'.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+
+# BATT-17: assumed battery round-trip efficiency for the export
+# replacement-cost check. Deliberately a constant, not config.
+DEFAULT_ROUNDTRIP_EFFICIENCY = 0.9
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -51,7 +60,8 @@ class ScheduleSlot:
         start: UTC-aware start time.
         end: UTC-aware end time.
         price: Electricity price in SEK/kWh.
-        action: One of "charge", "discharge", "idle", "solar_charge".
+        action: One of "charge", "discharge", "idle", "solar_charge",
+            "export".
     """
 
     start: datetime
@@ -81,6 +91,10 @@ class BatteryScheduleResult:
         reserved_energy_kwh: Energy earmarked for upcoming scheduled
             discharge slots (before the next charge slot), net of the solar
             energy expected to arrive before them (BATT-16).
+        export_slot_count: Number of remaining export slots (0 unless
+            BATT-17 export arbitrage is enabled).
+        next_export_slot: Next upcoming export slot relative to now, or
+            None (always None unless BATT-17 export arbitrage is enabled).
     """
 
     schedule: list[ScheduleSlot]
@@ -93,6 +107,8 @@ class BatteryScheduleResult:
     discharge_allowed: bool = True
     discharge_gate_reason: str = "scheduled_discharge"
     reserved_energy_kwh: float = 0.0
+    export_slot_count: int = 0
+    next_export_slot: ScheduleSlot | None = None
 
 
 @dataclass(frozen=True)
@@ -125,7 +141,7 @@ class _SlotInfo:
     start: datetime
     end: datetime
     price: float
-    action: str  # "charge", "discharge", "idle", "solar_charge"
+    action: str  # "charge", "discharge", "idle", "solar_charge", "export"
     duration_hours: float
 
 
@@ -154,6 +170,12 @@ def build_battery_schedule(
     peak_gap_hours: float = 2.0,
     min_soc_pct: float = 10.0,
     max_soc_pct: float = 95.0,
+    export_spike_threshold: float | None = None,
+    export_reserve_soc_pct: float = 20.0,
+    export_power_kw: float = 0.0,
+    grid_transfer_fee: float = 0.0,
+    electricity_company_fee: float = 0.0,
+    battery_cycle_cost: float = 0.0,
 ) -> BatteryScheduleResult:
     """Build a multi-cycle charge/discharge schedule.
 
@@ -199,6 +221,24 @@ def build_battery_schedule(
         peak_gap_hours: Hours gap to separate peak groups.
         min_soc_pct: Minimum SOC to maintain (0-100).
         max_soc_pct: Maximum SOC target (0-100).
+        export_spike_threshold: Spot price in SEK/kWh at or above which a
+            slot may become an export slot (BATT-17). None or <= 0 disables
+            export arbitrage entirely -- output is bit-identical to a build
+            without these kwargs.
+        export_reserve_soc_pct: SOC floor (0-100) below which export is
+            never scheduled -- the export energy budget only spends what
+            lies above this reserve.
+        export_power_kw: Estimated grid-injection power during an export
+            slot in kW, fuse-capped, excluding house load; computed by the
+            coordinator as (fuse - buffer) x 3 x 0.230.
+        grid_transfer_fee: Grid transfer fee in SEK/kWh, part of the
+            avoided-import value of a discharge slot and of the export
+            replacement-cost check.
+        electricity_company_fee: Electricity company fee in SEK/kWh, part
+            of the avoided-import value of a discharge slot and of the
+            export replacement-cost check.
+        battery_cycle_cost: Cost of one battery charge/discharge cycle in
+            SEK/kWh, added to the export replacement cost.
 
     Returns:
         BatteryScheduleResult with the complete schedule and derived state.
@@ -258,6 +298,23 @@ def build_battery_schedule(
         max_soc_pct=max_soc_pct,
     )
 
+    # Step 6b: BATT-17 export arbitrage (opt-in; no-op when disabled)
+    if export_spike_threshold is not None and export_spike_threshold > 0:
+        _mark_export_slots(
+            slots,
+            now=now,
+            export_spike_threshold=export_spike_threshold,
+            export_reserve_soc_pct=export_reserve_soc_pct,
+            export_power_kw=export_power_kw,
+            grid_transfer_fee=grid_transfer_fee,
+            electricity_company_fee=electricity_company_fee,
+            battery_cycle_cost=battery_cycle_cost,
+            mean_consumption_kw=mean_consumption_kw,
+            battery_capacity_kwh=battery_capacity_kwh,
+            current_soc_pct=current_soc_pct,
+            min_soc_pct=min_soc_pct,
+        )
+
     # Step 7: Build the final schedule
     schedule = [
         ScheduleSlot(
@@ -274,6 +331,7 @@ def build_battery_schedule(
     target_ems_mode = _action_to_ems_mode(current_action)
     next_charge = _find_next_slot(schedule, now, ("charge", "solar_charge"))
     next_discharge = _find_next_slot(schedule, now, ("discharge",))
+    next_export = _find_next_slot(schedule, now, ("export",))
 
     # Count only remaining slots (current slot included) so the counts match
     # the future-filtered schedule exposed on the sensor.
@@ -285,6 +343,7 @@ def build_battery_schedule(
     discharging_count = sum(
         1 for s in schedule if s.action == "discharge" and s.end > now
     )
+    export_count = sum(1 for s in schedule if s.action == "export" and s.end > now)
 
     gate = compute_discharge_gate(
         schedule=schedule,
@@ -295,6 +354,7 @@ def build_battery_schedule(
         mean_consumption_kw=mean_consumption_kw,
         min_soc_pct=min_soc_pct,
         solar_windows=solar_windows,
+        export_power_kw=export_power_kw,
     )
 
     return BatteryScheduleResult(
@@ -308,6 +368,8 @@ def build_battery_schedule(
         discharge_allowed=gate.allowed,
         discharge_gate_reason=gate.reason,
         reserved_energy_kwh=gate.reserved_energy_kwh,
+        export_slot_count=export_count,
+        next_export_slot=next_export,
     )
 
 
@@ -353,6 +415,7 @@ def compute_discharge_gate(
     mean_consumption_kw: float,
     min_soc_pct: float = 10.0,
     solar_windows: list[tuple[tuple[datetime, datetime], float]] | None = None,
+    export_power_kw: float = 0.0,
 ) -> DischargeGate:
     """Determine whether self-consumption discharge is currently allowed.
 
@@ -382,6 +445,10 @@ def compute_discharge_gate(
             arrive before each discharge slot (prefix-max over future
             discharge slots, BATT-16); None preserves the gross-reservation
             behavior exactly.
+        export_power_kw: Planned grid-injection power for BATT-17 export
+            slots (kW). Future export slots reserve at
+            (export_power_kw + mean_consumption_kw); 0.0 (the default)
+            still reserves an export slot's house-load share.
 
     Returns:
         DischargeGate describing whether discharge is currently allowed.
@@ -395,6 +462,11 @@ def compute_discharge_gate(
     if current_slot.action == "discharge":
         return DischargeGate(
             allowed=True, reason="scheduled_discharge", reserved_energy_kwh=0.0
+        )
+
+    if current_slot.action == "export":
+        return DischargeGate(
+            allowed=True, reason="export_slot", reserved_energy_kwh=0.0
         )
 
     if current_slot.action in ("charge", "solar_charge"):
@@ -416,9 +488,17 @@ def compute_discharge_gate(
             # A planned recharge resets the reservation -- discharging
             # before a refill is fine.
             break
-        if slot.action == "discharge":
+        # Future "export" slots reserve like discharge slots, at their full
+        # rate (export power + house load served by the battery). Without
+        # this, gate-open self-consumption on idle slots could spend the
+        # above-reserve-floor energy the export plan counted on, and the
+        # runtime SOC check would then cancel the sale (lost revenue).
+        if slot.action in ("discharge", "export"):
             duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
-            needed_energy_kwh += mean_consumption_kw * duration_hours
+            rate_kw = mean_consumption_kw
+            if slot.action == "export":
+                rate_kw += export_power_kw
+            needed_energy_kwh += rate_kw * duration_hours
             if solar_windows is None:
                 reserved_energy_kwh = needed_energy_kwh
             else:
@@ -883,6 +963,122 @@ def _optimize_schedule(
                 s.action = "solar_charge"
 
 
+def _mark_export_slots(
+    slots: list[_SlotInfo],
+    *,
+    now: datetime,
+    export_spike_threshold: float,
+    export_reserve_soc_pct: float,
+    export_power_kw: float,
+    grid_transfer_fee: float,
+    electricity_company_fee: float,
+    battery_cycle_cost: float,
+    mean_consumption_kw: float,
+    battery_capacity_kwh: float,
+    current_soc_pct: float,
+    min_soc_pct: float,
+) -> None:
+    """Mark qualifying spike slots as "export" (BATT-17 post-pass).
+
+    Unified merit order: a discharge slot's value per kWh is its spot
+    price plus fees (avoided import) while an export slot earns bare
+    spot, so export never demotes a discharge slot whose ``price + fees``
+    is >= the export candidate's bare spot price. The reserve-SOC floor
+    and the energy already scheduled for self-consumption discharge are
+    enforced via the energy budget: export only spends what remains above
+    both (a discharge slot's own house-need is released back when the
+    slot itself converts, and merit-order demotions release theirs).
+
+    A slot qualifies when its price is at or above the spike threshold
+    AND selling now beats buying the same energy back at the cheapest
+    future slot (replacement cost includes fees, round-trip losses and
+    cycle wear). A slot with no future slot in the horizon never
+    qualifies (SEM rule: cannot prove profitable -> hold). Only
+    "discharge"/"idle" slots are eligible; charge/solar_charge slots are
+    never converted. Mutates slots in place.
+    """
+    fees = grid_transfer_fee + electricity_company_fee
+
+    # Only slots that have not yet ended participate -- as candidates, as
+    # already-committed discharge energy, or as demotion fodder. A past
+    # spike must never consume the finite export budget or demote a real
+    # future discharge slot to fund energy that can no longer be sold
+    # (its energy is already reflected in current SOC).
+    candidates: list[_SlotInfo] = []
+    for s in slots:
+        if s.end <= now:
+            continue
+        if s.action not in ("discharge", "idle"):
+            continue
+        if s.price < export_spike_threshold:
+            continue
+        future_prices = [x.price for x in slots if x.start >= s.end]
+        if not future_prices:
+            continue
+        replacement_cost = (
+            min(future_prices) + fees
+        ) / DEFAULT_ROUNDTRIP_EFFICIENCY + battery_cycle_cost
+        if s.price > replacement_cost:
+            candidates.append(s)
+
+    if not candidates:
+        return
+
+    # Energy budget (conservative -- ignores scheduled charging on
+    # purpose, never over-exports).
+    min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
+    export_floor_kwh = max(
+        min_energy_kwh, (export_reserve_soc_pct / 100.0) * battery_capacity_kwh
+    )
+    usable_kwh = max(
+        0.0, (current_soc_pct / 100.0) * battery_capacity_kwh - export_floor_kwh
+    )
+    scheduled_discharge_kwh = sum(
+        mean_consumption_kw * s.duration_hours
+        for s in slots
+        if s.action == "discharge" and s.end > now
+    )
+    budget = max(0.0, usable_kwh - scheduled_discharge_kwh)
+
+    # Mark most-valuable-first.
+    candidates.sort(key=lambda s: s.price, reverse=True)
+    for c in candidates:
+        # Battery output during an export slot serves house load AND grid
+        # injection.
+        need = (export_power_kw + mean_consumption_kw) * c.duration_hours
+        # A discharge candidate's own house-need was already counted in
+        # scheduled_discharge_kwh -- converting it releases that energy.
+        own_release = (
+            mean_consumption_kw * c.duration_hours if c.action == "discharge" else 0.0
+        )
+        # Merit-order demotion pool: discharge slots strictly less valuable
+        # per kWh than this export candidate, cheapest value first.
+        demotable = sorted(
+            (
+                d
+                for d in slots
+                if d.action == "discharge"
+                and d.end > now
+                and d is not c
+                and d.price + fees < c.price
+            ),
+            key=lambda d: d.price,
+        )
+        demotable_kwh = sum(mean_consumption_kw * d.duration_hours for d in demotable)
+        if budget + own_release + demotable_kwh < need:
+            # Infeasible even after every merit-order demotion: leave the
+            # schedule untouched (no partial demotions, no budget change).
+            continue
+        budget += own_release
+        for d in demotable:
+            if budget >= need:
+                break
+            d.action = "idle"
+            budget += mean_consumption_kw * d.duration_hours
+        c.action = "export"
+        budget -= need
+
+
 def _find_current_action(schedule: list[ScheduleSlot], now: datetime) -> str:
     """Find the action for the slot containing 'now'.
 
@@ -949,7 +1145,9 @@ def _action_to_ems_mode(action: str) -> str:
     permission is governed by the discharge gate (see
     compute_discharge_gate), not by freezing the battery in "standby".
     "standby" is no longer produced by the scheduler -- it remains only
-    for the EMS car-priority override elsewhere.
+    for the EMS car-priority override elsewhere. "export" maps to
+    "command_discharging" (BATT-17): the EMS commands forced discharge at
+    the fuse-capped export limit.
 
     Args:
         action: Scheduler action string.
@@ -957,6 +1155,8 @@ def _action_to_ems_mode(action: str) -> str:
     Returns:
         EMS mode string for Phase 3 consumption.
     """
+    if action == "export":
+        return "command_discharging"
     if action in ("charge", "solar_charge"):
         return "command_charging"
     return "max_self_consumption"

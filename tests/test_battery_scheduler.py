@@ -62,6 +62,10 @@ def _discharge_slots(result: BatteryScheduleResult) -> list:
     return [s for s in result.schedule if s.action == "discharge"]
 
 
+def _export_slots(result: BatteryScheduleResult) -> list:
+    return [s for s in result.schedule if s.action == "export"]
+
+
 # ---------------------------------------------------------------------------
 # Common test parameters
 # ---------------------------------------------------------------------------
@@ -1567,3 +1571,417 @@ class TestTomorrowKwargsIdentity:
         )
 
         self._assert_identical(base, with_none_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Test 21: BATT-17 export arbitrage
+# ---------------------------------------------------------------------------
+
+# Standard export kwargs used across the BATT-17 tests. Fees total
+# 0.85 SEK/kWh (mirrors live prod), so with a 0.5 cheapest-future price the
+# replacement floor is (0.5 + 0.85) / 0.9 + 0.2 = 1.7 SEK/kWh.
+EXPORT_KWARGS = {
+    "export_spike_threshold": 3.0,
+    "export_reserve_soc_pct": 20.0,
+    "export_power_kw": 2.0,
+    "grid_transfer_fee": 0.5,
+    "electricity_company_fee": 0.35,
+    "battery_cycle_cost": 0.2,
+}
+
+
+def _spike_slots() -> list[dict]:
+    """0.5 floor with a single 5.0 spike at hour 4 (the spike discharges)."""
+    prices = [(h, 0.5) for h in range(8)]
+    prices[4] = (4, 5.0)
+    return _make_slots(prices)
+
+
+class TestExportQualification:
+    """BATT-17: which slots may become export slots at all."""
+
+    def test_below_threshold_never_exported(self):
+        """A spike below the configured threshold stays a discharge slot."""
+        result = _build(
+            _spike_slots(), **{**EXPORT_KWARGS, "export_spike_threshold": 6.0}
+        )
+
+        assert _export_slots(result) == []
+        assert result.export_slot_count == 0
+        assert result.schedule[4].action == "discharge"
+
+    def test_spike_above_threshold_with_passing_replacement_exported(self):
+        """Spike 5.0, future min 0.5, fees 0.85, cycle 0.2:
+        5.0 > (0.5 + 0.85) / 0.9 + 0.2 = 1.7 -> exported."""
+        result = _build(_spike_slots(), **EXPORT_KWARGS)
+
+        assert result.schedule[4].action == "export"
+        assert result.export_slot_count == 1
+
+    def test_spike_exactly_at_threshold_qualifies(self):
+        """The threshold is inclusive: price == threshold may export."""
+        result = _build(
+            _spike_slots(), **{**EXPORT_KWARGS, "export_spike_threshold": 5.0}
+        )
+
+        assert result.schedule[4].action == "export"
+
+    def test_failing_replacement_check_blocks_export(self):
+        """Spike 2.0 with future min 1.6: 2.0 < (1.6 + 0.85) / 0.9 + 0.2
+        = 2.92 -> selling now loses to buying back later, no export."""
+        prices = [(h, 0.7) for h in range(4)] + [(4, 2.0)] + [
+            (h, 1.6) for h in range(5, 8)
+        ]
+        result = _build(
+            _make_slots(prices), **{**EXPORT_KWARGS, "export_spike_threshold": 1.5}
+        )
+
+        assert _export_slots(result) == []
+        assert result.schedule[4].action == "discharge"
+
+    def test_last_slot_without_future_never_exported(self):
+        """No future slot -> cannot prove profitable -> hold (SEM rule)."""
+        prices = [(h, 0.5) for h in range(7)] + [(7, 5.0)]
+        result = _build(_make_slots(prices), **EXPORT_KWARGS)
+
+        assert _export_slots(result) == []
+        assert result.schedule[7].action == "discharge"
+
+    def test_charge_slots_never_converted(self):
+        """A charge slot whose price passes threshold and replacement is
+        still never converted -- only discharge/idle slots are eligible."""
+        # h0-1 cheap-ish (charge window), h2-3 spike, h4-7 very cheap tail.
+        prices = [(0, 0.5), (1, 0.5), (2, 3.0), (3, 3.0)] + [
+            (h, 0.1) for h in range(4, 8)
+        ]
+        result = _build(
+            _make_slots(prices),
+            current_soc_pct=10.0,
+            export_spike_threshold=0.4,
+            export_reserve_soc_pct=20.0,
+            export_power_kw=0.0,
+            grid_transfer_fee=0.0,
+            electricity_company_fee=0.0,
+            battery_cycle_cost=0.0,
+        )
+
+        # The charge slot at h0 (price 0.5 >= threshold 0.4, replacement
+        # floor 0.1 / 0.9 = 0.11) would qualify were it eligible.
+        assert result.schedule[0].action == "charge"
+        # The spike slots do export (own house-need release funds them).
+        assert result.schedule[2].action == "export"
+        assert result.schedule[3].action == "export"
+
+
+class TestExportBudget:
+    """BATT-17: reserve floor, scheduled-discharge protection, merit order."""
+
+    def test_soc_at_reserve_floor_zero_exports(self):
+        """SOC == reserve pct leaves zero export budget."""
+        result = _build(_spike_slots(), current_soc_pct=20.0, **EXPORT_KWARGS)
+
+        assert _export_slots(result) == []
+        assert result.export_slot_count == 0
+        assert result.schedule[4].action == "discharge"
+
+    def test_budget_covers_only_highest_priced_candidate(self):
+        """With budget for one slot, only the highest-priced candidate
+        exports; the next one stays a discharge slot.
+
+        SOC 60: usable above the 20% floor = 4.0 kWh, scheduled discharge
+        2.0 kWh -> budget 2.0 kWh. Each export needs (2.0 + 1.0) = 3.0 kWh,
+        releasing its own 1.0 kWh house-need. Fees are set to 1.2 so the
+        4.0 slot (4.0 + 1.2 = 5.2 >= 5.0) is not demotable by the 5.0 one.
+        """
+        prices = [(h, 0.5) for h in range(4)] + [(4, 5.0), (5, 4.0), (6, 0.5), (7, 0.5)]
+        result = _build(
+            _make_slots(prices),
+            current_soc_pct=60.0,
+            export_spike_threshold=3.0,
+            export_reserve_soc_pct=20.0,
+            export_power_kw=2.0,
+            grid_transfer_fee=0.7,
+            electricity_company_fee=0.5,
+            battery_cycle_cost=0.2,
+        )
+
+        assert result.schedule[4].action == "export"
+        assert result.schedule[5].action == "discharge"
+        assert result.export_slot_count == 1
+
+    def test_scheduled_discharge_protected_without_merit_demotion(self):
+        """Budget only covers the scheduled discharge needs and neither
+        discharge slot is demotable (price + fees >= export price):
+        nothing exports, self-consumption is never starved."""
+        prices = [(h, 0.5) for h in range(4)] + [
+            (4, 5.0),
+            (5, 4.9),
+            (6, 0.5),
+            (7, 0.5),
+        ]
+        result = _build(_make_slots(prices), current_soc_pct=40.0, **EXPORT_KWARGS)
+
+        assert _export_slots(result) == []
+        assert result.schedule[4].action == "discharge"
+        assert result.schedule[5].action == "discharge"
+
+    def test_merit_demotion_frees_budget_for_export(self):
+        """A discharge slot with price + fees (2.0 + 0.85 = 2.85) below the
+        export candidate's bare spot (5.0) is demoted to idle to fund the
+        export when the budget alone is insufficient."""
+        prices = [
+            (0, 0.5),
+            (1, 0.5),
+            (2, 2.0),
+            (3, 0.5),
+            (4, 5.0),
+            (5, 0.5),
+            (6, 0.5),
+            (7, 0.5),
+        ]
+        result = _build(_make_slots(prices), current_soc_pct=50.0, **EXPORT_KWARGS)
+
+        assert result.schedule[2].action == "idle"
+        assert result.schedule[4].action == "export"
+        assert result.export_slot_count == 1
+        assert result.discharging_slot_count == 0
+
+    def test_valuable_discharge_not_demoted_when_export_fires(self):
+        """A discharge slot with price + fees (4.5 + 0.85 = 5.35) >= the
+        export price (5.0) is never demoted, even while the export fires
+        from free budget."""
+        prices = [
+            (0, 0.5),
+            (1, 0.5),
+            (2, 4.5),
+            (3, 0.5),
+            (4, 5.0),
+            (5, 0.5),
+            (6, 0.5),
+            (7, 0.5),
+        ]
+        result = _build(_make_slots(prices), current_soc_pct=70.0, **EXPORT_KWARGS)
+
+        assert result.schedule[4].action == "export"
+        assert result.schedule[2].action == "discharge"
+        assert result.export_slot_count == 1
+
+    def test_infeasible_candidate_leaves_schedule_untouched(self):
+        """When budget + own release + all demotions still cannot fund the
+        export, the candidate is skipped entirely -- no partial demotion."""
+        prices = [
+            (0, 0.5),
+            (1, 0.5),
+            (2, 2.0),
+            (3, 0.5),
+            (4, 5.0),
+            (5, 0.5),
+            (6, 0.5),
+            (7, 0.5),
+        ]
+        # export_power_kw 3.0 -> need 4.0 kWh; budget 1.0 + own 1.0 +
+        # demotable 1.0 = 3.0 < 4.0 -> infeasible.
+        result = _build(
+            _make_slots(prices),
+            current_soc_pct=50.0,
+            **{**EXPORT_KWARGS, "export_power_kw": 3.0},
+        )
+
+        assert _export_slots(result) == []
+        assert result.schedule[2].action == "discharge"
+        assert result.schedule[4].action == "discharge"
+
+
+class TestExportPastSlots:
+    """BATT-17: already-elapsed slots never participate in the export pass.
+
+    A past spike must not steal the finite export budget, must not demote
+    future scheduled discharge slots to fund unsellable energy, and past
+    discharge slots (already reflected in current SOC) must not deflate
+    the budget. Regression tests for the adversarial-review scenarios.
+    """
+
+    _NOW_1400 = datetime(2026, 2, 15, 14, 0, 0, tzinfo=UTC)
+
+    def test_past_spike_does_not_steal_budget_from_future_spike(self):
+        """Past 08:00 spike 5.0 vs future 19:00 spike 4.5 at now=14:00:
+        only the future spike exports; the dead one stays untouched."""
+        prices = [(h, 0.5) for h in range(24)]
+        prices[8] = (8, 5.0)
+        prices[19] = (19, 4.5)
+        result = _build(
+            _make_slots(prices),
+            now=self._NOW_1400,
+            current_soc_pct=70.0,
+            **EXPORT_KWARGS,
+        )
+
+        actions = {s.start.hour: s.action for s in result.schedule}
+        assert actions[8] != "export"
+        assert actions[19] == "export"
+
+    def test_past_spike_never_demotes_future_discharge(self):
+        """A dead 08:00 spike must not demote the evening's scheduled
+        discharge slots to fund energy that can no longer be sold."""
+        prices = [(h, 0.5) for h in range(24)]
+        prices[8] = (8, 6.0)
+        prices[18] = (18, 2.5)
+        prices[20] = (20, 2.5)
+        result = _build(
+            _make_slots(prices),
+            now=self._NOW_1400,
+            current_soc_pct=40.0,
+            **EXPORT_KWARGS,
+        )
+
+        actions = {s.start.hour: s.action for s in result.schedule}
+        assert _export_slots(result) == []
+        assert actions[18] == "discharge"
+        assert actions[20] == "discharge"
+
+    def test_past_discharge_slots_do_not_deflate_budget(self):
+        """Past discharge energy is already reflected in current SOC --
+        counting it again would under-budget a real future export."""
+        prices = [(h, 0.5) for h in range(24)]
+        prices[8] = (8, 2.5)
+        prices[9] = (9, 2.5)
+        prices[10] = (10, 2.5)
+        prices[19] = (19, 5.0)
+        result = _build(
+            _make_slots(prices),
+            now=self._NOW_1400,
+            current_soc_pct=60.0,
+            **EXPORT_KWARGS,
+        )
+
+        actions = {s.start.hour: s.action for s in result.schedule}
+        assert actions[19] == "export"
+
+    def test_future_export_slot_reserves_energy_in_gate(self):
+        """CodeRabbit PR #7: a future export slot must reserve its energy
+        (export power + house load) in the discharge gate, or gate-open
+        self-consumption on idle slots could drain the energy the export
+        plan counted on before the sale fires."""
+        result = _build(_spike_slots(), **EXPORT_KWARGS)
+
+        assert result.schedule[4].action == "export"
+        # Gate scan runs from now (hour 0, idle): the hour-4 export slot
+        # reserves (2.0 export + 1.0 house) * 1h = 3.0 kWh.
+        assert result.reserved_energy_kwh >= 3.0
+
+    def test_next_export_slot_populated(self):
+        """next_export_slot points at the upcoming export slot."""
+        result = _build(_spike_slots(), **EXPORT_KWARGS)
+
+        assert result.next_export_slot is not None
+        assert result.next_export_slot.start.hour == 4
+        assert result.next_export_slot.action == "export"
+
+    def test_next_export_slot_none_when_disabled(self):
+        """Without export kwargs the field is always None."""
+        result = _build(_spike_slots())
+
+        assert result.next_export_slot is None
+
+
+class TestExportGate:
+    """BATT-17: an active export slot opens the gate and sets the mode."""
+
+    def test_export_slot_opens_gate_and_sets_mode(self):
+        now = datetime(2026, 2, 15, 4, 15, 0, tzinfo=UTC)
+        result = _build(_spike_slots(), now=now, **EXPORT_KWARGS)
+
+        assert result.current_action == "export"
+        assert result.target_ems_mode == "command_discharging"
+        assert result.discharge_allowed is True
+        assert result.discharge_gate_reason == "export_slot"
+        assert result.reserved_energy_kwh == 0.0
+        assert result.export_slot_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 22: BATT-17 disabled is bit-identical to a build without the kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestExportKwargsIdentity:
+    """Threshold unset (None) or 0 must not change any output at all."""
+
+    _NON_DEFAULT_EXPORT_EXTRAS: ClassVar[dict] = {
+        "export_reserve_soc_pct": 40.0,
+        "export_power_kw": 13.1,
+        "grid_transfer_fee": 0.5,
+        "electricity_company_fee": 0.35,
+        "battery_cycle_cost": 0.4,
+    }
+
+    _RICH_SCENARIO_COMMON: ClassVar[dict] = {
+        "current_soc_pct": 20.0,
+        "mean_consumption_kw": 1.0,
+        "estimated_charge_power_kw": 3.0,
+        "solar_forecast_remaining_wh": 8000.0,
+        "production_factor": 0.8,
+        "dawn": datetime(2026, 2, 15, 7, 0, tzinfo=UTC),
+        "dusk": datetime(2026, 2, 15, 15, 0, tzinfo=UTC),
+    }
+
+    @staticmethod
+    def _assert_identical(a: BatteryScheduleResult, b: BatteryScheduleResult):
+        assert a.schedule == b.schedule
+        assert a.charging_slot_count == b.charging_slot_count
+        assert a.discharging_slot_count == b.discharging_slot_count
+        assert a.next_charging_slot == b.next_charging_slot
+        assert a.next_discharging_slot == b.next_discharging_slot
+        assert a.current_action == b.current_action
+        assert a.target_ems_mode == b.target_ems_mode
+        assert a.discharge_allowed == b.discharge_allowed
+        assert a.discharge_gate_reason == b.discharge_gate_reason
+        assert a.reserved_energy_kwh == b.reserved_energy_kwh
+        assert a.export_slot_count == b.export_slot_count
+
+    def test_identity_with_threshold_none(self):
+        """Threshold None disables export even with every other export
+        kwarg set to an aggressive non-default value."""
+        prices = [0.20] * 12 + [2.50] * 4 + [0.90] * 8
+        slots = _make_24h_slots(prices)
+
+        base = _build(slots, **self._RICH_SCENARIO_COMMON)
+        with_export_kwargs = _build(
+            slots,
+            **self._RICH_SCENARIO_COMMON,
+            export_spike_threshold=None,
+            **self._NON_DEFAULT_EXPORT_EXTRAS,
+        )
+
+        self._assert_identical(base, with_export_kwargs)
+
+    def test_identity_with_threshold_zero(self):
+        """Threshold 0 (the stored 'off' value) is identical to unset."""
+        prices = [0.20] * 12 + [2.50] * 4 + [0.90] * 8
+        slots = _make_24h_slots(prices)
+
+        base = _build(slots, **self._RICH_SCENARIO_COMMON)
+        with_export_kwargs = _build(
+            slots,
+            **self._RICH_SCENARIO_COMMON,
+            export_spike_threshold=0.0,
+            **self._NON_DEFAULT_EXPORT_EXTRAS,
+        )
+
+        self._assert_identical(base, with_export_kwargs)
+
+
+class TestExportResultDefault:
+    """Regression guard: export_slot_count must stay a defaulted field."""
+
+    def test_result_without_export_kwargs_defaults_to_zero(self):
+        result = BatteryScheduleResult(
+            schedule=[],
+            charging_slot_count=0,
+            discharging_slot_count=0,
+            next_charging_slot=None,
+            next_discharging_slot=None,
+            current_action="idle",
+            target_ems_mode="max_self_consumption",
+        )
+        assert result.export_slot_count == 0

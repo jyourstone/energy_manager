@@ -132,13 +132,17 @@
           "battery_cycle_cost": "Battery cycle cost (per kWh)",
           "grid_transfer_fee": "Grid transfer fee (per kWh)",
           "electricity_company_fee": "Electricity company fee (per kWh)",
-          "max_charge_power": "Max battery charging power"
+          "max_charge_power": "Max battery charging power",
+          "export_spike_threshold": "Export spike threshold (per kWh)",
+          "export_reserve_soc_pct": "Export reserve SOC (%)"
         },
         "data_description": {
           "battery_cycle_cost": "Wear cost per charged kWh. When above 0, the discharge threshold is derived automatically as cycle cost minus grid transfer fee.",
           "grid_transfer_fee": "Your grid operator's transfer fee, added to the spot price.",
           "electricity_company_fee": "Your electricity supplier's markup, added to the spot price.",
-          "max_charge_power": "Maximum power used when grid-charging the home battery."
+          "max_charge_power": "Maximum power used when grid-charging the home battery.",
+          "export_spike_threshold": "Spot price at or above which the battery may sell to the grid. 0 disables export arbitrage (default).",
+          "export_reserve_soc_pct": "Never export below this battery level."
         }
       },
       "finish": {
@@ -242,7 +246,9 @@
           "charge_buffer_pct": "Charge buffer (%)",
           "production_factor": "Solar production factor",
           "estimated_charge_power_kw": "Estimated charge power (kW)",
-          "peak_gap_hours": "Peak grouping gap (h)"
+          "peak_gap_hours": "Peak grouping gap (h)",
+          "export_spike_threshold": "Export spike threshold (per kWh)",
+          "export_reserve_soc_pct": "Export reserve SOC (%)"
         },
         "data_description": {
           "soc_entity": "Sensor showing battery state of charge (%).",
@@ -252,7 +258,9 @@
           "charge_buffer_pct": "Extra percentage added on top of the calculated charge deficit before scheduling charge slots.",
           "production_factor": "Multiplier applied to the solar forecast reading to account for forecast optimism (1.0 = trust the forecast fully).",
           "estimated_charge_power_kw": "Assumed charging rate used to size how many slots are needed to cover a charge deficit (capped by the max charging power number entity).",
-          "peak_gap_hours": "Maximum gap between expensive hours to still treat them as the same discharge peak."
+          "peak_gap_hours": "Maximum gap between expensive hours to still treat them as the same discharge peak.",
+          "export_spike_threshold": "Spot price at or above which the battery may sell to the grid. 0 disables export arbitrage (default).",
+          "export_reserve_soc_pct": "Never export below this battery level."
         }
       },
       "ems": {

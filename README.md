@@ -147,6 +147,19 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 
 All number entities persist their value across Home Assistant restarts.
 
+## Battery → grid export arbitrage (BATT-17)
+
+Opt-in feature that sells battery energy to the grid during extreme price spikes. **Off by default**: with the *Export spike threshold* unset or 0, no export slot is ever scheduled and battery schedules are unchanged.
+
+- **Export spike threshold (SEK/kWh)** — spot price at or above which a slot may become an export slot. Set to 0 to disable (default). Configured in the setup wizard's economics step or later via **Configure** → battery options.
+- **Export reserve SOC (%)** — never export below this battery level (default 20%). Enforced twice: the scheduler's export energy budget only plans with energy above the floor, and at runtime the floor is re-checked every 30 s — export drops back to self-consumption at or below the floor, or whenever the battery SOC sensor is unavailable.
+- **Fuse-capped export power** — the discharge limit commanded during an export slot is capped at `(fuse rating − safety buffer) × 3 × 230 V`, without adding house load (house load can sit on a single phase, so the cap is derived per-phase-safe). The plant's own discharge limit is never commanded during export: a 20 A main fuse with the default 1 A safety buffer gives a ~13.1 kW ceiling.
+- **Qualification** — a slot only exports when the spot price is at or above the threshold AND selling now beats buying the same energy back later: `spot > (cheapest future spot + grid transfer fee + electricity company fee) / 0.9 + battery cycle cost` (0.9 = assumed round-trip efficiency). Export never demotes a scheduled self-consumption discharge slot worth more per kWh.
+- **Observe-only first** — like all device actuation, export commands sit behind the master *Device control* switch. Leave it off to watch the scheduled `export` slots and the `exporting` state across a few spike events before enabling.
+
+> [!IMPORTANT]
+> **Setup precondition:** the SigenStor inverter's own backup/minimum SOC must be configured at the plant level to at least Energy Manager's minimum SOC. This hardware floor is the last line of defense if Home Assistant goes down mid-export — it is documented here as a requirement and is **not** runtime-verified in v1.
+
 ## Repairs
 
 Persistent degraded conditions surface in **Settings → Repairs** instead of only the log: fuse-protection sensors continuously falling back to the assumed load (5+ minutes), and misconfigured charge/discharge limit entities (wrong domain). Issues clear automatically when the condition recovers.

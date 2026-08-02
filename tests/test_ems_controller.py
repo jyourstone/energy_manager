@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from custom_components.energy_manager.const import EMS_MODE_MAP
 from custom_components.energy_manager.ems_controller import (
     CommandDecision,
     EMSDecision,
@@ -26,6 +27,7 @@ from custom_components.energy_manager.ems_controller import (
     clamp_amps,
     compute_available_ess_amps,
     compute_ems_state,
+    compute_export_limit_kw,
     resolve_current_sensor_fallback,
     worst_case_signed_amps,
 )
@@ -839,3 +841,224 @@ class TestBuildCommandDecision:
             value="Standby",
         )
         assert decision.dry_run_message  # non-empty regardless
+
+
+# ---------------------------------------------------------------------------
+# BATT-17: Export arbitrage runtime limit + mode passthrough
+# ---------------------------------------------------------------------------
+
+
+class TestComputeExportLimitKw:
+    """Tests for the BATT-17 fuse-capped export discharge limit."""
+
+    @pytest.mark.parametrize(
+        ("fuse", "buffer"),
+        [(20, 1), (25, 2), (16, 1)],
+    )
+    def test_fuse_cap_never_exceeded(self, fuse, buffer):
+        """MANDATORY: result never exceeds (fuse-buffer)*3*0.230 -- the
+        per-phase-safe ceiling with NO house-load add-back (house load may
+        be single-phase, so a total-load add-back could overload an
+        unloaded phase) -- nor the 15.0 kW hardware ceiling."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=fuse,
+            safety_buffer_amps=buffer,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+        )
+        assert result is not None
+        assert result <= (fuse - buffer) * 3 * 0.230 + 1e-9
+        assert result <= 15.0
+
+    def test_default_fuse_gives_13_11_kw(self):
+        """20A fuse, 1A buffer: 13.11 kW -- below the 13.8 kW fuse ceiling,
+        so the plant's 14.4 kW limit is never reachable."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+        )
+        assert result == pytest.approx(13.11)
+
+    def test_soc_unavailable_returns_none(self):
+        """soc_available=False must never enable export, even with SOC 50."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=50.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=False,
+        )
+        assert result is None
+
+    @pytest.mark.parametrize("soc", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_soc_returns_none(self, soc):
+        """NaN/inf SOC (Modbus/template glitch) must never enable export --
+        'nan <= reserve' is False, so without this guard the reserve-floor
+        comparison silently passes."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=soc,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+        )
+        assert result is None
+
+    @pytest.mark.parametrize("soc", [20.0, 15.0])
+    def test_soc_at_or_below_reserve_returns_none(self, soc):
+        """SOC equal to or below the reserve floor blocks export."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=soc,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+        )
+        assert result is None
+
+    def test_soc_just_above_reserve_returns_limit(self):
+        """SOC just above the reserve floor allows export."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=20.1,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+        )
+        assert isinstance(result, float)
+        assert result == pytest.approx(13.11)
+
+    def test_concurrent_pv_shrinks_cap(self):
+        """Live PV shares the grid connection: 5 kW PV shrinks the 13.11 kW
+        cap to 8.11 kW so combined injection stays fuse-safe."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+            pv_power_kw=5.0,
+        )
+        assert result == pytest.approx(8.11)
+
+    def test_pv_exceeding_cap_clamps_to_zero(self):
+        """PV alone above the fuse cap leaves zero battery export."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+            pv_power_kw=14.0,
+        )
+        assert result == 0.0
+
+    def test_negative_pv_reading_ignored(self):
+        """A negative PV reading never inflates the cap."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=20.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+            pv_power_kw=-2.0,
+        )
+        assert result == pytest.approx(13.11)
+
+    def test_max_limit_kw_clamp_honored(self):
+        """A 63A fuse would allow 42.8 kW -- clamped to max_limit_kw."""
+        result = compute_export_limit_kw(
+            fuse_rating_amps=63.0,
+            safety_buffer_amps=1.0,
+            battery_soc_pct=80.0,
+            export_reserve_soc_pct=20.0,
+            soc_available=True,
+        )
+        assert result == 15.0
+
+
+class TestCommandDischargingPassthrough:
+    """BATT-17: command_discharging passes through compute_ems_state."""
+
+    def test_passthrough_with_zero_charge_limit(self):
+        """command_discharging passes through with charge_limit_kw forced 0.0."""
+        result = compute_ems_state(
+            target_ems_mode="command_discharging",
+            current_l_amps=5.0,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=8.0,
+            battery_soc_pct=80.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+        )
+        assert result.target_mode == "command_discharging"
+        assert result.charge_limit_kw == 0.0
+
+    def test_car_priority_does_not_override_export(self):
+        """Car priority never demotes export -- battery export offsets car
+        import at the meter, it never adds fuse load."""
+        result = compute_ems_state(
+            target_ems_mode="command_discharging",
+            current_l_amps=5.0,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=8.0,
+            battery_soc_pct=80.0,
+            car_scheduled=True,
+            car_plugged_in=True,
+            pv_power_w=0.0,
+            pv_hysteresis_active=False,
+        )
+        assert result.target_mode == "command_discharging"
+        assert result.override_reason is None
+
+
+class TestEmsModeMap:
+    """BATT-17: EMS_MODE_MAP carries the SigenStor export option string."""
+
+    def test_command_discharging_option_string(self):
+        """command_discharging maps to the exact SigenStor select option."""
+        assert (
+            EMS_MODE_MAP["command_discharging"]
+            == "Command Discharging (ESS First)"
+        )
+
+
+class TestExportCommandsGated:
+    """BATT-17: export hardware commands stay behind the CORE-14 gate.
+
+    Both commands the export path sends (the command_discharging mode
+    select and the fuse-capped discharge-limit number) route through
+    build_command_decision, so control_enabled=False suppresses them.
+    """
+
+    @pytest.mark.parametrize(
+        ("domain", "service", "entity_id", "value"),
+        [
+            (
+                "select",
+                "select_option",
+                "select.ems_mode",
+                "Command Discharging (ESS First)",
+            ),
+            ("number", "set_value", "number.discharge_limit", 13.11),
+        ],
+    )
+    def test_control_disabled_suppresses_export_commands(
+        self, domain, service, entity_id, value
+    ):
+        """Device control off must suppress every export command shape."""
+        decision = build_command_decision(
+            control_enabled=False,
+            service_domain=domain,
+            service_name=service,
+            entity_id=entity_id,
+            value=value,
+        )
+        assert decision.should_send is False
+        assert decision.dry_run_message.startswith("[dry-run]")

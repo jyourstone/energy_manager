@@ -140,6 +140,11 @@ CONF_GRID_TRANSFER_FEE = "grid_transfer_fee"
 CONF_ELECTRICITY_COMPANY_FEE = "electricity_company_fee"
 CONF_MAX_CHARGE_POWER = "max_charge_power"
 
+# --- BATT-17 export arbitrage (opt-in; threshold unset/0 = feature off) ---
+CONF_EXPORT_SPIKE_THRESHOLD = "export_spike_threshold"
+CONF_EXPORT_RESERVE_SOC_PCT = "export_reserve_soc_pct"
+DEFAULT_EXPORT_RESERVE_SOC_PCT = 20.0
+
 # --- EMS Controller configuration ---
 
 CONF_FUSE_RATING_AMPS = "fuse_rating_amps"
@@ -200,6 +205,7 @@ EMS_UPDATE_INTERVAL_SECONDS = 30
 # EMS mode mapping: internal mode -> SigenStor select option string
 EMS_MODE_MAP = {
     "command_charging": "Command Charging (PV First)",
+    "command_discharging": "Command Discharging (ESS First)",
     "max_self_consumption": "Maximum Self Consumption",
     "standby": "Standby",
 }

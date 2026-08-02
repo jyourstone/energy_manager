@@ -156,8 +156,8 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
     """Sensor showing current battery schedule state.
 
     State is the current battery mode: idle, grid_charging, discharging,
-    or solar_charging. Attributes expose the full schedule (max 48 slots),
-    slot counts, target EMS mode, and calculation metadata.
+    solar_charging, or exporting. Attributes expose the full schedule
+    (max 48 slots), slot counts, target EMS mode, and calculation metadata.
     """
 
     _attr_translation_key = "battery_schedule"
@@ -216,6 +216,8 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
             "schedule": schedule_list,
             "charging_slots": data.charging_slot_count,
             "discharging_slots": data.discharging_slot_count,
+            "export_slots": data.export_slot_count,
+            "next_export_slot": data.next_export_slot,
             "target_ems_mode": data.target_ems_mode,
             "last_calculated": data.last_calculated.isoformat(),
             "solar_forecast_used": data.solar_forecast_used,
@@ -473,8 +475,9 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
         """Return EMS control attributes.
 
         Exposes target mode, charge limit, fuse headroom, override reason,
-        command verification status, active override flags, and observe-only
-        (dry-run) status with the last suppressed command (CORE-14).
+        command verification status, active override flags, observe-only
+        (dry-run) status with the last suppressed command (CORE-14), and
+        the fuse-capped export limit while an export slot is active (BATT-17).
         """
         data: EMSData | None = self.coordinator.data
         if data is None:
@@ -491,6 +494,9 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
             "last_suppressed_command": data.last_suppressed_command,
             "discharge_allowed": data.discharge_allowed,
             "discharge_gate_reason": data.discharge_gate_reason,
+            "export_limit_kw": round(data.export_limit_kw, 2)
+            if data.export_limit_kw is not None
+            else None,
         }
 
 

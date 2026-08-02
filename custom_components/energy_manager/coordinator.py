@@ -23,6 +23,7 @@ departure time, and battery capacity.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
@@ -77,6 +78,8 @@ from .const import (
     CONF_ESS_INCREASE_DELAY,
     CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EXCLUDED_POWER_ENTITIES,
+    CONF_EXPORT_RESERVE_SOC_PCT,
+    CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
     CONF_FUSE_SAFETY_BUFFER_AMPS,
@@ -124,6 +127,7 @@ from .const import (
     DEFAULT_EMERGENCY_MARGIN_AMPS,
     DEFAULT_ESS_INCREASE_DELAY_SECONDS,
     DEFAULT_ESTIMATED_CHARGE_POWER_KW,
+    DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_FUSE_RATING_AMPS,
     DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
     DEFAULT_GRID_TRANSFER_FEE,
@@ -170,6 +174,7 @@ from .ems_controller import (
     car_demands_priority_charging,
     compute_available_ess_amps,
     compute_ems_state,
+    compute_export_limit_kw,
     resolve_current_sensor_fallback,
     should_file_fallback_issue,
     worst_case_signed_amps,
@@ -390,6 +395,10 @@ class BatteryScheduleData:
             (auto-derived Forecast.Solar tomorrow sensors, BATT-16) was
             incorporated. solar_forecast_used keeps its exact BATT-13
             remaining-today meaning.
+        export_slot_count: Number of remaining export slots (0 unless
+            BATT-17 export arbitrage is enabled).
+        next_export_slot: Serialized next export slot dict, or None
+            (always None unless BATT-17 export arbitrage is enabled).
     """
 
     current_state: str
@@ -407,6 +416,8 @@ class BatteryScheduleData:
     discharge_gate_reason: str = ""
     reserved_energy_kwh: float = 0.0
     solar_forecast_tomorrow_used: bool = False
+    export_slot_count: int = 0
+    next_export_slot: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,6 +442,9 @@ class EMSData:
             discharge.
         discharge_gate_reason: Human-readable reason discharge is blocked,
             or "" when discharge is allowed.
+        export_limit_kw: Fuse-capped export discharge limit in kW while an
+            export slot is active and the reserve-SOC floor is clear; None
+            otherwise.
     """
 
     current_mode: str
@@ -446,6 +460,7 @@ class EMSData:
     last_suppressed_command: str | None
     discharge_allowed: bool = True
     discharge_gate_reason: str = ""
+    export_limit_kw: float | None = None
 
 
 class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
@@ -634,6 +649,37 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
         )
 
+        # 5b. BATT-17 export arbitrage inputs -- threshold missing/None/0
+        #     all mean the feature is OFF (scheduler output bit-identical)
+        export_spike_threshold = self.config_entry.options.get(
+            CONF_EXPORT_SPIKE_THRESHOLD
+        )
+        export_spike_threshold = (
+            float(export_spike_threshold) if export_spike_threshold else None
+        )  # missing/None/0 all mean OFF
+        export_reserve_soc_pct = float(
+            self.config_entry.options.get(
+                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
+            )
+        )
+        fuse_rating_amps = float(
+            self.config_entry.options.get(
+                CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
+            )
+        )
+        fuse_safety_buffer_amps = float(
+            self.config_entry.options.get(
+                CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
+            )
+        )
+        # Planning-time grid-injection power (kW): the per-phase-safe fuse
+        # cap, matching compute_export_limit_kw (no house-load add-back --
+        # house load can be single-phase, so adding total load could push
+        # an unloaded phase past its rating)
+        export_power_kw = max(
+            0.0, (fuse_rating_amps - fuse_safety_buffer_amps) * 3 * 0.230
+        )
+
         # 6. Sample house consumption into the rolling average (BATT-15)
         mean_consumption_kw = self._sample_and_get_mean_consumption_kw()
         consumption_sample_count = len(self._consumption_samples)
@@ -696,17 +742,25 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             peak_gap_hours=peak_gap_hours,
             min_soc_pct=DEFAULT_MIN_SOC_PCT,
             max_soc_pct=DEFAULT_MAX_SOC_PCT,
+            export_spike_threshold=export_spike_threshold,
+            export_reserve_soc_pct=export_reserve_soc_pct,
+            export_power_kw=export_power_kw,
+            grid_transfer_fee=self.grid_transfer_fee,
+            electricity_company_fee=self.electricity_company_fee,
+            battery_cycle_cost=self.battery_cycle_cost,
         )
 
         # 10. Serialize next slots to dicts
         next_charging = _serialize_slot(result.next_charging_slot)
         next_discharging = _serialize_slot(result.next_discharging_slot)
+        next_export = _serialize_slot(result.next_export_slot)
 
         # 11. Map current_action to current_state
         state_map = {
             "charge": "grid_charging",
             "solar_charge": "solar_charging",
             "discharge": "discharging",
+            "export": "exporting",
             "idle": "idle",
         }
         current_state = state_map.get(result.current_action, result.current_action)
@@ -728,6 +782,8 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             discharge_gate_reason=result.discharge_gate_reason,
             reserved_energy_kwh=result.reserved_energy_kwh,
             solar_forecast_tomorrow_used=solar_forecast_tomorrow_wh is not None,
+            export_slot_count=result.export_slot_count,
+            next_export_slot=next_export,
         )
 
     def _read_soc(self) -> float:
@@ -1536,6 +1592,18 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._charger_status_entity: str = entry.options.get(
             CONF_CHARGER_STATUS_ENTITY, ""
         )
+        # BATT-17 export: runtime fuse-cap inputs and reserve-SOC floor
+        self._house_consumption_entity: str = entry.options.get(
+            CONF_HOUSE_CONSUMPTION_ENTITY, ""
+        )
+        self._excluded_power_entities: list[str] = (
+            entry.options.get(CONF_EXCLUDED_POWER_ENTITIES, []) or []
+        )
+        self._export_reserve_soc_pct: float = float(
+            entry.options.get(
+                CONF_EXPORT_RESERVE_SOC_PCT, DEFAULT_EXPORT_RESERVE_SOC_PCT
+            )
+        )
 
         # Shared fuse arbiter (Phase 5): identical grid-sensor read/fallback
         # logic reused by EaseeCoordinator -- see FuseSensorReader.
@@ -1692,10 +1760,35 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             raw_ess_ceiling, dt_util.utcnow()
         )
 
+        # 5b. BATT-17 export: resolve the runtime export limit; demote the mode
+        # when the reserve-SOC floor (or SOC availability) blocks export. The
+        # fuse-capped limit is recomputed and re-asserted every cycle
+        # (declarative -- no stranded intent across restarts).
+        export_limit_kw: float | None = None
+        target_ems_mode = schedule_data.target_ems_mode
+        if target_ems_mode == "command_discharging":
+            if not self._discharge_limit_entity:
+                # Without the discharge-limit number the fuse cap cannot be
+                # enforced -- the plant's own limit (14.4 kW) exceeds a 20 A
+                # fuse's ceiling, so export must never be commanded.
+                target_ems_mode = "max_self_consumption"
+            else:
+                export_limit_kw = compute_export_limit_kw(
+                    fuse_rating_amps=self._fuse_rating_amps,
+                    safety_buffer_amps=self._safety_buffer_amps,
+                    battery_soc_pct=battery_soc,
+                    export_reserve_soc_pct=self._export_reserve_soc_pct,
+                    soc_available=self._soc_strictly_available(),
+                    pv_power_kw=pv_power_w / 1000.0,
+                    max_limit_kw=MAX_CHARGE_LIMIT_KW,
+                )
+                if export_limit_kw is None:
+                    target_ems_mode = "max_self_consumption"
+
         # 6. Call pure module for calculations
         max_charge_power_kw = DEFAULT_MAX_CHARGE_POWER_KW
         result = compute_ems_state(
-            target_ems_mode=schedule_data.target_ems_mode,
+            target_ems_mode=target_ems_mode,
             current_l_amps=l_current,
             fuse_rating_amps=self._fuse_rating_amps,
             max_charge_power_kw=max_charge_power_kw,
@@ -1714,6 +1807,28 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         mode_changed = result.target_mode != self._last_sent_mode
         limit_changed = result.charge_limit_kw != self._last_charge_limit
 
+        # Target for the SigenStor discharge-limit number entity, computed
+        # up front so the export branch in step 8 can send it BEFORE the
+        # mode. BATT-17 export limit (fuse-capped) takes precedence;
+        # otherwise mirror the scheduler's discharge_allowed decision.
+        target_discharge_limit: float | None = None
+        if self._discharge_limit_entity:
+            if export_limit_kw is not None:
+                target_discharge_limit = export_limit_kw
+            elif schedule_data.discharge_allowed:
+                limit_state = self.hass.states.get(self._discharge_limit_entity)
+                entity_max = (
+                    limit_state.attributes.get("max") if limit_state else None
+                )
+                try:
+                    target_discharge_limit = min(
+                        float(entity_max), MAX_CHARGE_LIMIT_KW
+                    )
+                except (TypeError, ValueError):
+                    target_discharge_limit = MAX_CHARGE_LIMIT_KW
+            else:
+                target_discharge_limit = 0.0
+
         # 8. Safe command ordering (Research Pitfall 3)
         mode_sent = False
         limit_sent = False
@@ -1724,33 +1839,88 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     limit_sent = await self._send_charge_limit(result.charge_limit_kw)
                 if mode_changed:
                     mode_sent = await self._send_ems_mode(result.target_mode)
+            elif result.target_mode == "command_discharging":
+                # Entering export: the fuse-capped discharge limit must be
+                # CONFIRMED on the plant before the mode is commanded --
+                # never run command_discharging at a stale (entity-max)
+                # limit above the fuse ceiling. A failed/suppressed limit
+                # send therefore also skips the mode send; both retry next
+                # cycle (declarative re-assert).
+                if (
+                    target_discharge_limit is not None
+                    and target_discharge_limit != self._last_sent_discharge_limit
+                    and await self._send_discharge_limit(target_discharge_limit)
+                ):
+                    self._last_sent_discharge_limit = target_discharge_limit
+                if (
+                    mode_changed
+                    and target_discharge_limit is not None
+                    and self._last_sent_discharge_limit == target_discharge_limit
+                    and self._discharge_limit_reads_at_most(target_discharge_limit)
+                ):
+                    mode_sent = await self._send_ems_mode(result.target_mode)
+                if limit_changed:
+                    limit_sent = await self._send_charge_limit(result.charge_limit_kw)
             else:
                 # Switching FROM command_charging (or between non-charge modes):
-                # send mode FIRST, then zero limit
+                # send mode FIRST, then zero limit. Leaving export restores
+                # safely too: the mode drops to max_self_consumption here
+                # before 8b raises the limit back to entity max.
                 if mode_changed:
                     mode_sent = await self._send_ems_mode(result.target_mode)
                 if limit_changed:
                     limit_sent = await self._send_charge_limit(result.charge_limit_kw)
 
-        # 8b. Discharge limit gate: mirror the scheduler's discharge_allowed
-        # decision onto the SigenStor discharge-limit number entity, using
-        # the same dedup convention as the charge limit (only advance dedup
-        # state when actually sent).
-        if self._discharge_limit_entity:
-            if schedule_data.discharge_allowed:
-                limit_state = self.hass.states.get(self._discharge_limit_entity)
-                entity_max = (
-                    limit_state.attributes.get("max") if limit_state else None
-                )
-                target_discharge_limit = (
-                    min(float(entity_max), MAX_CHARGE_LIMIT_KW)
-                    if entity_max is not None
-                    else MAX_CHARGE_LIMIT_KW
+        # 8b. Discharge limit dedup send: mirror the scheduler's
+        # discharge_allowed decision (or the BATT-17 export limit, computed
+        # above step 8) onto the SigenStor discharge-limit number entity,
+        # using the same dedup convention as the charge limit (only advance
+        # dedup state when actually sent). Also re-asserts export-limit
+        # drift while the mode is unchanged.
+        if (
+            self._discharge_limit_entity
+            and target_discharge_limit is not None
+            and target_discharge_limit != self._last_sent_discharge_limit
+        ):
+            if self._last_sent_discharge_limit is not None:
+                raising = (
+                    target_discharge_limit > self._last_sent_discharge_limit
                 )
             else:
-                target_discharge_limit = 0.0
-
-            if target_discharge_limit != self._last_sent_discharge_limit:
+                # Restart with an unknown send baseline (Greptile PR #7
+                # round 3): compare against the entity's LIVE state so a
+                # restart while the plant sits in Command Discharging
+                # cannot bypass the raise-guard below. An unreadable state
+                # counts as raising (conservative); a lower target (e.g.
+                # the 0.0 gate-closed clamp) still sends immediately.
+                live_limit = self._read_discharge_limit_state()
+                raising = (
+                    live_limit is None or target_discharge_limit > live_limit
+                )
+            if (
+                raising
+                and result.target_mode != "command_discharging"
+                and (
+                    self._last_sent_mode == "command_discharging"
+                    or self._plant_mode_is_command_discharging()
+                )
+            ):
+                # While we are INTENTIONALLY in an export slot the target
+                # is the fuse-safe cap itself, so raises to it are fine
+                # (e.g. the PV term shrinking as clouds arrive) -- the
+                # guard only holds raises during an unconfirmed EXIT.
+                # Export-mode exit not yet confirmed: either the mode send
+                # failed/was suppressed, or it succeeded but the inverter's
+                # select entity still READS Command Discharging (Modbus
+                # apply latency -- Greptile PR #7). Never raise the limit
+                # toward entity max while the plant may still be
+                # discharging. Retries next cycle.
+                _LOGGER.debug(
+                    "Holding discharge limit at %.1f kW until export-mode "
+                    "exit is confirmed",
+                    self._last_sent_discharge_limit,
+                )
+            else:
                 discharge_sent = await self._send_discharge_limit(
                     target_discharge_limit
                 )
@@ -1794,6 +1964,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             last_suppressed_command=self._last_suppressed_command,
             discharge_allowed=schedule_data.discharge_allowed,
             discharge_gate_reason=schedule_data.discharge_gate_reason,
+            export_limit_kw=export_limit_kw,
         )
 
     def _is_control_enabled(self) -> bool:
@@ -1803,6 +1974,66 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         _read_control_enabled() (shared with EaseeCoordinator).
         """
         return _read_control_enabled(self.config_entry)
+
+    def _read_discharge_limit_state(self) -> float | None:
+        """The discharge-limit entity's live state in kW, or None."""
+        state = self.hass.states.get(self._discharge_limit_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
+    def _discharge_limit_reads_at_most(self, limit_kw: float) -> bool:
+        """True when the discharge-limit entity's LIVE state is <= limit_kw.
+
+        Entry-side symmetry to the 8b raise-guard (Greptile PR #7 round
+        2): a successful number.set_value call can precede the inverter
+        actually applying the value, and commanding Command Discharging in
+        that window would run at the previous (possibly entity-max) limit
+        above the fuse ceiling. Unknown/non-numeric states return False --
+        hold the mode, retry next cycle (costs at most one 30s tick of
+        sale time).
+        """
+        live = self._read_discharge_limit_state()
+        return live is not None and live <= limit_kw + 0.001
+
+    def _plant_mode_is_command_discharging(self) -> bool:
+        """True when the EMS select entity currently READS a discharging mode.
+
+        The raise-guard in step 8b must not trust _last_sent_mode alone: a
+        successful select_option service call can precede the inverter
+        actually applying the mode (Modbus latency), and raising the
+        discharge limit in that window would briefly allow uncapped export.
+        Unknown/unavailable states return False (the normal non-export
+        state; the guard's other arm covers failed sends).
+        """
+        if not self._ems_select_entity:
+            return False
+        state = self.hass.states.get(self._ems_select_entity)
+        if state is None:
+            return False
+        return state.state == EMS_MODE_MAP.get("command_discharging")
+
+    def _soc_strictly_available(self) -> bool:
+        """True only when the SOC entity's state parses to a finite number.
+
+        Stricter than _entity_has_value on purpose (BATT-17): a state of
+        "nan" parses but defeats the reserve-floor comparison, and a
+        non-numeric string would otherwise fall through to the 50.0
+        default read -- either way export could run with the true SOC
+        unknown. Export must never do that.
+        """
+        if not self._soc_entity:
+            return False
+        state = self.hass.states.get(self._soc_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return False
+        try:
+            return math.isfinite(float(state.state))
+        except (TypeError, ValueError):
+            return False
 
     def _read_float_state(self, entity_id: str, default: float) -> float:
         """Read a sensor state and return as float, with safe fallback.
