@@ -26,20 +26,9 @@ from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryFlow,
+    OptionsFlow,
     SubentryFlowResult,
 )
-
-try:
-    from homeassistant.config_entries import OptionsFlowWithReload
-
-    _LEGACY_OPTIONS_FLOW = False
-except ImportError:
-    from homeassistant.config_entries import (
-        OptionsFlowWithConfigEntry as OptionsFlowWithReload,
-    )
-
-    _LEGACY_OPTIONS_FLOW = True
-
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
@@ -245,8 +234,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         config_entry: ConfigEntry,
     ) -> EnergyManagerOptionsFlow:
         """Get the options flow for this handler."""
-        if _LEGACY_OPTIONS_FLOW:
-            return EnergyManagerOptionsFlow(config_entry)
         return EnergyManagerOptionsFlow()
 
     @classmethod
@@ -1068,7 +1055,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class EnergyManagerOptionsFlow(OptionsFlowWithReload):
+class EnergyManagerOptionsFlow(OptionsFlow):
     """Options flow mirroring the config flow's step structure.
 
     Steps: init (price source) -> modules -> battery -> ems -> ev, matching
@@ -1081,14 +1068,12 @@ class EnergyManagerOptionsFlow(OptionsFlowWithReload):
     entity fields) cleared. Auto-detection only fills fields that are
     currently empty -- it never overrides an existing choice.
 
-    Note on reload: on modern HA, OptionsFlowWithReload reloads the entry
-    once this flow finishes. The manual update listener registered in
-    __init__.py must stay in place regardless -- it is what reloads the
-    entry when a car subentry is added/edited/removed, which does not go
-    through this options flow. As a result, saving options may trigger a
-    second, harmless reload (coordinators are simply recreated). This is
-    preferred over adding a dedupe flag, which would add cross-module
-    shared state for a purely cosmetic, non-hot-path concern.
+    Note on reload: deliberately plain OptionsFlow, NOT
+    OptionsFlowWithReload. The update listener registered in __init__.py
+    is the single reload mechanism -- it fires on options saves AND on car
+    subentry changes (which never pass through this flow). HA raises
+    ValueError at flow finish when OptionsFlowWithReload is combined with
+    an update listener, so the two must never be mixed again.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
