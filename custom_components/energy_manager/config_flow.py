@@ -153,6 +153,7 @@ from .const import (
     MAX_MIN_CHARGE_AMPS,
     MAX_PEAK_GAP_HOURS,
     MAX_PHASE_SWITCH_THRESHOLD_KW,
+    MAX_EXPORT_SPIKE_THRESHOLD,
     MAX_PRICE_THRESHOLD,
     MAX_PRODUCTION_FACTOR,
     MAX_SAFETY_BUFFER_AMPS,
@@ -877,7 +878,10 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_EXPORT_SPIKE_THRESHOLD, default=0.0
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=0.0, max=MAX_PRICE_THRESHOLD, step=0.01
+                        min=0.0,
+                        max=MAX_EXPORT_SPIKE_THRESHOLD,
+                        step=0.01,
+                        unit_of_measurement="SEK/kWh",
                     )
                 ),
                 vol.Optional(
@@ -1280,7 +1284,10 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                     default=self._options.get(CONF_EXPORT_SPIKE_THRESHOLD, 0.0),
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=0.0, max=MAX_PRICE_THRESHOLD, step=0.01
+                        min=0.0,
+                        max=MAX_EXPORT_SPIKE_THRESHOLD,
+                        step=0.01,
+                        unit_of_measurement="SEK/kWh",
                     )
                 ),
                 vol.Optional(
