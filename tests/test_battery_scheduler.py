@@ -1892,6 +1892,24 @@ class TestExportPastSlots:
         # reserves (2.0 export + 1.0 house) * 1h = 3.0 kWh.
         assert result.reserved_energy_kwh >= 3.0
 
+    def test_spread_baseline_ignores_elapsed_cheap_hours(self):
+        """Greptile PR #8: a dead cheap morning must not inflate the
+        afternoon's spreads. Past min 0.1, future floor 2.0, future high
+        5.4, threshold 4.0: spread vs the dead 0.1 would be 5.3 (fires),
+        vs the future floor it is 3.4 (does not). Replacement cost is
+        (2.0 + 0.85) / 0.9 + 0.2 = 3.37 < 5.4, so the threshold -- not
+        the economics -- is the mechanism under test."""
+        prices = [(h, 0.1) for h in range(14)] + [(h, 2.0) for h in range(14, 24)]
+        prices[19] = (19, 5.4)
+        result = _build(
+            _make_slots(prices),
+            now=self._NOW_1400,
+            current_soc_pct=90.0,
+            **{**EXPORT_KWARGS, "export_spike_threshold": 4.0},
+        )
+
+        assert _export_slots(result) == []
+
     def test_next_export_slot_populated(self):
         """next_export_slot points at the upcoming export slot."""
         result = _build(_spike_slots(), **EXPORT_KWARGS)

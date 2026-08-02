@@ -1004,7 +1004,13 @@ def _mark_export_slots(
     solar_charge slots are never converted. Mutates slots in place.
     """
     fees = grid_transfer_fee + electricity_company_fee
-    horizon_min_price = min(s.price for s in slots)
+    # Spread baseline over FUTURE slots only (Greptile PR #8): an elapsed
+    # cheap morning would otherwise inflate every remaining slot's spread
+    # and let ordinary later prices qualify as "spikes".
+    remaining_prices = [s.price for s in slots if s.end > now]
+    if not remaining_prices:
+        return
+    horizon_min_price = min(remaining_prices)
 
     # Only slots that have not yet ended participate -- as candidates, as
     # already-committed discharge energy, or as demotion fodder. A past
