@@ -610,23 +610,23 @@ def _overlap_hours(
 
 
 def _estimate_solar_rate_kw(
-    solar_forecast_remaining_wh: float | None,
+    solar_forecast_wh: float | None,
     production_factor: float,
     daylight_window: tuple[datetime, datetime] | None,
 ) -> float:
     """Estimate the solar recharge rate in kW (BATT-15a).
 
     Args:
-        solar_forecast_remaining_wh: Estimated remaining production for the
-            rest of today in Wh, or None.
+        solar_forecast_wh: Estimated production for the given daylight
+            window in Wh (remaining-today or tomorrow's total), or None.
         production_factor: Multiplier applied to the raw forecast reading.
         daylight_window: Resolved (dawn, dusk) window, or None.
 
     Returns:
-        Estimated average recharge rate in kW over the remaining daylight
+        Estimated average recharge rate in kW over the window's daylight
         hours, or 0.0 if inputs are missing/degenerate.
     """
-    if not solar_forecast_remaining_wh or solar_forecast_remaining_wh <= 0:
+    if not solar_forecast_wh or solar_forecast_wh <= 0:
         return 0.0
     if daylight_window is None:
         return 0.0
@@ -635,8 +635,8 @@ def _estimate_solar_rate_kw(
     if daylight_hours <= 0:
         return 0.0
 
-    estimated_remaining_kwh = (solar_forecast_remaining_wh / 1000.0) * production_factor
-    return estimated_remaining_kwh / daylight_hours
+    estimated_kwh = (solar_forecast_wh / 1000.0) * production_factor
+    return estimated_kwh / daylight_hours
 
 
 def _resolve_solar_windows(
