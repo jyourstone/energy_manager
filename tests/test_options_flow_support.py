@@ -104,6 +104,8 @@ class TestExportTranslationKeys:
         ("number", "battery_charge_spread_threshold"),
         ("number", "battery_discharge_spread_threshold"),
         ("sensor", "battery_effective_discharge_threshold"),
+        ("switch", "appliance_em_control"),
+        ("sensor", "appliance_status"),
     )
     _RETIRED_FORM_KEYS = ("export_spike_threshold", "export_reserve_soc_pct")
 
