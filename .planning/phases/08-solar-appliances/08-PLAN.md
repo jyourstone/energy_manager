@@ -241,6 +241,20 @@ export — no special handling.
 subentry flow + module flag + EN/SV 0.75, entities + README + planning updates
 0.5. Calendar: soak across at least a few sunny days before first live enable.
 
+## Known issue (discovered on prod, 2026-08-03)
+
+Enabling the Appliances module on an existing install does NOT make the
+"Add appliance" button appear until Home Assistant is restarted: HA core
+caches `ConfigEntry.supported_subentry_types` once per runtime and never
+re-evaluates it when options change (verified in core config_entries.py —
+`_supported_subentry_types` is only reset in `__init__`). The subentry flow
+itself works immediately; only the UI listing is frozen. Fix candidates for
+v0.9.1: always register both subentry types and abort the flow with a clear
+"enable the module first" message when the flag is off (kills the restart
+requirement), plus a README note. Related UX: the options wizard only saves
+at the LAST step — ticking a module checkbox and closing the dialog saves
+nothing.
+
 ## v2 / deferred (recorded, not designed)
 
 - `climate.*` actuators (Sensibo heat pump, floor heating) with state restore
