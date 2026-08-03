@@ -480,20 +480,30 @@ def decide_appliances(
             )
             continue
 
-        if pool_total_kw < threshold_on_kw:
+        if remaining_pool_kw < threshold_on_kw:
             tracker.surplus_since_ts = None
+            if pool_total_kw >= threshold_on_kw:
+                status = STATUS_BLOCKED_PRIORITY
+                reason = (
+                    f"remaining pool {remaining_pool_kw:.2f} kW < on "
+                    f"threshold {threshold_on_kw:.2f} kW after "
+                    "higher-priority allocation"
+                )
+            else:
+                status = STATUS_OFF_NO_SURPLUS
+                reason = (
+                    f"pool {remaining_pool_kw:.2f} kW < on threshold "
+                    f"{threshold_on_kw:.2f} kW"
+                )
             decisions.append(
                 ApplianceDecision(
                     subentry_id=config.subentry_id,
-                    status=STATUS_OFF_NO_SURPLUS,
+                    status=status,
                     desired_on=False,
                     should_command=False,
                     turn_on=False,
                     allocated_kw=0.0,
-                    reason=(
-                        f"pool {pool_total_kw:.2f} kW < on threshold "
-                        f"{threshold_on_kw:.2f} kW"
-                    ),
+                    reason=reason,
                 )
             )
             continue
@@ -544,24 +554,6 @@ def decide_appliances(
                     reason=(
                         f"rated {rated_amps:.1f} A exceeds remaining fuse "
                         f"headroom {remaining_headroom:.1f} A"
-                    ),
-                )
-            )
-            continue
-
-        if remaining_pool_kw < threshold_on_kw:
-            decisions.append(
-                ApplianceDecision(
-                    subentry_id=config.subentry_id,
-                    status=STATUS_BLOCKED_PRIORITY,
-                    desired_on=False,
-                    should_command=False,
-                    turn_on=False,
-                    allocated_kw=0.0,
-                    reason=(
-                        f"remaining pool {remaining_pool_kw:.2f} kW < on "
-                        f"threshold {threshold_on_kw:.2f} kW after "
-                        "higher-priority allocation"
                     ),
                 )
             )

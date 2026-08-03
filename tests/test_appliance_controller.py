@@ -452,6 +452,63 @@ class TestPriorityAllocation:
         assert decision.status == STATUS_ON_SURPLUS
         assert decision.allocated_kw == pytest.approx(4.0)
 
+    def test_starved_appliance_resets_sustain_and_waits_full_window_after_release(
+        self,
+    ):
+        # Regression: the admission gate must run against the
+        # post-allocation remaining pool, not the pre-allocation total, and
+        # blocked_priority must reset the sustain clock -- otherwise a
+        # lower-priority appliance accumulates sustain time on capacity a
+        # higher-priority one is consuming and turns on instantly once that
+        # capacity is released.
+        a = _config(subentry_id="a", priority=1)
+        b = _config(subentry_id="b", priority=2, rated_power_w=2000, on_sustain_s=300)
+        a_tracker = _on_tracker(T0 - 1200)
+        b_tracker = ApplianceTracker()
+        a_inputs = _inputs(is_on=True)
+
+        # A consumes the whole pool for several ticks; B is starved and
+        # must not accumulate any sustain time while blocked.
+        for t in (T0, T0 + 60, T0 + 120):
+            decisions = decide_appliances(
+                now_ts=t,
+                raw_surplus_kw=2.0,
+                headroom_amps=INF,
+                items=[(a, a_inputs, a_tracker), (b, _inputs(), b_tracker)],
+            )
+            assert decisions[0].status == STATUS_ON_SURPLUS
+            assert decisions[1].status == STATUS_BLOCKED_PRIORITY
+            assert b_tracker.surplus_since_ts is None
+
+        # The pool grows (A's allocation no longer exhausts it): B's
+        # sustain clock starts fresh from this tick, not from the earlier
+        # starved ticks.
+        decisions = decide_appliances(
+            now_ts=T0 + 180,
+            raw_surplus_kw=6.0,
+            headroom_amps=INF,
+            items=[(a, a_inputs, a_tracker), (b, _inputs(), b_tracker)],
+        )
+        assert decisions[1].status == STATUS_WAITING_ON_SUSTAIN
+        assert b_tracker.surplus_since_ts == T0 + 180
+
+        decisions = decide_appliances(
+            now_ts=T0 + 180 + 299,
+            raw_surplus_kw=6.0,
+            headroom_amps=INF,
+            items=[(a, a_inputs, a_tracker), (b, _inputs(), b_tracker)],
+        )
+        assert decisions[1].status == STATUS_WAITING_ON_SUSTAIN
+
+        decisions = decide_appliances(
+            now_ts=T0 + 180 + 300,
+            raw_surplus_kw=6.0,
+            headroom_amps=INF,
+            items=[(a, a_inputs, a_tracker), (b, _inputs(), b_tracker)],
+        )
+        assert decisions[1].status == STATUS_ON_SURPLUS
+        assert decisions[1].turn_on
+
 
 # ---------------------------------------------------------------------------
 # Fuse admission
@@ -840,10 +897,13 @@ class TestDeterminism:
         )
         assert decisions1 == decisions2
         assert [t for _, _, t in items1] == [t for _, _, t in items2]
-        # Sanity: the walk produced a mixed outcome, not all-identical.
+        # Sanity: the walk produced a mixed outcome, not all-identical. c's
+        # remaining pool (1.0 kW) is below its 4.4 kW on threshold after a
+        # and b's allocations, even though the total pool (6.2 kW) would
+        # have admitted it alone -- blocked_priority, not waiting_on_sustain.
         statuses = [d.status for d in decisions1]
         assert statuses == [
             STATUS_ON_SURPLUS,
             STATUS_ON_SURPLUS,
-            STATUS_WAITING_ON_SUSTAIN,
+            STATUS_BLOCKED_PRIORITY,
         ]

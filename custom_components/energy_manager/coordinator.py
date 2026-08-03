@@ -83,7 +83,6 @@ from .const import (
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
-    CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
@@ -3495,13 +3494,12 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
             CONF_GRID_POWER_ENTITY, ""
         )
 
-        # BATT-17 guard: only subtract battery discharge when the battery
-        # module actually manages a battery -- a stale entity left in the
-        # options while the module is disabled must not shrink the surplus.
-        self._battery_power_entity: str = (
-            entry.options.get(CONF_BATTERY_POWER_ENTITY, "")
-            if entry.options.get(CONF_BATTERY_ENABLED)
-            else ""
+        # BATT-17 guard: the physical battery discharges to the grid whether
+        # or not EM's battery module is enabled, so the configured power
+        # entity is read unconditionally -- a stale entity for a removed
+        # battery reads unavailable and falls back to 0.0 anyway.
+        self._battery_power_entity: str = entry.options.get(
+            CONF_BATTERY_POWER_ENTITY, ""
         )
 
         # -- Fuse admission config (shared top-level EMS options) --
@@ -3680,9 +3678,15 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
         configs_by_id = {config.subentry_id: config for config in self._configs}
         for decision in decisions:
             if decision.should_command:
-                await self._send_switch_command(
-                    configs_by_id[decision.subentry_id], decision.turn_on
-                )
+                config = configs_by_id[decision.subentry_id]
+                try:
+                    await self._send_switch_command(config, decision.turn_on)
+                except Exception:  # one appliance's failing actuator must not block the others' commands
+                    _LOGGER.exception(
+                        "Failed to command appliance %s; continuing with "
+                        "remaining appliances this tick",
+                        config.name,
+                    )
 
         return ApplianceModuleData(
             export_kw=export_kw,

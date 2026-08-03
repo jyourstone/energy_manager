@@ -1796,7 +1796,11 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
         existing_data = dict(subentry.data)
 
         if user_input is not None:
-            return self.async_create_entry(
+            # async_create_entry here would ADD a duplicate subentry --
+            # subentry reconfigure must update the existing one.
+            return self.async_update_and_abort(
+                self._get_entry(),
+                subentry,
                 title=user_input[CONF_CAR_NAME],
                 data=user_input,
             )
@@ -1958,7 +1962,11 @@ class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
             ):
                 errors[CONF_APPLIANCE_OFF_THRESHOLD_PCT] = "off_must_be_below_on"
             else:
-                return self.async_create_entry(
+                # async_create_entry here would ADD a duplicate subentry --
+                # subentry reconfigure must update the existing one.
+                return self.async_update_and_abort(
+                    self._get_entry(),
+                    subentry,
                     title=user_input[CONF_APPLIANCE_NAME],
                     data=user_input,
                 )
