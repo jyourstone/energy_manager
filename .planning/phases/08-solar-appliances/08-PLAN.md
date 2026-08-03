@@ -71,13 +71,20 @@ upstream is satisfied. No arbitration code against battery or cars is needed.
 ## Surplus signal (the core formula)
 
 ```
-export_kw            = max(0, -grid_power_kw)          # measured, signed grid flow
+export_kw            = -grid_power_kw                  # measured SIGNED grid flow (negative = importing)
 battery_discharge_kw = max(0, battery_discharge_power) # from configured battery power entity
-raw_surplus_kw       = max(0, export_kw - battery_discharge_kw)
+raw_surplus_kw       = export_kw - battery_discharge_kw   # SIGNED — goes negative on import
 
 # allocation pool: credit back what EM's own appliances already consume
 pool_kw = raw_surplus_kw + Σ draw_kw(appliance ON via EM)   # measured if sensor set, else rated
 ```
+
+**The surplus signal is deliberately signed** (as-built decision, 2026-08-03):
+with a clamped-at-zero signal and rated-power credit-back (no power sensor
+configured), an ON appliance's pool would floor at rated kW and could never
+cross below `off_threshold_pct ≤ 100` — the 110/90 release band would be dead
+code. Signed export makes import visible to the release comparison, which is
+exactly what the band's "~10% of rated import tolerance" requires.
 
 - **BATT-17 guard is mandatory:** when export arbitrage discharges the battery
   into the grid at spike prices, grid export is NOT solar surplus. Without the
@@ -120,10 +127,12 @@ Subentry `data` (static; edit via reconfigure → entry reload):
 | `min_on_minutes` | int | 15 | hard floor once ON (resistive-friendly default) |
 | `min_off_minutes` | int | 5 | hard floor once OFF (heat-pump users raise this) |
 
-Form shows ≤ 10 fields by collapsing the last six under an "advanced" section
-with the % defaults pre-filled (config-flow section support), or ships them
-with defaults visible — decided at build time by what the subentry flow
-supports cleanly. No auto-calibration of rated power in v1.
+All threshold/timing fields (`on_threshold_pct`, `off_threshold_pct`, both
+sustain times, `min_on_minutes`, `min_off_minutes`) are user-configurable per
+appliance (owner requirement 2026-08-03) — defaults pre-filled, editable in the
+add and reconfigure flows. Form shows ≤ 10 fields by collapsing them under an
+"advanced" section if the subentry flow supports sections cleanly, defaults
+visible otherwise. No auto-calibration of rated power in v1.
 
 ## Entities (per appliance device)
 
@@ -131,11 +140,17 @@ supports cleanly. No auto-calibration of rated power in v1.
    default OFF. The hand-over valve: nothing moves until the user deliberately
    enables each load (on top of the CORE-14 master switch).
 2. `sensor.<name>_status` — enum:
-   `disabled` / `observe_only` / `off_no_surplus` / `waiting_on_sustain` /
-   `on_surplus` / `holding_min_on` / `blocked_min_off` / `blocked_fuse` /
-   `blocked_priority` / `actuator_unavailable`.
-   Attributes: pool_kw, threshold_on_kw, threshold_off_kw, allocated_kw,
-   measured_draw_w (if sensor set), idle_while_on (bool), last dry-run message.
+   `disabled` / `off_no_surplus` / `waiting_on_sustain` / `on_surplus` /
+   `holding_min_on` / `blocked_min_off` / `blocked_fuse` / `blocked_priority` /
+   `actuator_unavailable` / `on_external` (actuator on but not commanded by
+   EM — left alone).
+   Observe-only is an **attribute** (`observe_only: true/false`), not a state
+   (as-built decision: during the observe-only soak the at-a-glance value must
+   show the *decision* EM would make, not a blanket `observe_only`).
+   Attributes: observe_only, reason, allocated_kw, raw_surplus_kw, export_kw,
+   battery_discharge_kw, threshold_on_kw, threshold_off_kw, measured_power_w
+   (if sensor set), idle_while_on (drawing <10% of rated while commanded on),
+   last_command_message (dry-run or actual).
 
 No other entities. Hub gets nothing new.
 
@@ -186,6 +201,15 @@ export — no special handling.
 - Trackers live in-memory. On coordinator start, seed from the actuator's
   actual state with `last_transition = now` — worst case a state change is
   *delayed* by one min_on/min_off window, never flipped. Benign by design.
+  As-built details: an ON actuator with EM control enabled is *adopted*
+  (`em_commanded_on=True, last_on_ts=now`); an OFF actuator seeds
+  `last_off_ts=now` so min_off survives restarts/reloads too; adoption is
+  deferred while the actuator is still `unavailable` (late-connecting
+  Zigbee/Shelly integrations) so a late-arriving ON state is adopted, not
+  stranded as external. EM turn-offs set a `release_pending` flag that
+  re-issues the command every tick until the actuator is *observed* off —
+  a single lost service call can never strand a load ON (the SEM #532
+  stranded-one-shot lesson).
 - Entry reloads (options/subentry edits) re-seed the same way.
 - No persistence of debounce timers (deliberate — freeze-safe, and the
   declarative re-assert loop self-corrects, unlike SEM's stranded one-shot

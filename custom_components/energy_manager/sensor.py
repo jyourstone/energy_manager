@@ -5,6 +5,8 @@ as state. When the battery module is enabled, also provides battery
 schedule sensors showing current state, next charge, and next discharge slots.
 When the EV module is enabled, provides per-car schedule sensors showing
 the current charging action with full schedule in attributes.
+When the appliances module is enabled, provides per-appliance status
+sensors explaining every surplus-control decision (APPL-08).
 Downstream modules access full price slot data directly from
 the PriceCoordinator via entry.runtime_data.
 """
@@ -25,7 +27,17 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .battery_scheduler import compute_effective_discharge_threshold
+from .const import (
+    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+    CONF_APPLIANCE_ON_THRESHOLD_PCT,
+    CONF_APPLIANCE_POWER_SENSOR_ENTITY,
+    CONF_APPLIANCE_RATED_POWER_W,
+    DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+    SUBENTRY_TYPE_APPLIANCE,
+)
 from .coordinator import (
+    ApplianceModuleData,
     BatteryScheduleData,
     CarChargingData,
     EaseeData,
@@ -33,7 +45,7 @@ from .coordinator import (
     EnergyManagerConfigEntry,
     PriceData,
 )
-from .entity import CarEntity, EnergyManagerEntity
+from .entity import ApplianceEntity, CarEntity, EnergyManagerEntity
 from .forecast_accuracy import (
     mean_ratio,
     serialize_history,
@@ -102,6 +114,17 @@ async def async_setup_entry(
             [CarScheduleSensor(coordinator, entry, subentry)],
             config_subentry_id=subentry_id,
         )
+
+    # Appliance status sensors (one per appliance subentry)
+    appliance_coordinator = entry.runtime_data.appliance_coordinator
+    if appliance_coordinator is not None:
+        for subentry_id, subentry in entry.subentries.items():
+            if subentry.subentry_type != SUBENTRY_TYPE_APPLIANCE:
+                continue
+            async_add_entities(
+                [ApplianceStatusSensor(appliance_coordinator, entry, subentry)],
+                config_subentry_id=subentry_id,
+            )
 
 
 class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
@@ -787,3 +810,126 @@ class CarScheduleSensor(CarEntity, SensorEntity):
             "is_preliminary": data.is_preliminary,
             "last_calculated": data.last_calculated.isoformat(),
         }
+
+
+class ApplianceStatusSensor(ApplianceEntity, SensorEntity):
+    """Sensor showing the appliance surplus-control status (APPL-08).
+
+    State is this appliance's decision status from the shared
+    ApplianceCoordinator (e.g. off_no_surplus, on_surplus, blocked_fuse).
+    Attributes expose the decision reason, allocated power, the surplus
+    signal components, the hysteresis thresholds, the measured draw (when
+    a power sensor is configured), and the last (dry-run or actual)
+    command message so every decision is explainable.
+    """
+
+    _attr_translation_key = "appliance_status"
+    _attr_icon = "mdi:power-plug"
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+        subentry,
+    ) -> None:
+        """Initialize the appliance status sensor.
+
+        Args:
+            coordinator: The ApplianceCoordinator shared by all appliances.
+            entry: The config entry this sensor belongs to.
+            subentry: The appliance subentry with appliance-specific
+                configuration.
+        """
+        super().__init__(coordinator, entry, subentry)
+        self._attr_unique_id = f"{subentry.subentry_id}_appliance_status"
+        self._entry = entry
+        rated_power_w = float(subentry.data.get(CONF_APPLIANCE_RATED_POWER_W, 0))
+        self._rated_power_w = rated_power_w
+        on_pct = float(
+            subentry.data.get(
+                CONF_APPLIANCE_ON_THRESHOLD_PCT, DEFAULT_APPLIANCE_ON_THRESHOLD_PCT
+            )
+        )
+        off_pct = float(
+            subentry.data.get(
+                CONF_APPLIANCE_OFF_THRESHOLD_PCT, DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT
+            )
+        )
+        self._threshold_on_kw = rated_power_w * on_pct / 100.0 / 1000.0
+        self._threshold_off_kw = rated_power_w * off_pct / 100.0 / 1000.0
+        self._power_sensor_entity = subentry.data.get(
+            CONF_APPLIANCE_POWER_SENSOR_ENTITY, ""
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return this appliance's decision status."""
+        data: ApplianceModuleData | None = self.coordinator.data
+        if data is None:
+            return None
+        decision = data.decisions.get(self._subentry_id)
+        if decision is None:
+            return None
+        return decision.status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return appliance decision attributes.
+
+        Exposes the decision reason, allocated power, surplus signal
+        components (raw surplus, export, battery discharge -- BATT-17),
+        hysteresis thresholds, measured draw, the observe-only flag
+        (CORE-14 master switch state), the idle-while-on diagnostic
+        (drawing <10% of rated while commanded on -- needs the optional
+        power sensor), and the last (dry-run or actual) command message.
+        """
+        data: ApplianceModuleData | None = self.coordinator.data
+        if data is None:
+            return {}
+        decision = data.decisions.get(self._subentry_id)
+        measured_power_w = self._read_measured_power_w()
+        idle_while_on: bool | None = None
+        if measured_power_w is not None and decision is not None:
+            idle_while_on = (
+                decision.desired_on and measured_power_w < self._rated_power_w * 0.1
+            )
+        runtime_data = getattr(self._entry, "runtime_data", None)
+        return {
+            "observe_only": not getattr(runtime_data, "control_enabled", False),
+            "reason": decision.reason if decision is not None else None,
+            "allocated_kw": round(decision.allocated_kw, 2)
+            if decision is not None
+            else None,
+            "raw_surplus_kw": round(data.raw_surplus_kw, 2),
+            "export_kw": round(data.export_kw, 2),
+            "battery_discharge_kw": round(data.battery_discharge_kw, 2),
+            "threshold_on_kw": round(self._threshold_on_kw, 2),
+            "threshold_off_kw": round(self._threshold_off_kw, 2),
+            "measured_power_w": measured_power_w,
+            "idle_while_on": idle_while_on,
+            "last_command_message": data.messages.get(self._subentry_id),
+        }
+
+    def _read_measured_power_w(self) -> float | None:
+        """Read the optional appliance power sensor and return watts.
+
+        Unit handling mirrors coordinator._read_power_kw(): the reading is
+        assumed to be in watts unless the entity's unit_of_measurement is
+        exactly "kW".
+
+        Returns:
+            The measured draw in W, or None if no power sensor is
+            configured or its state is unavailable/unparseable.
+        """
+        if not self._power_sensor_entity:
+            return None
+        state = self.hass.states.get(self._power_sensor_entity)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            power = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        if state.attributes.get("unit_of_measurement", "") == "kW":
+            power *= 1000.0
+        return round(power, 1)

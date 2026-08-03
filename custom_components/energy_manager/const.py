@@ -24,10 +24,12 @@ PRICE_UPDATE_INTERVAL_MINUTES = 5
 
 CONF_BATTERY_ENABLED = "battery_enabled"
 CONF_EV_ENABLED = "ev_enabled"
+CONF_APPLIANCES_ENABLED = "appliances_enabled"
 
 # Module identifiers
 MODULE_BATTERY = "battery"
 MODULE_EV = "ev"
+MODULE_APPLIANCES = "appliances"
 
 # --- Home Battery configuration ---
 
@@ -324,3 +326,33 @@ DEFAULT_LIMIT_REASSERT_INTERVAL_SECONDS = 600.0
 
 # Easee coordinator update interval (seconds)
 EASEE_UPDATE_INTERVAL_SECONDS = 30
+
+# --- Appliance subentry configuration (APPL solar-surplus module) ---
+
+SUBENTRY_TYPE_APPLIANCE = "appliance"
+
+CONF_APPLIANCE_NAME = "name"
+CONF_APPLIANCE_SWITCH_ENTITY = "switch_entity"
+CONF_APPLIANCE_RATED_POWER_W = "rated_power_w"
+CONF_APPLIANCE_PHASES = "phases"
+CONF_APPLIANCE_POWER_SENSOR_ENTITY = "power_sensor_entity"
+CONF_APPLIANCE_PRIORITY = "priority"
+CONF_APPLIANCE_ON_THRESHOLD_PCT = "on_threshold_pct"
+CONF_APPLIANCE_OFF_THRESHOLD_PCT = "off_threshold_pct"
+CONF_APPLIANCE_ON_SUSTAIN_MINUTES = "on_sustain_minutes"
+CONF_APPLIANCE_OFF_SUSTAIN_MINUTES = "off_sustain_minutes"
+CONF_APPLIANCE_MIN_ON_MINUTES = "min_on_minutes"
+CONF_APPLIANCE_MIN_OFF_MINUTES = "min_off_minutes"
+
+DEFAULT_APPLIANCE_PHASES = 3
+DEFAULT_APPLIANCE_PRIORITY = 5
+DEFAULT_APPLIANCE_ON_THRESHOLD_PCT = 110
+DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT = 90
+DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES = 5
+# Asymmetric on purpose -- slow release keeps resistive loads from flapping
+DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES = 15
+DEFAULT_APPLIANCE_MIN_ON_MINUTES = 15
+DEFAULT_APPLIANCE_MIN_OFF_MINUTES = 5
+
+# Appliance coordinator update interval (seconds)
+APPLIANCE_UPDATE_INTERVAL_SECONDS = 30

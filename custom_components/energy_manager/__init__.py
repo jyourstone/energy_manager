@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    CONF_APPLIANCES_ENABLED,
     CONF_BATTERY_ENABLED,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_EV_ENABLED,
@@ -23,11 +24,13 @@ from .const import (
     CONSUMPTION_STORAGE_VERSION,
     DOMAIN,
     FORECAST_ACCURACY_STORAGE_VERSION,
+    MODULE_APPLIANCES,
     MODULE_BATTERY,
     MODULE_EV,
     SUBENTRY_TYPE_CAR,
 )
 from .coordinator import (
+    ApplianceCoordinator,
     BatteryScheduleCoordinator,
     CarChargingCoordinator,
     EaseeCoordinator,
@@ -101,6 +104,14 @@ async def async_setup_entry(
         easee_coordinator = EaseeCoordinator(hass, entry)
         await easee_coordinator.async_config_entry_first_refresh()
 
+    # Phase 8: Appliance coordinator (if appliances module enabled). One
+    # coordinator for all appliance subentries -- the priority allocation
+    # walk is a single loop.
+    appliance_coordinator: ApplianceCoordinator | None = None
+    if entry.options.get(CONF_APPLIANCES_ENABLED):
+        appliance_coordinator = ApplianceCoordinator(hass, entry)
+        await appliance_coordinator.async_config_entry_first_refresh()
+
     # Store typed runtime data on the config entry
     entry.runtime_data = EnergyManagerData(
         price_coordinator=price_coordinator,
@@ -108,9 +119,11 @@ async def async_setup_entry(
         ems_coordinator=ems_coordinator,
         car_coordinators=car_coordinators,
         easee_coordinator=easee_coordinator,
+        appliance_coordinator=appliance_coordinator,
         modules_enabled={
             MODULE_BATTERY: entry.options.get(CONF_BATTERY_ENABLED, False),
             MODULE_EV: entry.options.get(CONF_EV_ENABLED, False),
+            MODULE_APPLIANCES: entry.options.get(CONF_APPLIANCES_ENABLED, False),
         },
     )
 

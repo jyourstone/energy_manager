@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import (
 from .const import CONF_CAR_NAME, DOMAIN
 
 if TYPE_CHECKING:
-    from .coordinator import CarChargingCoordinator
+    from .coordinator import ApplianceCoordinator, CarChargingCoordinator
 
 
 class EnergyManagerEntity(CoordinatorEntity):
@@ -87,5 +87,46 @@ class CarEntity(CoordinatorEntity):
             name=self._car_name,
             manufacturer="Energy Manager",
             model="Car",
+            via_device=(DOMAIN, self._entry_id),
+        )
+
+
+class ApplianceEntity(CoordinatorEntity):
+    """Base entity for per-appliance entities with appliance-specific device.
+
+    Each appliance appears as a separate device in HA, linked to the hub
+    device via via_device. Uses subentry_id as the device identifier for
+    uniqueness.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: ApplianceCoordinator,
+        entry: ConfigEntry,
+        subentry,
+    ) -> None:
+        """Initialize the appliance entity.
+
+        Args:
+            coordinator: The ApplianceCoordinator shared by all appliances.
+            entry: The config entry this entity belongs to.
+            subentry: The appliance subentry with appliance-specific
+                configuration.
+        """
+        super().__init__(coordinator)
+        self._entry_id = entry.entry_id
+        self._subentry_id = subentry.subentry_id
+        self._appliance_name = subentry.title
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the appliance-specific device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._subentry_id)},
+            name=self._appliance_name,
+            manufacturer="Energy Manager",
+            model="Appliance",
             via_device=(DOMAIN, self._entry_id),
         )

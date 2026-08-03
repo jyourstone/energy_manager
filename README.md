@@ -54,7 +54,8 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 - **Per-car configuration** — each car is a config subentry with its own departure time, target SOC, and max charge power entities, plus a cheapest-slot charging schedule constrained by the departure deadline
 - **PV opportunistic charging** — surplus solar production can trigger charging outside the price-driven schedule, with a hysteresis band to avoid rapid mode switching
 - **Easee charger control** — mode arbitration (forced/scheduled/solar/idle), dynamic amp limit with fuse protection, 1/2/3-phase awareness, solar-surplus charging, and a force-charging switch
-- **Modular** — Home Battery and EV Charging can each be enabled independently; a module works standalone without the other being configured
+- **Solar-surplus appliance control** — switch any `switch`/`input_boolean` load (water heater, pool pump) on when measured grid export exceeds its rated draw with margin, and off when the surplus disappears — with priority allocation, hysteresis, anti-short-cycling floors, and fuse admission
+- **Modular** — Home Battery, EV Charging, and Solar Appliances can each be enabled independently; a module works standalone without the others being configured
 - **Translations** — UI strings use Home Assistant's translation system; English and Swedish are both complete
 
 ## Requirements
@@ -92,13 +93,15 @@ Click the button above, or add it manually via **Settings** -> **Devices & Servi
 
 **Step 1 — Price source:** Select your Nordpool sensor. Auto-detected if either the native or HACS Nordpool integration is installed.
 
-**Step 2 — Modules:** Choose which modules to enable — Home Battery and/or EV Charging. Both are optional and independent; you can enable just one.
+**Step 2 — Modules:** Choose which modules to enable — Home Battery, EV Charging, and/or Solar Appliances. All are optional and independent; you can enable just one.
 
 **Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, one or more Forecast.Solar "remaining today" entities for solar-aware scheduling (e.g. separate east + west arrays — their readings are summed), plus the BATT-15 algorithm tuning options (charge buffer %, solar production factor, estimated charge power, and peak-grouping gap). Matching Forecast.Solar "tomorrow" sensors are derived automatically from the configured "remaining today" sensors, so 48h planning also accounts for tomorrow's sun. Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
 
 **Step 4 — EV Charging** *(if enabled)*: Charger status and power entities, auto-detected from an Easee integration if present, plus the charger's device ID (auto-detected) used to address the Easee control services. Also configures charger amp limits, grid charging power cap, phase-switch and solar-charging thresholds, and an optional notify service for charger safety alerts — all pre-filled with tuned defaults and grouped with the advanced options at the end of the step.
 
 After setup, each car is added separately as a **subentry** on the Energy Manager device: give it a name, battery capacity, optionally battery-level, charger-connected, and location entities (auto-detected from Skoda Connect or VW We Connect if present), and how many charger phases it actually uses (1/2/3, default 3).
+
+With Solar Appliances enabled, each appliance is likewise added as a **subentry**: a name, the actuator entity (`switch` or `input_boolean`), its rated power (W) and phases, an optional power sensor for measured credit-back, plus priority and the on/off threshold and timing fields (all pre-filled with tuned defaults). See [Appliances (solar surplus)](#appliances-solar-surplus) below.
 
 ## Entities created
 
@@ -118,6 +121,7 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 | Forecast Accuracy *(diagnostic)* | Observe-only solar forecast accuracy tracking: daily forecast-vs-actual ratios and a suggested production factor (needs 7+ valid days; does not affect scheduling) |
 | Battery effective discharge threshold *(diagnostic)* | The discharge spread threshold the scheduler is actually using right now, with attributes showing whether it comes from the manual entity or the Battery Cycle Cost formula |
 | Solar Balance *(diagnostic)* | Signed net solar balance (PV minus house load minus battery charging plus charger draw): positive means surplus available for the charger, negative means deficit. Raw value before the charger's own activation gating |
+| Status *(per appliance)* | Surplus-control decision status (`off_no_surplus`, `on_surplus`, `blocked_fuse`, ...) with attributes (thresholds, surplus components, allocation, last command message) that explain every decision |
 
 ### Switches
 
@@ -125,6 +129,7 @@ After setup, each car is added separately as a **subentry** on the Energy Manage
 |--------|--------------|
 | Device control | Master observe-only switch (CORE-14); OFF means every coordinator still computes and publishes decisions, but no device command is actually sent |
 | EV charger force charging | Forces the Easee charger to grid-charge regardless of schedule or solar state (EASE-03) |
+| EM control *(per appliance)* | Hand-over valve: Energy Manager only manages this appliance's actuator while this is ON (on top of the master Device control switch). Default OFF |
 
 ### Numbers
 
@@ -162,6 +167,41 @@ Opt-in feature that sells battery energy to the grid during extreme price spikes
 
 > [!IMPORTANT]
 > **Setup precondition:** the SigenStor inverter's own backup/minimum SOC must be configured at the plant level to at least Energy Manager's minimum SOC. This hardware floor is the last line of defense if Home Assistant goes down mid-export — it is documented here as a requirement and is **not** runtime-verified in v1.
+
+## Appliances (solar surplus)
+
+Off by default (the **Solar Appliances** module flag in the Modules step). Turns user-selected switch loads on when measured solar surplus (grid export) exceeds the load's rated draw with margin, and off when the surplus disappears. Surplus-only on purpose: there is no cheap-hours appliance scheduling in Energy Manager — price-based schedulers like [Power Saver](https://github.com/jyourstone/power_saver) keep that job, and the two coexist (see the recipe below).
+
+- **Surplus signal** — measured grid export minus battery discharge power (arbitrage export is not solar surplus, BATT-17), never computed PV-minus-loads. Battery and car charging need no arbitration: export only appears at the meter once everything upstream is satisfied.
+- **Priority allocation** — appliances are evaluated in priority order (1 = highest); each admitted appliance consumes its measured (if a power sensor is configured) or rated draw from the surplus pool.
+- **Anti-short-cycling** — per-appliance on/off sustain delays plus hard minimum on/off times, so a water heater or heat-pump plug is never rapid-cycled.
+- **Fuse admission** — an appliance only turns on if its rated amps fit the live measured fuse headroom minus the safety buffer.
+- **Observe-only by default** — commands are only sent when BOTH the master **Device control** switch AND that appliance's **EM control** switch are ON. Until then the status sensor and dry-run messages show exactly what would happen.
+
+### Per-appliance configuration
+
+Each appliance subentry has these fields — every threshold and timing is user-configurable per appliance, pre-filled with these defaults:
+
+| Field | Default | Description |
+|-------|---------|--------------|
+| Appliance name | — | Friendly name, e.g. "Water heater" |
+| Actuator switch | — | The `switch` or `input_boolean` Energy Manager toggles (smart plug, relay, or another integration's override switch) |
+| Rated power (W) | — | Expected draw when running, e.g. 4200 |
+| Phases | 3 | 1 or 3; converts rated power to per-phase amps for the fuse admission check |
+| Power sensor | *(optional)* | Sensor measuring actual draw; if set, the measured draw is credited back to the surplus pool instead of the rated power |
+| Priority | 5 | Allocation priority when appliances compete for the surplus (1 = highest); ties broken by the order appliances were added |
+| On threshold (%) | 110 | Turn on when the surplus pool reaches this percentage of rated power, sustained |
+| Off threshold (%) | 90 | Turn off when the pool stays below this percentage of rated power, sustained |
+| On sustain time (min) | 5 | How long the surplus must persist before turning on (filters passing clouds) |
+| Off sustain time (min) | 15 | How long the deficit must persist before turning off (deliberately slower than the on side) |
+| Minimum on time (min) | 15 | Hard floor once on, regardless of surplus |
+| Minimum off time (min) | 5 | Hard floor once off (heat-pump plugs: raise this) |
+
+Each appliance gets its own device with exactly two entities: the **EM control** switch (the per-appliance hand-over valve, default OFF, restored across restarts) and the **Status** sensor whose state and attributes explain every decision — see the entity tables above.
+
+### Managing a load another integration schedules
+
+Never point Energy Manager at a relay that another integration already reconciles — one writer per switch (single-writer rule). Instead, point the appliance's actuator picker at that integration's own override/boost switch. With [Power Saver](https://github.com/jyourstone/power_saver) as the example: PS keeps cheap-hours scheduling for guaranteed runtime, and you set the appliance's actuator to PS's `always_on` override switch (e.g. `switch.heater_power_saver_always_on`) instead of the physical relay. Energy Manager forces the load on while solar surplus lasts, Power Saver keeps its year-round guarantee, and no two integrations ever fight over the same relay.
 
 ## Repairs
 

@@ -16,11 +16,13 @@
         "description": "Välj vilka energihanteringsmoduler som ska aktiveras. Du kan ändra detta senare.",
         "data": {
           "battery_enabled": "Hembatteri",
-          "ev_enabled": "Elbilsladdning"
+          "ev_enabled": "Elbilsladdning",
+          "appliances_enabled": "Apparater på solöverskott"
         },
         "data_description": {
           "battery_enabled": "Aktivera schemaläggning av hembatteriets laddning/urladdning baserat på elpriser.",
-          "ev_enabled": "Aktivera prisoptimerad schemaläggning för elbilsladdning."
+          "ev_enabled": "Aktivera prisoptimerad schemaläggning för elbilsladdning.",
+          "appliances_enabled": "Aktivera till- och frånslag av valda apparater baserat på solöverskott (export till elnätet)."
         }
       },
       "battery": {
@@ -205,6 +207,81 @@
           }
         }
       }
+    },
+    "appliance": {
+      "entry_type": "Apparat",
+      "initiate_flow": {
+        "user": "Lägg till apparat"
+      },
+      "error": {
+        "off_must_be_below_on": "Av-tröskeln måste vara lägre än på-tröskeln."
+      },
+      "step": {
+        "user": {
+          "title": "Lägg till apparat",
+          "description": "Konfigurera en apparat som ska drivas på solöverskott. Den slås på när exporten till elnätet överstiger dess märkeffekt med marginal, och av när överskottet försvinner.",
+          "data": {
+            "name": "Apparatens namn",
+            "switch_entity": "Strömbrytare för apparaten",
+            "rated_power_w": "Märkeffekt (W)",
+            "phases": "Faser",
+            "power_sensor_entity": "Effektsensor",
+            "priority": "Prioritet",
+            "on_threshold_pct": "Tröskel för tillslag (% av märkeffekt)",
+            "off_threshold_pct": "Tröskel för frånslag (% av märkeffekt)",
+            "on_sustain_minutes": "Varaktighet före tillslag (min)",
+            "off_sustain_minutes": "Varaktighet före frånslag (min)",
+            "min_on_minutes": "Minsta tillslagstid (min)",
+            "min_off_minutes": "Minsta frånslagstid (min)"
+          },
+          "data_description": {
+            "name": "Ett beskrivande namn för apparaten (t.ex. 'Varmvattenberedare').",
+            "switch_entity": "Den strömbrytare (switch eller input_boolean) som Energy Manager slår på och av för att styra apparaten, t.ex. ett smart uttag eller en åsidosättningsbrytare i Power Saver.",
+            "rated_power_w": "Apparatens förväntade effektuttag när den är igång, i watt.",
+            "phases": "Antal faser apparaten belastar (1 eller 3). Används för att räkna om märkeffekten till ström per fas vid säkringskontrollen.",
+            "power_sensor_entity": "Valfritt: sensor som mäter apparatens faktiska effektuttag. Om den anges används det uppmätta värdet i stället för märkeffekten när apparatens förbrukning räknas tillbaka till överskottspoolen.",
+            "priority": "Fördelningsprioritet när flera apparater konkurrerar om överskottet (1 = högst). Vid lika prioritet gäller den ordning apparaterna lades till.",
+            "on_threshold_pct": "Slå på när det tillgängliga överskottet når denna procentandel av märkeffekten, ihållande.",
+            "off_threshold_pct": "Slå av när det tillgängliga överskottet håller sig under denna procentandel av märkeffekten, ihållande.",
+            "on_sustain_minutes": "Hur länge överskottet måste finnas innan apparaten slås på (filtrerar bort förbipasserande moln).",
+            "off_sustain_minutes": "Hur länge överskottet måste saknas innan apparaten slås av.",
+            "min_on_minutes": "När apparaten väl slagits på förblir den på minst så här länge (skydd mot korta cykler).",
+            "min_off_minutes": "När apparaten väl slagits av förblir den av minst så här länge (skydd mot korta cykler)."
+          }
+        },
+        "reconfigure": {
+          "title": "Redigera apparat",
+          "description": "Uppdatera konfigurationen för denna apparat.",
+          "data": {
+            "name": "Apparatens namn",
+            "switch_entity": "Strömbrytare för apparaten",
+            "rated_power_w": "Märkeffekt (W)",
+            "phases": "Faser",
+            "power_sensor_entity": "Effektsensor",
+            "priority": "Prioritet",
+            "on_threshold_pct": "Tröskel för tillslag (% av märkeffekt)",
+            "off_threshold_pct": "Tröskel för frånslag (% av märkeffekt)",
+            "on_sustain_minutes": "Varaktighet före tillslag (min)",
+            "off_sustain_minutes": "Varaktighet före frånslag (min)",
+            "min_on_minutes": "Minsta tillslagstid (min)",
+            "min_off_minutes": "Minsta frånslagstid (min)"
+          },
+          "data_description": {
+            "name": "Ett beskrivande namn för apparaten (t.ex. 'Varmvattenberedare').",
+            "switch_entity": "Den strömbrytare (switch eller input_boolean) som Energy Manager slår på och av för att styra apparaten, t.ex. ett smart uttag eller en åsidosättningsbrytare i Power Saver.",
+            "rated_power_w": "Apparatens förväntade effektuttag när den är igång, i watt.",
+            "phases": "Antal faser apparaten belastar (1 eller 3). Används för att räkna om märkeffekten till ström per fas vid säkringskontrollen.",
+            "power_sensor_entity": "Valfritt: sensor som mäter apparatens faktiska effektuttag. Om den anges används det uppmätta värdet i stället för märkeffekten när apparatens förbrukning räknas tillbaka till överskottspoolen.",
+            "priority": "Fördelningsprioritet när flera apparater konkurrerar om överskottet (1 = högst). Vid lika prioritet gäller den ordning apparaterna lades till.",
+            "on_threshold_pct": "Slå på när det tillgängliga överskottet når denna procentandel av märkeffekten, ihållande.",
+            "off_threshold_pct": "Slå av när det tillgängliga överskottet håller sig under denna procentandel av märkeffekten, ihållande.",
+            "on_sustain_minutes": "Hur länge överskottet måste finnas innan apparaten slås på (filtrerar bort förbipasserande moln).",
+            "off_sustain_minutes": "Hur länge överskottet måste saknas innan apparaten slås av.",
+            "min_on_minutes": "När apparaten väl slagits på förblir den på minst så här länge (skydd mot korta cykler).",
+            "min_off_minutes": "När apparaten väl slagits av förblir den av minst så här länge (skydd mot korta cykler)."
+          }
+        }
+      }
     }
   },
   "options": {
@@ -224,11 +301,13 @@
         "description": "Välj vilka energihanteringsmoduler som ska aktiveras. Du kan ändra detta senare.",
         "data": {
           "battery_enabled": "Hembatteri",
-          "ev_enabled": "Elbilsladdning"
+          "ev_enabled": "Elbilsladdning",
+          "appliances_enabled": "Apparater på solöverskott"
         },
         "data_description": {
           "battery_enabled": "Aktivera schemaläggning av hembatteriets laddning/urladdning baserat på elpriser.",
-          "ev_enabled": "Aktivera prisoptimerad schemaläggning för elbilsladdning."
+          "ev_enabled": "Aktivera prisoptimerad schemaläggning för elbilsladdning.",
+          "appliances_enabled": "Aktivera till- och frånslag av valda apparater baserat på solöverskott (export till elnätet)."
         }
       },
       "battery": {
@@ -390,6 +469,9 @@
       },
       "forecast_accuracy": {
         "name": "Solprognosens träffsäkerhet"
+      },
+      "appliance_status": {
+        "name": "Status"
       }
     },
     "number": {
@@ -438,6 +520,9 @@
       },
       "ev_charger_force_charging": {
         "name": "Tvinga laddning av elbil"
+      },
+      "appliance_em_control": {
+        "name": "EM-styrning"
       }
     }
   },

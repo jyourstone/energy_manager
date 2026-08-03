@@ -39,6 +39,14 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
+from .appliance_controller import (
+    ApplianceConfig,
+    ApplianceDecision,
+    ApplianceInputs,
+    ApplianceTracker,
+    compute_raw_surplus_kw,
+    decide_appliances,
+)
 from .battery_scheduler import (
     BatteryScheduleResult,
     build_battery_schedule,
@@ -55,13 +63,27 @@ from .charger_state_machine import (
     compute_solar_surplus_kw,
 )
 from .const import (
+    APPLIANCE_UPDATE_INTERVAL_SECONDS,
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
     CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES,
     CONF_AMP_DECREASE_DELAY,
     CONF_AMP_INCREASE_DELAY,
+    CONF_APPLIANCE_MIN_OFF_MINUTES,
+    CONF_APPLIANCE_MIN_ON_MINUTES,
+    CONF_APPLIANCE_NAME,
+    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
+    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
+    CONF_APPLIANCE_ON_THRESHOLD_PCT,
+    CONF_APPLIANCE_PHASES,
+    CONF_APPLIANCE_POWER_SENSOR_ENTITY,
+    CONF_APPLIANCE_PRIORITY,
+    CONF_APPLIANCE_RATED_POWER_W,
+    CONF_APPLIANCE_SWITCH_ENTITY,
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
@@ -108,6 +130,14 @@ from .const import (
     CONSUMPTION_STORAGE_VERSION,
     DEFAULT_AMP_DECREASE_DELAY_SECONDS,
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
+    DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
+    DEFAULT_APPLIANCE_MIN_ON_MINUTES,
+    DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
+    DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
+    DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_PHASES,
+    DEFAULT_APPLIANCE_PRIORITY,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_CYCLE_COST,
@@ -163,6 +193,7 @@ from .const import (
     MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES,
     PRICE_UPDATE_INTERVAL_MINUTES,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+    SUBENTRY_TYPE_APPLIANCE,
     WATTS_TO_AMPS_3PHASE_DIVISOR,
 )
 from .ems_controller import (
@@ -3390,6 +3421,454 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ApplianceModuleData:
+    """Output of the appliance coordinator.
+
+    Attributes:
+        export_kw: Signed grid balance in kW (positive = export,
+            negative = import), read from the same signed grid sensors
+            FuseSensorReader consumes. 0.0 when no grid sensor is
+            configured or the reading is unavailable. Kept signed so the
+            hysteresis band's release comparison sees import (a clamp
+            here would make rated-credit appliances unreleasable).
+        battery_discharge_kw: Measured battery discharge in kW (>= 0).
+            0.0 when the battery module is disabled, no battery power
+            entity is configured, or the reading is unavailable (BATT-17).
+        raw_surplus_kw: Signed solar surplus available to appliances --
+            compute_raw_surplus_kw(export_kw, battery_discharge_kw).
+        decisions: This tick's per-appliance decisions, keyed by
+            subentry_id.
+        messages: Most recent command message per subentry_id -- the
+            "[dry-run] Would call ..." description when observe-only,
+            otherwise a description of the sent command.
+    """
+
+    export_kw: float
+    battery_discharge_kw: float
+    raw_surplus_kw: float
+    decisions: dict[str, ApplianceDecision]
+    messages: dict[str, str]
+
+
+class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
+    """Coordinator that runs solar-surplus appliance control (APPL).
+
+    One coordinator for ALL appliance subentries (unlike per-car
+    coordinators) -- the priority allocation walk is a single loop. 30s
+    tick, matching EMS/Easee. Each tick reads the export/battery/fuse
+    signals, snapshots per-appliance actuator state, calls the pure
+    decide_appliances(), and reconciles commands through the same
+    build_command_decision observe-only choke point used by every other
+    send site (CORE-14 master switch plus the per-appliance "EM control"
+    switch, APPL-07). Standalone: works with the battery and EV modules
+    disabled, reading whatever grid signals the config carries.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the appliance coordinator.
+
+        Args:
+            hass: Home Assistant instance.
+            entry: The config entry for this integration.
+        """
+        super().__init__(
+            hass,
+            _LOGGER,
+            name="Energy Manager Appliances",
+            config_entry=entry,
+            update_interval=timedelta(seconds=APPLIANCE_UPDATE_INTERVAL_SECONDS),
+            always_update=False,
+        )
+
+        # -- Grid export signal (same sensors FuseSensorReader consumes) --
+        self._grid_phase_a_entity: str = entry.options.get(
+            CONF_GRID_PHASE_A_ENTITY, ""
+        )
+        self._grid_phase_b_entity: str = entry.options.get(
+            CONF_GRID_PHASE_B_ENTITY, ""
+        )
+        self._grid_phase_c_entity: str = entry.options.get(
+            CONF_GRID_PHASE_C_ENTITY, ""
+        )
+        self._grid_power_entity: str = entry.options.get(
+            CONF_GRID_POWER_ENTITY, ""
+        )
+
+        # BATT-17 guard: only subtract battery discharge when the battery
+        # module actually manages a battery -- a stale entity left in the
+        # options while the module is disabled must not shrink the surplus.
+        self._battery_power_entity: str = (
+            entry.options.get(CONF_BATTERY_POWER_ENTITY, "")
+            if entry.options.get(CONF_BATTERY_ENABLED)
+            else ""
+        )
+
+        # -- Fuse admission config (shared top-level EMS options) --
+        self._fuse_rating_amps: float = float(
+            entry.options.get(CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS)
+        )
+        self._safety_buffer_amps: float = float(
+            entry.options.get(CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS)
+        )
+        self._fuse_reader = FuseSensorReader(
+            hass=hass,
+            grid_phase_a_entity=self._grid_phase_a_entity,
+            grid_phase_b_entity=self._grid_phase_b_entity,
+            grid_phase_c_entity=self._grid_phase_c_entity,
+            grid_power_entity=self._grid_power_entity,
+            sensor_fail_behavior=entry.options.get(
+                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
+            ),
+            assumed_load_amps=float(
+                entry.options.get(CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS)
+            ),
+        )
+
+        # Static per-appliance configuration snapshots in insertion order --
+        # decide_appliances() sorts by (priority, insertion order) itself.
+        self._configs: list[ApplianceConfig] = []
+        for subentry_id, subentry in entry.subentries.items():
+            if subentry.subentry_type != SUBENTRY_TYPE_APPLIANCE:
+                continue
+            data = subentry.data
+            self._configs.append(
+                ApplianceConfig(
+                    subentry_id=subentry_id,
+                    name=data.get(CONF_APPLIANCE_NAME, "Unknown Appliance"),
+                    switch_entity=data.get(CONF_APPLIANCE_SWITCH_ENTITY, ""),
+                    rated_power_w=int(data.get(CONF_APPLIANCE_RATED_POWER_W, 0)),
+                    phases=int(
+                        data.get(CONF_APPLIANCE_PHASES, DEFAULT_APPLIANCE_PHASES)
+                    ),
+                    priority=int(
+                        data.get(CONF_APPLIANCE_PRIORITY, DEFAULT_APPLIANCE_PRIORITY)
+                    ),
+                    on_threshold_pct=int(
+                        data.get(
+                            CONF_APPLIANCE_ON_THRESHOLD_PCT,
+                            DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+                        )
+                    ),
+                    off_threshold_pct=int(
+                        data.get(
+                            CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+                            DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+                        )
+                    ),
+                    on_sustain_s=60
+                    * int(
+                        data.get(
+                            CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
+                            DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
+                        )
+                    ),
+                    off_sustain_s=60
+                    * int(
+                        data.get(
+                            CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
+                            DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
+                        )
+                    ),
+                    min_on_s=60
+                    * int(
+                        data.get(
+                            CONF_APPLIANCE_MIN_ON_MINUTES,
+                            DEFAULT_APPLIANCE_MIN_ON_MINUTES,
+                        )
+                    ),
+                    min_off_s=60
+                    * int(
+                        data.get(
+                            CONF_APPLIANCE_MIN_OFF_MINUTES,
+                            DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
+                        )
+                    ),
+                    power_sensor_entity=data.get(CONF_APPLIANCE_POWER_SENSOR_ENTITY)
+                    or None,
+                )
+            )
+
+        # Per-appliance "EM control" switch states (APPL-07). Fail-safe
+        # False until each RestoreEntity switch restores or toggles via
+        # async_set_em_control().
+        self.em_control: dict[str, bool] = {
+            config.subentry_id: False for config in self._configs
+        }
+
+        # Mutable per-appliance trackers, seeded lazily per tick (APPL-09).
+        self._trackers: dict[str, ApplianceTracker] = {}
+
+        # Most recent command message per appliance (dry-run or actual).
+        self._messages: dict[str, str] = {}
+
+        # One-time log guard: no grid sensors means no export signal at all.
+        self._export_signal_warned = False
+
+    async def async_set_em_control(self, subentry_id: str, enabled: bool) -> None:
+        """Update one appliance's "EM control" switch state (APPL-07).
+
+        Called by the per-appliance switch entity on toggle and on state
+        restore. Enabling drops a tracker EM has never commanded ON (its
+        only possible state is the restart-seeded min_off window) so the
+        next tick re-seeds it from the actuator's actual state (APPL-09
+        adopt rule) -- the RestoreEntity switch restores after the first
+        refresh, so seeding cannot happen at construction time. A tracker
+        EM has commanded ON at some point (em_commanded_on or last_on_ts
+        set) is kept, preserving its min_on/min_off floors.
+
+        Args:
+            subentry_id: The appliance subentry to update.
+            enabled: True when EM may manage this appliance.
+        """
+        self.em_control[subentry_id] = enabled
+        if enabled:
+            tracker = self._trackers.get(subentry_id)
+            if (
+                tracker is not None
+                and not tracker.em_commanded_on
+                and tracker.last_on_ts is None
+            ):
+                del self._trackers[subentry_id]
+        await self.async_request_refresh()
+
+    async def _async_update_data(self) -> ApplianceModuleData:
+        """Read signals, run the pure allocation walk, and reconcile commands.
+
+        Returns:
+            ApplianceModuleData with this tick's signals and decisions.
+        """
+        now_ts = dt_util.utcnow().timestamp()
+        export_kw = self._read_export_kw()
+        battery_discharge_kw = self._read_battery_discharge_kw()
+        raw_surplus_kw = compute_raw_surplus_kw(export_kw, battery_discharge_kw)
+        headroom_amps = self._compute_headroom_amps()
+
+        items: list[tuple[ApplianceConfig, ApplianceInputs, ApplianceTracker]] = []
+        for config in self._configs:
+            inputs = self._read_appliance_inputs(config)
+            tracker = self._trackers.get(config.subentry_id)
+            if tracker is None:
+                tracker = ApplianceTracker()
+                if inputs.actuator_available:
+                    if inputs.em_control_enabled and inputs.actuator_is_on:
+                        # APPL-09 adopt rule: an already-running load under
+                        # EM control keeps running with last_on_ts frozen
+                        # to now -- a state change is at worst delayed,
+                        # never flipped.
+                        tracker.em_commanded_on = True
+                        tracker.last_on_ts = now_ts
+                    else:
+                        # Seed the OFF side the same way: last_off_ts = now
+                        # enforces the min_off floor after restart/reload
+                        # instead of treating the unknown gap since the
+                        # last real turn-off as infinite.
+                        tracker.last_off_ts = now_ts
+                    self._trackers[config.subentry_id] = tracker
+                # An unavailable actuator (e.g. its integration still
+                # connecting at HA startup) leaves the tracker unstored so
+                # the adopt check re-runs once it reports a real state.
+            items.append((config, inputs, tracker))
+
+        decisions = decide_appliances(
+            now_ts=now_ts,
+            raw_surplus_kw=raw_surplus_kw,
+            headroom_amps=headroom_amps,
+            items=items,
+        )
+
+        configs_by_id = {config.subentry_id: config for config in self._configs}
+        for decision in decisions:
+            if decision.should_command:
+                await self._send_switch_command(
+                    configs_by_id[decision.subentry_id], decision.turn_on
+                )
+
+        return ApplianceModuleData(
+            export_kw=export_kw,
+            battery_discharge_kw=battery_discharge_kw,
+            raw_surplus_kw=raw_surplus_kw,
+            decisions={
+                decision.subentry_id: decision for decision in decisions
+            },
+            messages=dict(self._messages),
+        )
+
+    def _is_control_enabled(self) -> bool:
+        """Return the master "Device control" switch state (CORE-14)."""
+        return _read_control_enabled(self.config_entry)
+
+    def _read_appliance_inputs(self, config: ApplianceConfig) -> ApplianceInputs:
+        """Snapshot one appliance's actuator state and optional power sensor.
+
+        Args:
+            config: The appliance to read.
+
+        Returns:
+            ApplianceInputs for this tick. measured_power_w falls back to
+            None (rated-power credit-back) when the optional power sensor
+            is unconfigured or unavailable.
+        """
+        state = (
+            self.hass.states.get(config.switch_entity)
+            if config.switch_entity
+            else None
+        )
+        actuator_available = state is not None and state.state not in (
+            "unavailable",
+            "unknown",
+        )
+        measured_power_w: float | None = None
+        if config.power_sensor_entity and _entity_has_value(
+            self.hass, config.power_sensor_entity
+        ):
+            measured_power_w = (
+                _read_power_kw(self.hass, config.power_sensor_entity) * 1000.0
+            )
+        return ApplianceInputs(
+            actuator_available=actuator_available,
+            actuator_is_on=actuator_available and state.state == "on",
+            em_control_enabled=self.em_control.get(config.subentry_id, False),
+            measured_power_w=measured_power_w,
+        )
+
+    def _read_export_kw(self) -> float:
+        """Read the signed grid balance in kW (positive = export).
+
+        Uses the same signed grid sensors FuseSensorReader consumes
+        (positive = import, negative = export): the per-phase sum when all
+        three phase entities are configured, else the total grid power
+        sensor. The sign is preserved -- import comes back negative so the
+        hysteresis band's release comparison sees it (clamping at zero
+        would floor the credited pool at rated for appliances without a
+        power sensor, making the off threshold unreachable). Returns 0.0
+        when the configured sensors are unavailable or no grid sensor is
+        configured at all -- the fuse fallback values never encode export,
+        so there is no export signal to substitute (appliances then
+        release via the normal OFF path, APPL failure table).
+        """
+        phase_entities = [
+            self._grid_phase_a_entity,
+            self._grid_phase_b_entity,
+            self._grid_phase_c_entity,
+        ]
+        if all(phase_entities):
+            if all(_entity_has_value(self.hass, e) for e in phase_entities):
+                total_kw = sum(
+                    _read_power_kw(self.hass, e) for e in phase_entities
+                )
+                return -total_kw
+            return 0.0
+        if self._grid_power_entity:
+            if _entity_has_value(self.hass, self._grid_power_entity):
+                return -_read_power_kw(self.hass, self._grid_power_entity)
+            return 0.0
+        if not self._export_signal_warned:
+            self._export_signal_warned = True
+            _LOGGER.warning(
+                "No grid power entities configured -- appliance surplus control "
+                "has no export signal and will keep every appliance off. "
+                "Configure per-phase or total grid power sensors in the EMS "
+                "settings."
+            )
+        return 0.0
+
+    def _read_battery_discharge_kw(self) -> float:
+        """Read battery discharge in kW (>= 0) for the BATT-17 guard.
+
+        The battery power entity is signed with positive = charging; only
+        discharge must be subtracted from export -- grid export driven by
+        arbitrage discharge is not solar surplus. Returns 0.0 when the
+        battery module is disabled, no entity is configured, or the
+        reading is unavailable.
+        """
+        if not self._battery_power_entity:
+            return 0.0
+        if not _entity_has_value(self.hass, self._battery_power_entity):
+            return 0.0
+        return max(0.0, -_read_power_kw(self.hass, self._battery_power_entity))
+
+    def _compute_headroom_amps(self) -> float | None:
+        """Compute fuse headroom available for new appliance turn-ons (APPL-06).
+
+        Returns:
+            float("inf") when no grid sensors are configured (admission
+            always passes); None when sensors are configured but currently
+            unavailable (no new turn-ons this tick); otherwise
+            fuse_rating - safety_buffer - ceil(worst-case phase amps),
+            math.ceil matching the Easee charger's conservative convention.
+        """
+        phase_entities = [
+            self._grid_phase_a_entity,
+            self._grid_phase_b_entity,
+            self._grid_phase_c_entity,
+        ]
+        if all(phase_entities):
+            available = all(
+                _entity_has_value(self.hass, e) for e in phase_entities
+            )
+        elif self._grid_power_entity:
+            available = _entity_has_value(self.hass, self._grid_power_entity)
+        else:
+            return float("inf")
+
+        # Read through the shared reader even when unavailable so its
+        # rate-limited warning and Repairs issue track the outage.
+        l_current, sensor_blocked = self._fuse_reader.read_grid_current_amps()
+        if not available or sensor_blocked:
+            return None
+        return (
+            self._fuse_rating_amps
+            - self._safety_buffer_amps
+            - math.ceil(l_current)
+        )
+
+    async def _send_switch_command(
+        self, config: ApplianceConfig, turn_on: bool
+    ) -> None:
+        """Send (or suppress) one appliance turn_on/turn_off command.
+
+        Uses the domain-agnostic homeassistant.turn_on/turn_off services --
+        switch.turn_on on an input_boolean actuator would be a silent
+        no-op. Goes through the same build_command_decision observe-only
+        choke point (CORE-14) as every other send site; the dry-run or
+        sent-command message is recorded per appliance for the status
+        sensor.
+
+        Args:
+            config: The appliance whose actuator to command.
+            turn_on: True to turn the actuator on, False to turn it off.
+        """
+        service = "turn_on" if turn_on else "turn_off"
+        decision = build_command_decision(
+            control_enabled=self._is_control_enabled(),
+            service_domain="homeassistant",
+            service_name=service,
+            entity_id=config.switch_entity,
+            value="on" if turn_on else "off",
+        )
+        if not decision.should_send:
+            _LOGGER.info(decision.dry_run_message)
+            self._messages[config.subentry_id] = decision.dry_run_message
+            return
+
+        _LOGGER.info(
+            "Appliance %s: calling homeassistant.%s on %s",
+            config.name,
+            service,
+            config.switch_entity,
+        )
+        await self.hass.services.async_call(
+            "homeassistant",
+            service,
+            {"entity_id": config.switch_entity},
+            blocking=True,
+        )
+        self._messages[config.subentry_id] = (
+            f"Called homeassistant.{service} on {config.switch_entity}"
+        )
+
+
 @dataclass
 class EnergyManagerData:
     """Runtime data stored on the config entry.
@@ -3402,6 +3881,7 @@ class EnergyManagerData:
     ems_coordinator: EMSCoordinator | None = None
     car_coordinators: dict[str, CarChargingCoordinator] = field(default_factory=dict)
     easee_coordinator: EaseeCoordinator | None = None
+    appliance_coordinator: ApplianceCoordinator | None = None
     modules_enabled: dict[str, bool] = field(default_factory=dict)
     # Master "Device control" switch state (CORE-14). False = observe-only:
     # coordinators still compute and publish decisions, but no outgoing

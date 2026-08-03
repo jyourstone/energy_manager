@@ -16,11 +16,13 @@
         "description": "Choose which energy management modules to enable. You can change this later.",
         "data": {
           "battery_enabled": "Home Battery",
-          "ev_enabled": "EV Charging"
+          "ev_enabled": "EV Charging",
+          "appliances_enabled": "Solar Appliances"
         },
         "data_description": {
           "battery_enabled": "Enable home battery charge/discharge scheduling based on electricity prices.",
-          "ev_enabled": "Enable EV charging optimization with price-aware scheduling."
+          "ev_enabled": "Enable EV charging optimization with price-aware scheduling.",
+          "appliances_enabled": "Enable switching selected appliances on and off based on solar surplus (grid export)."
         }
       },
       "battery": {
@@ -205,6 +207,81 @@
           }
         }
       }
+    },
+    "appliance": {
+      "entry_type": "Appliance",
+      "initiate_flow": {
+        "user": "Add appliance"
+      },
+      "error": {
+        "off_must_be_below_on": "The off threshold must be lower than the on threshold."
+      },
+      "step": {
+        "user": {
+          "title": "Add Appliance",
+          "description": "Configure an appliance to run on solar surplus. It is switched on when grid export exceeds its rated power with margin, and off when the surplus disappears.",
+          "data": {
+            "name": "Appliance name",
+            "switch_entity": "Actuator switch",
+            "rated_power_w": "Rated power (W)",
+            "phases": "Phases",
+            "power_sensor_entity": "Power sensor",
+            "priority": "Priority",
+            "on_threshold_pct": "On threshold (% of rated power)",
+            "off_threshold_pct": "Off threshold (% of rated power)",
+            "on_sustain_minutes": "On sustain time (min)",
+            "off_sustain_minutes": "Off sustain time (min)",
+            "min_on_minutes": "Minimum on time (min)",
+            "min_off_minutes": "Minimum off time (min)"
+          },
+          "data_description": {
+            "name": "A friendly name for this appliance (e.g., 'Water heater').",
+            "switch_entity": "The switch or input boolean Energy Manager toggles to control this appliance (e.g. a smart plug or a Power Saver override switch).",
+            "rated_power_w": "Expected power draw of the appliance when running, in watts.",
+            "phases": "Number of phases the appliance draws on (1 or 3). Used to convert rated power to per-phase current for the fuse admission check.",
+            "power_sensor_entity": "Optional: sensor measuring the appliance's actual power draw. If set, the measured draw is used instead of the rated power when crediting the appliance's consumption back to the surplus pool.",
+            "priority": "Allocation priority when several appliances compete for the surplus (1 = highest). Ties are broken by the order the appliances were added.",
+            "on_threshold_pct": "Turn on when the available surplus reaches this percentage of the rated power, sustained.",
+            "off_threshold_pct": "Turn off when the available surplus stays below this percentage of the rated power, sustained.",
+            "on_sustain_minutes": "How long the surplus must persist before the appliance is turned on (filters passing clouds).",
+            "off_sustain_minutes": "How long the surplus must be gone before the appliance is turned off.",
+            "min_on_minutes": "Once turned on, the appliance stays on at least this long (anti-short-cycling).",
+            "min_off_minutes": "Once turned off, the appliance stays off at least this long (anti-short-cycling)."
+          }
+        },
+        "reconfigure": {
+          "title": "Edit Appliance",
+          "description": "Update the configuration for this appliance.",
+          "data": {
+            "name": "Appliance name",
+            "switch_entity": "Actuator switch",
+            "rated_power_w": "Rated power (W)",
+            "phases": "Phases",
+            "power_sensor_entity": "Power sensor",
+            "priority": "Priority",
+            "on_threshold_pct": "On threshold (% of rated power)",
+            "off_threshold_pct": "Off threshold (% of rated power)",
+            "on_sustain_minutes": "On sustain time (min)",
+            "off_sustain_minutes": "Off sustain time (min)",
+            "min_on_minutes": "Minimum on time (min)",
+            "min_off_minutes": "Minimum off time (min)"
+          },
+          "data_description": {
+            "name": "A friendly name for this appliance (e.g., 'Water heater').",
+            "switch_entity": "The switch or input boolean Energy Manager toggles to control this appliance (e.g. a smart plug or a Power Saver override switch).",
+            "rated_power_w": "Expected power draw of the appliance when running, in watts.",
+            "phases": "Number of phases the appliance draws on (1 or 3). Used to convert rated power to per-phase current for the fuse admission check.",
+            "power_sensor_entity": "Optional: sensor measuring the appliance's actual power draw. If set, the measured draw is used instead of the rated power when crediting the appliance's consumption back to the surplus pool.",
+            "priority": "Allocation priority when several appliances compete for the surplus (1 = highest). Ties are broken by the order the appliances were added.",
+            "on_threshold_pct": "Turn on when the available surplus reaches this percentage of the rated power, sustained.",
+            "off_threshold_pct": "Turn off when the available surplus stays below this percentage of the rated power, sustained.",
+            "on_sustain_minutes": "How long the surplus must persist before the appliance is turned on (filters passing clouds).",
+            "off_sustain_minutes": "How long the surplus must be gone before the appliance is turned off.",
+            "min_on_minutes": "Once turned on, the appliance stays on at least this long (anti-short-cycling).",
+            "min_off_minutes": "Once turned off, the appliance stays off at least this long (anti-short-cycling)."
+          }
+        }
+      }
     }
   },
   "options": {
@@ -224,11 +301,13 @@
         "description": "Choose which energy management modules to enable. You can change this later.",
         "data": {
           "battery_enabled": "Home Battery",
-          "ev_enabled": "EV Charging"
+          "ev_enabled": "EV Charging",
+          "appliances_enabled": "Solar Appliances"
         },
         "data_description": {
           "battery_enabled": "Enable home battery charge/discharge scheduling based on electricity prices.",
-          "ev_enabled": "Enable EV charging optimization with price-aware scheduling."
+          "ev_enabled": "Enable EV charging optimization with price-aware scheduling.",
+          "appliances_enabled": "Enable switching selected appliances on and off based on solar surplus (grid export)."
         }
       },
       "battery": {
@@ -390,6 +469,9 @@
       },
       "forecast_accuracy": {
         "name": "Solar Forecast Accuracy"
+      },
+      "appliance_status": {
+        "name": "Status"
       }
     },
     "number": {
@@ -438,6 +520,9 @@
       },
       "ev_charger_force_charging": {
         "name": "EV charger force charging"
+      },
+      "appliance_em_control": {
+        "name": "EM control"
       }
     }
   },

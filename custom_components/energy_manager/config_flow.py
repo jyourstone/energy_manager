@@ -2,13 +2,14 @@
 
 Multi-step wizard:
   Step 1 (user)    — Nordpool sensor selection with auto-detection
-  Step 2 (modules) — Enable/disable Home Battery and EV Charging modules
+  Step 2 (modules) — Enable/disable Home Battery, EV Charging and Appliances modules
   Step 3 (battery) — Home Battery entity config (conditional, auto-detected SigenStor)
   Step 3b (ems)    — EMS control config: fuse rating + control entities (after battery)
   Step 4 (ev)      — EV Charging entity config (conditional, auto-detected Easee)
 
 Plus:
   - Car subentry flow for per-car EV configuration
+  - Appliance subentry flow for per-appliance solar-surplus control
   - Options flow (CORE-05): mirrors the config flow's step structure
     (init/price -> modules -> battery -> ems -> ev) so any setting can be
     revisited later. Car subentries have their own reconfigure flow and are
@@ -54,6 +55,19 @@ from .const import (
     CHARGE_POWER_STEP_KW,
     CONF_AMP_DECREASE_DELAY,
     CONF_AMP_INCREASE_DELAY,
+    CONF_APPLIANCE_MIN_OFF_MINUTES,
+    CONF_APPLIANCE_MIN_ON_MINUTES,
+    CONF_APPLIANCE_NAME,
+    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
+    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
+    CONF_APPLIANCE_ON_THRESHOLD_PCT,
+    CONF_APPLIANCE_PHASES,
+    CONF_APPLIANCE_POWER_SENSOR_ENTITY,
+    CONF_APPLIANCE_PRIORITY,
+    CONF_APPLIANCE_RATED_POWER_W,
+    CONF_APPLIANCE_SWITCH_ENTITY,
+    CONF_APPLIANCES_ENABLED,
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
@@ -109,6 +123,14 @@ from .const import (
     CONFIG_VERSION,
     DEFAULT_AMP_DECREASE_DELAY_SECONDS,
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
+    DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
+    DEFAULT_APPLIANCE_MIN_ON_MINUTES,
+    DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
+    DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
+    DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_PHASES,
+    DEFAULT_APPLIANCE_PRIORITY,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
@@ -176,6 +198,7 @@ from .const import (
     MIN_SOLAR_START_THRESHOLD_KW,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
     SENSOR_FAIL_BEHAVIOR_BLOCK,
+    SUBENTRY_TYPE_APPLIANCE,
     SUBENTRY_TYPE_CAR,
 )
 from .nordpool_adapter import detect_nordpool_type, find_all_nordpool_sensors
@@ -240,11 +263,15 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[ConfigSubentryFlow]]:
         """Return subentry types supported by this integration.
 
-        Car subentry is only available when the EV module is enabled.
+        Car subentry is only available when the EV module is enabled;
+        appliance subentry only when the appliances module is enabled.
         """
+        types: dict[str, type[ConfigSubentryFlow]] = {}
         if config_entry.options.get(CONF_EV_ENABLED):
-            return {SUBENTRY_TYPE_CAR: CarSubentryFlowHandler}
-        return {}
+            types[SUBENTRY_TYPE_CAR] = CarSubentryFlowHandler
+        if config_entry.options.get(CONF_APPLIANCES_ENABLED):
+            types[SUBENTRY_TYPE_APPLIANCE] = ApplianceSubentryFlowHandler
+        return types
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -294,12 +321,15 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_modules(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 2: Module Selection — enable/disable Home Battery and EV Charging."""
+        """Step 2: Module Selection — enable/disable Home Battery, EV Charging and Appliances."""
         if user_input is not None:
             self._data[CONF_BATTERY_ENABLED] = user_input.get(
                 CONF_BATTERY_ENABLED, False
             )
             self._data[CONF_EV_ENABLED] = user_input.get(CONF_EV_ENABLED, False)
+            self._data[CONF_APPLIANCES_ENABLED] = user_input.get(
+                CONF_APPLIANCES_ENABLED, False
+            )
 
             if self._data[CONF_BATTERY_ENABLED]:
                 return await self.async_step_battery()
@@ -315,6 +345,9 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_BATTERY_ENABLED, default=False
                 ): BooleanSelector(),
                 vol.Optional(CONF_EV_ENABLED, default=False): BooleanSelector(),
+                vol.Optional(
+                    CONF_APPLIANCES_ENABLED, default=False
+                ): BooleanSelector(),
             }
         )
 
@@ -905,6 +938,7 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         options = {
             CONF_BATTERY_ENABLED: self._data.get(CONF_BATTERY_ENABLED, False),
             CONF_EV_ENABLED: self._data.get(CONF_EV_ENABLED, False),
+            CONF_APPLIANCES_ENABLED: self._data.get(CONF_APPLIANCES_ENABLED, False),
             CONF_SOC_ENTITY: self._data.get(CONF_SOC_ENTITY, ""),
             CONF_BATTERY_POWER_ENTITY: self._data.get(
                 CONF_BATTERY_POWER_ENTITY, ""
@@ -1098,12 +1132,15 @@ class EnergyManagerOptionsFlow(OptionsFlow):
     async def async_step_modules(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 2: Module Selection — enable/disable Home Battery and EV Charging."""
+        """Step 2: Module Selection — enable/disable Home Battery, EV Charging and Appliances."""
         if user_input is not None:
             self._options[CONF_BATTERY_ENABLED] = user_input.get(
                 CONF_BATTERY_ENABLED, False
             )
             self._options[CONF_EV_ENABLED] = user_input.get(CONF_EV_ENABLED, False)
+            self._options[CONF_APPLIANCES_ENABLED] = user_input.get(
+                CONF_APPLIANCES_ENABLED, False
+            )
 
             if self._options[CONF_BATTERY_ENABLED]:
                 return await self.async_step_battery()
@@ -1122,6 +1159,10 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_EV_ENABLED,
                     default=self._options.get(CONF_EV_ENABLED, False),
+                ): BooleanSelector(),
+                vol.Optional(
+                    CONF_APPLIANCES_ENABLED,
+                    default=self._options.get(CONF_APPLIANCES_ENABLED, False),
                 ): BooleanSelector(),
             }
         )
@@ -1794,4 +1835,212 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=schema,
+        )
+
+
+class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
+    """Handle subentry flow for adding and modifying an appliance."""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """User flow to add a new appliance."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            # An inverted hysteresis band (off >= on) guarantees perpetual
+            # on/off cycling -- exactly what APPL-05 exists to prevent.
+            if (
+                user_input[CONF_APPLIANCE_OFF_THRESHOLD_PCT]
+                >= user_input[CONF_APPLIANCE_ON_THRESHOLD_PCT]
+            ):
+                errors[CONF_APPLIANCE_OFF_THRESHOLD_PCT] = "off_must_be_below_on"
+            else:
+                return self.async_create_entry(
+                    title=user_input[CONF_APPLIANCE_NAME],
+                    data=user_input,
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_APPLIANCE_NAME): TextSelector(),
+                vol.Required(CONF_APPLIANCE_SWITCH_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain=["switch", "input_boolean"])
+                ),
+                vol.Required(CONF_APPLIANCE_RATED_POWER_W): NumberSelector(
+                    NumberSelectorConfig(
+                        min=100, max=25000, step=1, unit_of_measurement="W"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_PHASES, default=DEFAULT_APPLIANCE_PHASES
+                ): NumberSelector(NumberSelectorConfig(min=1, max=3, step=2)),
+                vol.Optional(CONF_APPLIANCE_POWER_SENSOR_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor", device_class="power")
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_PRIORITY, default=DEFAULT_APPLIANCE_PRIORITY
+                ): NumberSelector(NumberSelectorConfig(min=1, max=10, step=1)),
+                vol.Optional(
+                    CONF_APPLIANCE_ON_THRESHOLD_PCT,
+                    default=DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=50, max=300, step=1, unit_of_measurement="%"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+                    default=DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=150, step=1, unit_of_measurement="%"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
+                    default=DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
+                    default=DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_MIN_ON_MINUTES,
+                    default=DEFAULT_APPLIANCE_MIN_ON_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_MIN_OFF_MINUTES,
+                    default=DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+            }
+        )
+
+        if user_input is not None:
+            # Re-fill the rejected form with what the user entered.
+            schema = _add_suggested_values(schema, user_input)
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """User flow to modify an existing appliance."""
+        subentry = self._get_reconfigure_subentry()
+        existing_data = dict(subentry.data)
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            # An inverted hysteresis band (off >= on) guarantees perpetual
+            # on/off cycling -- exactly what APPL-05 exists to prevent.
+            if (
+                user_input[CONF_APPLIANCE_OFF_THRESHOLD_PCT]
+                >= user_input[CONF_APPLIANCE_ON_THRESHOLD_PCT]
+            ):
+                errors[CONF_APPLIANCE_OFF_THRESHOLD_PCT] = "off_must_be_below_on"
+            else:
+                return self.async_create_entry(
+                    title=user_input[CONF_APPLIANCE_NAME],
+                    data=user_input,
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_APPLIANCE_NAME): TextSelector(),
+                vol.Required(CONF_APPLIANCE_SWITCH_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain=["switch", "input_boolean"])
+                ),
+                vol.Required(CONF_APPLIANCE_RATED_POWER_W): NumberSelector(
+                    NumberSelectorConfig(
+                        min=100, max=25000, step=1, unit_of_measurement="W"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_PHASES, default=DEFAULT_APPLIANCE_PHASES
+                ): NumberSelector(NumberSelectorConfig(min=1, max=3, step=2)),
+                vol.Optional(CONF_APPLIANCE_POWER_SENSOR_ENTITY): EntitySelector(
+                    EntitySelectorConfig(domain="sensor", device_class="power")
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_PRIORITY, default=DEFAULT_APPLIANCE_PRIORITY
+                ): NumberSelector(NumberSelectorConfig(min=1, max=10, step=1)),
+                vol.Optional(
+                    CONF_APPLIANCE_ON_THRESHOLD_PCT,
+                    default=DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=50, max=300, step=1, unit_of_measurement="%"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+                    default=DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=150, step=1, unit_of_measurement="%"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
+                    default=DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
+                    default=DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_MIN_ON_MINUTES,
+                    default=DEFAULT_APPLIANCE_MIN_ON_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+                vol.Optional(
+                    CONF_APPLIANCE_MIN_OFF_MINUTES,
+                    default=DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=720, step=1, unit_of_measurement="min"
+                    )
+                ),
+            }
+        )
+
+        # Pre-fill with existing subentry data (or the rejected user input)
+        schema = _add_suggested_values(
+            schema, user_input if user_input is not None else existing_data
+        )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=schema,
+            errors=errors,
         )
