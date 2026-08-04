@@ -593,11 +593,13 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
 class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
     """Diagnostic sensor for the battery charge limit EM commands (EMS-layer).
 
-    State is the ESS max-charging-limit value the EMS controller sends to
-    the battery (number.set_value on the configured charge limit entity) --
-    the fuse-limited power the battery is currently allowed to charge with,
+    State is the ESS max-charging-limit TARGET the EMS controller commands
+    (number.set_value on the configured charge limit entity) -- the
+    fuse-limited power the battery is currently allowed to charge with,
     which during PV-opportunistic charging tracks live solar production.
-    In observe-only mode (CORE-14) this is the value that WOULD be sent.
+    In observe-only mode (CORE-14) this is the value that WOULD be sent;
+    whether the last command was actually delivered and verified is
+    exposed via the command_verified and dry_run attributes.
     """
 
     _attr_translation_key = "battery_commanded_charge_limit"
@@ -634,8 +636,10 @@ class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
         """Return context for the commanded limit.
 
         Exposes whether the limit is currently tracking PV production
-        (pv_charging_active) and whether it was actually sent or only
-        computed (dry_run, CORE-14).
+        (pv_charging_active), whether commands are suppressed entirely
+        (dry_run, CORE-14), and whether the last sent command was verified
+        against the target entity (command_verified) -- so a computed
+        value can never silently masquerade as an applied one.
         """
         data: EMSData | None = self.coordinator.data
         if data is None:
@@ -643,6 +647,7 @@ class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
         return {
             "pv_charging_active": data.pv_charging_active,
             "dry_run": data.dry_run,
+            "command_verified": data.command_verified,
         }
 
 
