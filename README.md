@@ -113,7 +113,8 @@ With Solar Appliances enabled, each appliance is likewise added as a **subentry*
 | Battery Schedule | Full multi-cycle charge/discharge schedule with status and attributes |
 | Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
 | Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
-| Battery EMS status | Current SigenStor EMS mode and fuse headroom |
+| Battery EMS status | Current SigenStor EMS mode (shows `pv_charging` while the battery absorbs solar) and fuse headroom |
+| Battery commanded charge limit *(diagnostic)* | Charge power limit EM sends to the battery (tracks live PV during solar charging; the would-be value in observe-only mode) |
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
 | EV charger status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
