@@ -216,7 +216,11 @@ from .forecast_accuracy import (
     restore_history,
     serialize_history,
 )
-from .nordpool_adapter import async_get_prices
+from .nordpool_adapter import (
+    DEFAULT_PRICE_UNIT,
+    async_get_prices,
+    derive_price_unit,
+)
 from .repairs import (
     ISSUE_CHARGE_LIMIT_WRONG_DOMAIN,
     ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN,
@@ -245,6 +249,7 @@ class PriceData:
     tomorrow: list[PriceSlot]
     current_price: float | None
     last_updated: datetime
+    price_unit: str = DEFAULT_PRICE_UNIT
 
 
 class PriceCoordinator(DataUpdateCoordinator[PriceData]):
@@ -312,14 +317,21 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
         today_slots = _convert_to_price_slots(raw_today)
         tomorrow_slots = _convert_to_price_slots(raw_tomorrow)
 
-        # Get current price from Nordpool sensor state
+        # Get current price and unit from Nordpool sensor state
         current_price = _get_current_price(self.hass, self._nordpool_entity)
+        nordpool_state = self.hass.states.get(self._nordpool_entity)
+        price_unit = (
+            derive_price_unit(nordpool_state.attributes)
+            if nordpool_state is not None
+            else DEFAULT_PRICE_UNIT
+        )
 
         return PriceData(
             today=today_slots,
             tomorrow=tomorrow_slots,
             current_price=current_price,
             last_updated=dt_util.utcnow(),
+            price_unit=price_unit,
         )
 
 

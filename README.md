@@ -47,7 +47,7 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 
 ## Features
 
-- **Nordpool price ingestion** — native Home Assistant Nordpool integration and the HACS Nordpool custom component are both supported and auto-detected
+- **Nordpool price ingestion** — native Home Assistant Nordpool integration and the HACS Nordpool custom component are both supported and auto-detected. All price entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR, ...) — no conversion, everything stays in your area's currency
 - **4-step config wizard with auto-detection** — scans your entity registry for Nordpool, SigenStor, Easee, and car integrations (Skoda Connect, VW We Connect) and pre-fills the setup form
 - **Home battery scheduling** — multi-cycle charge/discharge schedule based on configurable price thresholds, exposed as `number` entities that persist across restarts (`RestoreNumber`)
 - **EMS mode control** — sets the SigenStor EMS mode (command charging / max self-consumption / standby) to follow the computed schedule, with per-phase fuse protection and verification that commands actually took effect

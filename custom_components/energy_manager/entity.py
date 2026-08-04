@@ -12,9 +12,43 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .const import CONF_CAR_NAME, DOMAIN
+from .nordpool_adapter import DEFAULT_PRICE_UNIT
 
 if TYPE_CHECKING:
     from .coordinator import ApplianceCoordinator, CarChargingCoordinator
+
+
+def get_price_unit(entry: ConfigEntry) -> str:
+    """Return the active price unit (e.g. "SEK/kWh") for price-valued entities.
+
+    Read from the price coordinator's last update, which derives it from
+    the configured Nordpool sensor -- so NOK/DKK/EUR areas show their own
+    currency. Falls back to SEK/kWh before the first price refresh.
+
+    Args:
+        entry: The integration's config entry.
+
+    Returns:
+        A "<CURRENCY>/kWh" unit string.
+    """
+    runtime_data = getattr(entry, "runtime_data", None)
+    price_coordinator = getattr(runtime_data, "price_coordinator", None)
+    data = getattr(price_coordinator, "data", None)
+    return getattr(data, "price_unit", None) or DEFAULT_PRICE_UNIT
+
+
+class PriceUnitEntity:
+    """Mixin: dynamic price unit from the configured Nordpool sensor.
+
+    Replaces hardcoded SEK/kWh units on price-valued sensor and number
+    entities. Mix in BEFORE the platform entity base class so this
+    property wins over the _attr_-based default implementation.
+    """
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        """Return the price unit derived from the Nordpool sensor."""
+        return get_price_unit(self.coordinator.config_entry)  # type: ignore[attr-defined]
 
 
 class EnergyManagerEntity(CoordinatorEntity):

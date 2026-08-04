@@ -56,7 +56,7 @@ from .const import (
     TARGET_SOC_STEP_PCT,
 )
 from .coordinator import BatteryScheduleCoordinator, EnergyManagerConfigEntry
-from .entity import CarEntity, EnergyManagerEntity
+from .entity import CarEntity, EnergyManagerEntity, PriceUnitEntity
 
 
 async def async_setup_entry(
@@ -102,7 +102,7 @@ async def async_setup_entry(
         )
 
 
-class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
+class BatteryChargeThreshold(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the battery charge price threshold.
 
     When the electricity price is at or below the peak's max price minus
@@ -117,7 +117,6 @@ class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
-    _attr_native_unit_of_measurement = "SEK/kWh"
 
     _default_value = DEFAULT_CHARGE_THRESHOLD
 
@@ -153,7 +152,7 @@ class BatteryChargeThreshold(EnergyManagerEntity, RestoreNumber):
         await self.coordinator.async_request_refresh()
 
 
-class BatteryDischargeThreshold(EnergyManagerEntity, RestoreNumber):
+class BatteryDischargeThreshold(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the battery discharge price threshold.
 
     Price spread above the horizon's cheapest slot at or above which the
@@ -170,7 +169,6 @@ class BatteryDischargeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
-    _attr_native_unit_of_measurement = "SEK/kWh"
 
     _default_value = DEFAULT_DISCHARGE_THRESHOLD
 
@@ -269,7 +267,7 @@ class BatteryMaxChargePower(EnergyManagerEntity, RestoreNumber):
         await self.coordinator.async_request_refresh()
 
 
-class BatteryCycleCost(EnergyManagerEntity, RestoreNumber):
+class BatteryCycleCost(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the battery's per-cycle wear cost (BATT-14).
 
     When set above 0, this overrides the manual discharge price threshold:
@@ -286,7 +284,6 @@ class BatteryCycleCost(EnergyManagerEntity, RestoreNumber):
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
-    _attr_native_unit_of_measurement = "SEK/kWh"
 
     _default_value = DEFAULT_BATTERY_CYCLE_COST
 
@@ -325,7 +322,7 @@ class BatteryCycleCost(EnergyManagerEntity, RestoreNumber):
         await self.coordinator.async_request_refresh()
 
 
-class GridTransferFee(EnergyManagerEntity, RestoreNumber):
+class GridTransferFee(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the grid transfer fee (BATT-14).
 
     Used together with battery_cycle_cost to derive the effective discharge
@@ -340,7 +337,6 @@ class GridTransferFee(EnergyManagerEntity, RestoreNumber):
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
-    _attr_native_unit_of_measurement = "SEK/kWh"
 
     _default_value = DEFAULT_GRID_TRANSFER_FEE
 
@@ -379,7 +375,7 @@ class GridTransferFee(EnergyManagerEntity, RestoreNumber):
         await self.coordinator.async_request_refresh()
 
 
-class ElectricityCompanyFee(EnergyManagerEntity, RestoreNumber):
+class ElectricityCompanyFee(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the electricity company's fee (BATT-14).
 
     Used only by the actual electricity price sensor (spot + grid_transfer_fee
@@ -394,7 +390,6 @@ class ElectricityCompanyFee(EnergyManagerEntity, RestoreNumber):
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_PRICE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
-    _attr_native_unit_of_measurement = "SEK/kWh"
 
     _default_value = DEFAULT_ELECTRICITY_COMPANY_FEE
 
@@ -606,7 +601,7 @@ class CarMaxChargePower(CarEntity, RestoreNumber):
         self.async_write_ha_state()
         self.coordinator.max_charge_power_kw = value
         await self.coordinator.async_request_refresh()
-class ExportSpikeThreshold(EnergyManagerEntity, RestoreNumber):
+class ExportSpikeThreshold(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the BATT-17 export spike threshold.
 
     Price spread above the period's cheapest upcoming hour at or above
@@ -621,7 +616,6 @@ class ExportSpikeThreshold(EnergyManagerEntity, RestoreNumber):
     _attr_native_min_value = MIN_PRICE_THRESHOLD
     _attr_native_max_value = MAX_EXPORT_SPIKE_THRESHOLD
     _attr_native_step = PRICE_THRESHOLD_STEP
-    _attr_native_unit_of_measurement = "SEK/kWh"
 
     _default_value = 0.0
 

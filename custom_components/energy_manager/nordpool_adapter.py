@@ -19,6 +19,31 @@ from .const import NORDPOOL_TYPE_HACS, NORDPOOL_TYPE_NATIVE
 
 _LOGGER = logging.getLogger(__name__)
 
+DEFAULT_PRICE_UNIT = "SEK/kWh"
+
+
+def derive_price_unit(attributes: dict) -> str:
+    """Derive the price unit (e.g. "SEK/kWh") from a Nordpool sensor's attributes.
+
+    Prefers the sensor's own unit_of_measurement when it is a per-kWh unit
+    (native and HACS Nordpool both report e.g. "EUR/kWh"); falls back to the
+    HACS integration's currency attribute; defaults to SEK/kWh so existing
+    installs are unaffected when neither is present.
+
+    Args:
+        attributes: The Nordpool sensor's state attributes.
+
+    Returns:
+        A "<CURRENCY>/kWh" unit string.
+    """
+    unit = attributes.get("unit_of_measurement")
+    if isinstance(unit, str) and unit.endswith("/kWh"):
+        return unit
+    currency = attributes.get("currency")
+    if isinstance(currency, str) and currency:
+        return f"{currency}/kWh"
+    return DEFAULT_PRICE_UNIT
+
 
 def detect_nordpool_type(hass: HomeAssistant, entity_id: str) -> str:
     """Detect whether an entity is a HACS Nord Pool or native HA Nord Pool sensor.

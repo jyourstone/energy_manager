@@ -45,7 +45,12 @@ from .coordinator import (
     EnergyManagerConfigEntry,
     PriceData,
 )
-from .entity import ApplianceEntity, CarEntity, EnergyManagerEntity
+from .entity import (
+    ApplianceEntity,
+    CarEntity,
+    EnergyManagerEntity,
+    PriceUnitEntity,
+)
 from .forecast_accuracy import (
     mean_ratio,
     serialize_history,
@@ -128,7 +133,7 @@ async def async_setup_entry(
             )
 
 
-class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
+class EnergyManagerPriceSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntity):
     """Sensor showing current electricity price.
 
     State is the current electricity price in SEK/kWh. Full hourly price
@@ -137,7 +142,6 @@ class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
 
     _attr_translation_key = "electricity_price"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -362,7 +366,7 @@ class NextDischargeSensor(EnergyManagerEntity, SensorEntity):
         return {}
 
 
-class ActualPriceSensor(EnergyManagerEntity, SensorEntity):
+class ActualPriceSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntity):
     """Sensor showing the actual electricity price incl. fees (BATT-14, CORE-11).
 
     State is spot price + grid_transfer_fee + electricity_company_fee
@@ -373,7 +377,6 @@ class ActualPriceSensor(EnergyManagerEntity, SensorEntity):
 
     _attr_translation_key = "actual_electricity_price"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -463,7 +466,7 @@ class ForecastAccuracySensor(EnergyManagerEntity, SensorEntity):
         }
 
 
-class EffectiveDischargeThresholdSensor(EnergyManagerEntity, SensorEntity):
+class EffectiveDischargeThresholdSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntity):
     """Diagnostic sensor for the discharge spread threshold actually in use.
 
     State is the spread threshold the scheduler actually uses. When the
@@ -476,7 +479,6 @@ class EffectiveDischargeThresholdSensor(EnergyManagerEntity, SensorEntity):
     _attr_translation_key = "battery_effective_discharge_threshold"
     _attr_icon = "mdi:battery-arrow-down-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
     def __init__(
