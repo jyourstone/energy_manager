@@ -598,8 +598,8 @@ class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
     fuse-limited power the battery is currently allowed to charge with,
     which during PV-opportunistic charging tracks live solar production.
     In observe-only mode (CORE-14) this is the value that WOULD be sent;
-    whether the last command was actually delivered and verified is
-    exposed via the command_verified and dry_run attributes.
+    whether the current limit has actually reached the battery is exposed
+    via the charge_limit_delivered and dry_run attributes.
     """
 
     _attr_translation_key = "battery_commanded_charge_limit"
@@ -637,9 +637,10 @@ class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
 
         Exposes whether the limit is currently tracking PV production
         (pv_charging_active), whether commands are suppressed entirely
-        (dry_run, CORE-14), and whether the last sent command was verified
-        against the target entity (command_verified) -- so a computed
-        value can never silently masquerade as an applied one.
+        (dry_run, CORE-14), and whether the current limit was actually
+        sent to the charge limit entity (charge_limit_delivered -- False
+        when the send was skipped or failed) -- so a computed value can
+        never silently masquerade as an applied one.
         """
         data: EMSData | None = self.coordinator.data
         if data is None:
@@ -647,7 +648,7 @@ class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
         return {
             "pv_charging_active": data.pv_charging_active,
             "dry_run": data.dry_run,
-            "command_verified": data.command_verified,
+            "charge_limit_delivered": data.charge_limit_delivered,
         }
 
 

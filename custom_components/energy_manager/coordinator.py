@@ -485,6 +485,11 @@ class EMSData:
         export_limit_kw: Fuse-capped export discharge limit in kW while an
             export slot is active and the reserve-SOC floor is clear; None
             otherwise.
+        charge_limit_delivered: Whether the current charge_limit_kw has
+            actually been sent to the charge limit entity -- False when the
+            send was skipped or failed (unconfigured/wrong-domain/unavailable
+            entity, observe-only suppression). command_verified only covers
+            EMS-mode verification, so it cannot stand in for this.
     """
 
     current_mode: str
@@ -501,6 +506,7 @@ class EMSData:
     discharge_allowed: bool = True
     discharge_gate_reason: str = ""
     export_limit_kw: float | None = None
+    charge_limit_delivered: bool = False
 
 
 class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
@@ -1980,6 +1986,10 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             self._last_sent_mode = result.target_mode
         if limit_sent:
             self._last_charge_limit = result.charge_limit_kw
+        # The computed limit is only "delivered" when it matches the last
+        # successfully sent value -- an unchanged limit stays delivered
+        # without a re-send; a skipped/failed send leaves it undelivered.
+        charge_limit_delivered = self._last_charge_limit == result.charge_limit_kw
 
         # 11. Check pending verification
         command_verified = self._check_verification()
@@ -2000,6 +2010,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             discharge_allowed=schedule_data.discharge_allowed,
             discharge_gate_reason=schedule_data.discharge_gate_reason,
             export_limit_kw=export_limit_kw,
+            charge_limit_delivered=charge_limit_delivered,
         )
 
     def _is_control_enabled(self) -> bool:
