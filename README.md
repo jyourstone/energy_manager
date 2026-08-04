@@ -110,7 +110,7 @@ With Solar Appliances enabled, each appliance is likewise added as a **subentry*
 | Sensor | Description |
 |--------|--------------|
 | Electricity Price | Current Nordpool price |
-| Battery status | Live battery state (`self_consumption` / `solar_charging` / `grid_charging` / `discharging` / `exporting` / `paused_car_priority`) -- never claims an action that is not physically happening. Attributes carry the full schedule, EMS mode, charge limit, fuse headroom, and gate reasons |
+| Battery status | Live battery state (`self_consumption` / `holding` / `solar_charging` / `grid_charging` / `discharging` / `exporting` / `paused_car_priority`) -- what EM is driving the battery to do right now (`holding` = battery genuinely doing nothing, e.g. at night with discharge blocked). Attributes carry the full schedule, EMS mode, charge limit, fuse headroom, and gate reasons |
 | Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
 | Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
 | Battery commanded charge limit *(diagnostic)* | Charge power limit EM sends to the battery (tracks live PV during solar charging; the would-be value in observe-only mode) |

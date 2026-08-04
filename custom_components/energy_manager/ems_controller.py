@@ -616,16 +616,20 @@ def derive_battery_status(
     car_override_active: bool,
     export_limit_kw: float | None,
     discharge_allowed: bool,
+    battery_power_kw: float | None = None,
 ) -> str:
     """Derive the single live battery status for the Battery status sensor.
 
     Merges the price plan's current slot with the live EMS layer into one
-    honest state: the sensor must never claim an action that is not
-    physically happening. A scheduled discharge whose gate is closed, or a
-    scheduled solar-charge slot with no actual surplus, therefore resolves
-    to "self_consumption" (the SigenStor's autonomous max-self-consumption
-    behavior -- covering house load / absorbing small surplus), with the
-    blocking reason exposed via sensor attributes instead.
+    state: what EM is currently DRIVING the battery to do (its live
+    decision). In observe-only mode this is the would-be action -- the
+    dry_run and command_verified sensor attributes tell whether commands
+    are actually being sent and applied. The state still never claims an
+    action EM has not decided on: a scheduled discharge whose gate is
+    closed, or a scheduled solar-charge slot with no actual surplus,
+    resolves to "self_consumption" (the SigenStor's autonomous
+    max-self-consumption behavior), with the blocking reason exposed via
+    sensor attributes.
 
     Args:
         plan_state: The schedule's current slot state (idle / grid_charging /
@@ -638,9 +642,15 @@ def derive_battery_status(
         export_limit_kw: Fuse-capped export limit while an export slot is
             active and the reserve floor is clear; None otherwise (BATT-17).
         discharge_allowed: Whether the discharge gate is currently open.
+        battery_power_kw: Measured battery power in kW (any sign
+            convention), or None when unavailable. Splits the fallback
+            state: |power| below the noise floor means the battery is
+            genuinely doing nothing (night, discharge blocked, house on
+            grid) -> "holding"; otherwise it is actively balancing solar
+            -> "self_consumption". None keeps "self_consumption".
 
     Returns:
-        One of: self_consumption, solar_charging, grid_charging,
+        One of: self_consumption, holding, solar_charging, grid_charging,
         discharging, exporting, paused_car_priority.
     """
     if car_override_active:
@@ -653,4 +663,6 @@ def derive_battery_status(
         return "exporting"
     if plan_state == "discharging" and discharge_allowed:
         return "discharging"
+    if battery_power_kw is not None and abs(battery_power_kw) < 0.05:
+        return "holding"
     return "self_consumption"

@@ -32,6 +32,7 @@ from .const import (
     CONF_APPLIANCE_ON_THRESHOLD_PCT,
     CONF_APPLIANCE_POWER_SENSOR_ENTITY,
     CONF_APPLIANCE_RATED_POWER_W,
+    CONF_BATTERY_POWER_ENTITY,
     DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
     DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
     SUBENTRY_TYPE_APPLIANCE,
@@ -185,13 +186,16 @@ class EnergyManagerPriceSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntit
 class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
     """Unified live battery status sensor.
 
-    State is what the battery is actually doing RIGHT NOW -- the merge of
-    the price plan (BatteryScheduleCoordinator) and the live EMS layer
+    State is what EM is currently driving the battery to do -- the merge
+    of the price plan (BatteryScheduleCoordinator) and the live EMS layer
     (EMSCoordinator) via derive_battery_status(): self_consumption /
     solar_charging / grid_charging / discharging / exporting /
-    paused_car_priority. The state never claims an action that is not
-    physically happening -- a scheduled discharge with a closed gate shows
-    self_consumption, with the reason in discharge_gate_reason.
+    paused_car_priority. In observe-only mode (CORE-14) this is the
+    would-be action; the dry_run and command_verified attributes tell
+    whether commands are actually sent and applied. The state never
+    claims an action EM has not decided on -- a scheduled discharge with
+    a closed gate shows self_consumption, with the reason in
+    discharge_gate_reason.
 
     Attributes merge both layers: the full schedule (max 48 slots), slot
     counts and calculation metadata from the plan, plus the EMS mode,
@@ -236,6 +240,27 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
         ems_coordinator = getattr(runtime_data, "ems_coordinator", None)
         return getattr(ems_coordinator, "data", None)
 
+    def _read_battery_power_kw(self) -> float | None:
+        """Read the configured battery power entity in kW, or None.
+
+        Splits "holding" (battery genuinely doing nothing) from
+        "self_consumption" (actively balancing solar). The reading is
+        assumed to be in kW unless the entity's unit is exactly "W".
+        """
+        entity_id = self._entry.options.get(CONF_BATTERY_POWER_ENTITY, "")
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            power = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        if state.attributes.get("unit_of_measurement", "") == "W":
+            power /= 1000.0
+        return power
+
     @property
     def native_value(self) -> str:
         """Return the live battery status."""
@@ -255,6 +280,7 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
             car_override_active=ems.car_override_active,
             export_limit_kw=ems.export_limit_kw,
             discharge_allowed=ems.discharge_allowed,
+            battery_power_kw=self._read_battery_power_kw(),
         )
 
     @property

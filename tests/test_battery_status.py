@@ -72,3 +72,25 @@ def test_export_slot_without_limit_not_exporting() -> None:
 def test_scheduled_solar_charge_without_surplus_is_honest() -> None:
     """BATT-16 solar_charging slot with no actual surplus -> self_consumption."""
     assert _status(plan_state="solar_charging") == "self_consumption"
+
+
+def test_night_holding_when_battery_power_near_zero() -> None:
+    """Discharge blocked, no PV, battery at ~0 W -> holding, not self_consumption."""
+    assert _status(battery_power_kw=0.01) == "holding"
+    assert _status(battery_power_kw=-0.04) == "holding"
+
+
+def test_active_balancing_stays_self_consumption() -> None:
+    assert _status(battery_power_kw=0.8) == "self_consumption"
+    assert _status(battery_power_kw=-1.2) == "self_consumption"
+
+
+def test_unknown_battery_power_keeps_self_consumption() -> None:
+    assert _status(battery_power_kw=None) == "self_consumption"
+
+
+def test_holding_never_overrides_active_states() -> None:
+    assert _status(battery_power_kw=0.0, ems_mode="command_charging") == (
+        "grid_charging"
+    )
+    assert _status(battery_power_kw=0.0, pv_charging_active=True) == "solar_charging"
