@@ -104,6 +104,7 @@ class TestExportTranslationKeys:
         ("number", "battery_charge_spread_threshold"),
         ("number", "battery_discharge_spread_threshold"),
         ("sensor", "battery_effective_discharge_threshold"),
+        ("sensor", "battery_commanded_charge_limit"),
         ("switch", "appliance_em_control"),
         ("sensor", "appliance_status"),
     )

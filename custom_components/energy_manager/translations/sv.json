@@ -449,6 +449,9 @@
       "battery_ems_status": {
         "name": "Batteriets EMS-status"
       },
+      "battery_commanded_charge_limit": {
+        "name": "Batteriets beordrade laddgräns"
+      },
       "battery_effective_discharge_threshold": {
         "name": "Batteriets effektiva urladdningströskel"
       },

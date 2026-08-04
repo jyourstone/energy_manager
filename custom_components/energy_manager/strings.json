@@ -449,6 +449,9 @@
       "battery_ems_status": {
         "name": "Battery EMS status"
       },
+      "battery_commanded_charge_limit": {
+        "name": "Battery commanded charge limit"
+      },
       "battery_effective_discharge_threshold": {
         "name": "Battery effective discharge threshold"
       },

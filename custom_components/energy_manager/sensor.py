@@ -45,7 +45,12 @@ from .coordinator import (
     EnergyManagerConfigEntry,
     PriceData,
 )
-from .entity import ApplianceEntity, CarEntity, EnergyManagerEntity
+from .entity import (
+    ApplianceEntity,
+    CarEntity,
+    EnergyManagerEntity,
+    PriceUnitEntity,
+)
 from .forecast_accuracy import (
     mean_ratio,
     serialize_history,
@@ -91,6 +96,7 @@ async def async_setup_entry(
     ems_coordinator = entry.runtime_data.ems_coordinator
     if ems_coordinator is not None:
         entities.append(EMSStatusSensor(ems_coordinator, entry))
+        entities.append(CommandedChargeLimitSensor(ems_coordinator, entry))
 
     # Easee charger status sensor (when the Easee coordinator exists)
     easee_coordinator = entry.runtime_data.easee_coordinator
@@ -127,7 +133,7 @@ async def async_setup_entry(
             )
 
 
-class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
+class EnergyManagerPriceSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntity):
     """Sensor showing current electricity price.
 
     State is the current electricity price in SEK/kWh. Full hourly price
@@ -136,7 +142,6 @@ class EnergyManagerPriceSensor(EnergyManagerEntity, SensorEntity):
 
     _attr_translation_key = "electricity_price"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -361,7 +366,7 @@ class NextDischargeSensor(EnergyManagerEntity, SensorEntity):
         return {}
 
 
-class ActualPriceSensor(EnergyManagerEntity, SensorEntity):
+class ActualPriceSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntity):
     """Sensor showing the actual electricity price incl. fees (BATT-14, CORE-11).
 
     State is spot price + grid_transfer_fee + electricity_company_fee
@@ -372,7 +377,6 @@ class ActualPriceSensor(EnergyManagerEntity, SensorEntity):
 
     _attr_translation_key = "actual_electricity_price"
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -462,7 +466,7 @@ class ForecastAccuracySensor(EnergyManagerEntity, SensorEntity):
         }
 
 
-class EffectiveDischargeThresholdSensor(EnergyManagerEntity, SensorEntity):
+class EffectiveDischargeThresholdSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntity):
     """Diagnostic sensor for the discharge spread threshold actually in use.
 
     State is the spread threshold the scheduler actually uses. When the
@@ -475,7 +479,6 @@ class EffectiveDischargeThresholdSensor(EnergyManagerEntity, SensorEntity):
     _attr_translation_key = "battery_effective_discharge_threshold"
     _attr_icon = "mdi:battery-arrow-down-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_native_unit_of_measurement = "SEK/kWh"
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -522,9 +525,11 @@ class EffectiveDischargeThresholdSensor(EnergyManagerEntity, SensorEntity):
 class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
     """Sensor showing EMS controller status.
 
-    State is the current EMS mode. Attributes expose fuse headroom,
-    target mode, override reason, verification status, and observe-only
-    (dry-run) status (CORE-14).
+    State is the current EMS mode, shown as "pv_charging" while the
+    PV-opportunistic override is active -- the generic command_charging
+    mode reads as grid charging when the battery is actually absorbing
+    solar. Attributes expose fuse headroom, target mode, override reason,
+    verification status, and observe-only (dry-run) status (CORE-14).
     """
 
     _attr_translation_key = "battery_ems_status"
@@ -546,10 +551,12 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        """Return the current EMS mode."""
+        """Return the current EMS mode, or "pv_charging" during PV charging."""
         data: EMSData | None = self.coordinator.data
         if data is None:
             return "unknown"
+        if data.pv_charging_active:
+            return "pv_charging"
         return data.current_mode
 
     @property
@@ -565,6 +572,7 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
         if data is None:
             return {}
         return {
+            "ems_mode": data.current_mode,
             "target_mode": data.target_mode,
             "charge_limit_kw": round(data.charge_limit_kw, 2),
             "fuse_headroom_amps": round(data.fuse_headroom_amps, 1),
@@ -579,6 +587,68 @@ class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
             "export_limit_kw": round(data.export_limit_kw, 2)
             if data.export_limit_kw is not None
             else None,
+        }
+
+
+class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for the battery charge limit EM commands (EMS-layer).
+
+    State is the ESS max-charging-limit TARGET the EMS controller commands
+    (number.set_value on the configured charge limit entity) -- the
+    fuse-limited power the battery is currently allowed to charge with,
+    which during PV-opportunistic charging tracks live solar production.
+    In observe-only mode (CORE-14) this is the value that WOULD be sent;
+    whether the current limit has actually reached the battery is exposed
+    via the charge_limit_delivered and dry_run attributes.
+    """
+
+    _attr_translation_key = "battery_commanded_charge_limit"
+    _attr_icon = "mdi:battery-arrow-up"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "kW"
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the commanded charge limit sensor.
+
+        Args:
+            coordinator: The EMSCoordinator providing EMS state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_battery_commanded_charge_limit"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the charge limit EM last computed for the battery."""
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return None
+        return data.charge_limit_kw
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return context for the commanded limit.
+
+        Exposes whether the limit is currently tracking PV production
+        (pv_charging_active), whether commands are suppressed entirely
+        (dry_run, CORE-14), and whether the current limit was actually
+        sent to the charge limit entity (charge_limit_delivered -- False
+        when the send was skipped or failed) -- so a computed value can
+        never silently masquerade as an applied one.
+        """
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "pv_charging_active": data.pv_charging_active,
+            "dry_run": data.dry_run,
+            "charge_limit_delivered": data.charge_limit_delivered,
         }
 
 

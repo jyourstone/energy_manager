@@ -216,7 +216,11 @@ from .forecast_accuracy import (
     restore_history,
     serialize_history,
 )
-from .nordpool_adapter import async_get_prices
+from .nordpool_adapter import (
+    DEFAULT_PRICE_UNIT,
+    async_get_prices,
+    derive_price_unit,
+)
 from .repairs import (
     ISSUE_CHARGE_LIMIT_WRONG_DOMAIN,
     ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN,
@@ -245,6 +249,7 @@ class PriceData:
     tomorrow: list[PriceSlot]
     current_price: float | None
     last_updated: datetime
+    price_unit: str = DEFAULT_PRICE_UNIT
 
 
 class PriceCoordinator(DataUpdateCoordinator[PriceData]):
@@ -312,14 +317,21 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
         today_slots = _convert_to_price_slots(raw_today)
         tomorrow_slots = _convert_to_price_slots(raw_tomorrow)
 
-        # Get current price from Nordpool sensor state
+        # Get current price and unit from Nordpool sensor state
         current_price = _get_current_price(self.hass, self._nordpool_entity)
+        nordpool_state = self.hass.states.get(self._nordpool_entity)
+        price_unit = (
+            derive_price_unit(nordpool_state.attributes)
+            if nordpool_state is not None
+            else DEFAULT_PRICE_UNIT
+        )
 
         return PriceData(
             today=today_slots,
             tomorrow=tomorrow_slots,
             current_price=current_price,
             last_updated=dt_util.utcnow(),
+            price_unit=price_unit,
         )
 
 
@@ -473,6 +485,11 @@ class EMSData:
         export_limit_kw: Fuse-capped export discharge limit in kW while an
             export slot is active and the reserve-SOC floor is clear; None
             otherwise.
+        charge_limit_delivered: Whether the current charge_limit_kw has
+            actually been sent to the charge limit entity -- False when the
+            send was skipped or failed (unconfigured/wrong-domain/unavailable
+            entity, observe-only suppression). command_verified only covers
+            EMS-mode verification, so it cannot stand in for this.
     """
 
     current_mode: str
@@ -489,6 +506,7 @@ class EMSData:
     discharge_allowed: bool = True
     discharge_gate_reason: str = ""
     export_limit_kw: float | None = None
+    charge_limit_delivered: bool = False
 
 
 class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
@@ -1968,6 +1986,10 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             self._last_sent_mode = result.target_mode
         if limit_sent:
             self._last_charge_limit = result.charge_limit_kw
+        # The computed limit is only "delivered" when it matches the last
+        # successfully sent value -- an unchanged limit stays delivered
+        # without a re-send; a skipped/failed send leaves it undelivered.
+        charge_limit_delivered = self._last_charge_limit == result.charge_limit_kw
 
         # 11. Check pending verification
         command_verified = self._check_verification()
@@ -1988,6 +2010,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             discharge_allowed=schedule_data.discharge_allowed,
             discharge_gate_reason=schedule_data.discharge_gate_reason,
             export_limit_kw=export_limit_kw,
+            charge_limit_delivered=charge_limit_delivered,
         )
 
     def _is_control_enabled(self) -> bool:

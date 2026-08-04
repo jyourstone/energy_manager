@@ -47,7 +47,7 @@ Energy Manager replaces a pile of manual Home Assistant helpers, template sensor
 
 ## Features
 
-- **Nordpool price ingestion** — native Home Assistant Nordpool integration and the HACS Nordpool custom component are both supported and auto-detected
+- **Nordpool price ingestion** — native Home Assistant Nordpool integration and the HACS Nordpool custom component are both supported and auto-detected. All price entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR, ...) — no conversion, everything stays in your area's currency
 - **4-step config wizard with auto-detection** — scans your entity registry for Nordpool, SigenStor, Easee, and car integrations (Skoda Connect, VW We Connect) and pre-fills the setup form
 - **Home battery scheduling** — multi-cycle charge/discharge schedule based on configurable price thresholds, exposed as `number` entities that persist across restarts (`RestoreNumber`)
 - **EMS mode control** — sets the SigenStor EMS mode (command charging / max self-consumption / standby) to follow the computed schedule, with per-phase fuse protection and verification that commands actually took effect
@@ -113,7 +113,8 @@ With Solar Appliances enabled, each appliance is likewise added as a **subentry*
 | Battery Schedule | Full multi-cycle charge/discharge schedule with status and attributes |
 | Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
 | Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
-| Battery EMS status | Current SigenStor EMS mode and fuse headroom |
+| Battery EMS status | Current SigenStor EMS mode (shows `pv_charging` while the battery absorbs solar) and fuse headroom |
+| Battery commanded charge limit *(diagnostic)* | Charge power limit EM sends to the battery (tracks live PV during solar charging; the would-be value in observe-only mode) |
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |
 | EV charger status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
