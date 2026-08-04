@@ -14,6 +14,7 @@ def _status(**overrides: object) -> str:
     defaults: dict[str, object] = {
         "plan_state": "idle",
         "ems_mode": "max_self_consumption",
+        "charge_limit_kw": 3.0,
         "pv_charging_active": False,
         "car_override_active": False,
         "export_limit_kw": None,
@@ -94,3 +95,15 @@ def test_holding_never_overrides_active_states() -> None:
         "grid_charging"
     )
     assert _status(battery_power_kw=0.0, pv_charging_active=True) == "solar_charging"
+
+
+def test_zero_charge_limit_never_claims_charging() -> None:
+    """A fuse-clamped 0 kW limit means no authorized flow -> not charging."""
+    assert _status(pv_charging_active=True, charge_limit_kw=0.0) == "self_consumption"
+    assert _status(ems_mode="command_charging", charge_limit_kw=0.0) == (
+        "self_consumption"
+    )
+
+
+def test_zero_export_limit_not_exporting() -> None:
+    assert _status(plan_state="exporting", export_limit_kw=0.0) == "self_consumption"

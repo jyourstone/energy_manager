@@ -269,13 +269,14 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
             return "unknown"
         ems = self._ems_data()
         if ems is None:
-            # EMS layer not up yet -- fall back to the plan state alone.
-            if plan.current_state == "idle":
-                return "self_consumption"
-            return plan.current_state
+            # EMS layer not up yet: the plan alone cannot say what the
+            # battery is doing (gate state unknown) -- stay unknown; the
+            # planned action is in the scheduled_slot_state attribute.
+            return "unknown"
         return derive_battery_status(
             plan_state=plan.current_state,
             ems_mode=ems.current_mode,
+            charge_limit_kw=ems.charge_limit_kw,
             pv_charging_active=ems.pv_charging_active,
             car_override_active=ems.car_override_active,
             export_limit_kw=ems.export_limit_kw,

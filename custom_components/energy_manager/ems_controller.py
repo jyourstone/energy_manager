@@ -612,6 +612,7 @@ def derive_battery_status(
     *,
     plan_state: str,
     ems_mode: str,
+    charge_limit_kw: float,
     pv_charging_active: bool,
     car_override_active: bool,
     export_limit_kw: float | None,
@@ -636,6 +637,10 @@ def derive_battery_status(
             solar_charging / discharging / exporting).
         ems_mode: The EMS mode currently commanded (e.g. max_self_consumption,
             command_charging).
+        charge_limit_kw: The commanded charge limit -- a charging state is
+            only claimed when a positive flow is actually authorized (a
+            fuse-tight limit can clamp it to 0 while the override is
+            still nominally active).
         pv_charging_active: Whether the PV-opportunistic override is active.
         car_override_active: Whether car priority is pausing battery
             grid-charging (EMS-03).
@@ -655,11 +660,11 @@ def derive_battery_status(
     """
     if car_override_active:
         return "paused_car_priority"
-    if pv_charging_active:
+    if pv_charging_active and charge_limit_kw > 0.0:
         return "solar_charging"
-    if ems_mode == "command_charging":
+    if ems_mode == "command_charging" and charge_limit_kw > 0.0:
         return "grid_charging"
-    if export_limit_kw is not None:
+    if export_limit_kw is not None and export_limit_kw > 0.0:
         return "exporting"
     if plan_state == "discharging" and discharge_allowed:
         return "discharging"
