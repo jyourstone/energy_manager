@@ -32,6 +32,7 @@ from .const import (
     CONF_APPLIANCE_ON_THRESHOLD_PCT,
     CONF_APPLIANCE_POWER_SENSOR_ENTITY,
     CONF_APPLIANCE_RATED_POWER_W,
+    CONF_BATTERY_POWER_ENTITY,
     DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
     DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
     SUBENTRY_TYPE_APPLIANCE,
@@ -45,6 +46,7 @@ from .coordinator import (
     EnergyManagerConfigEntry,
     PriceData,
 )
+from .ems_controller import derive_battery_status
 from .entity import (
     ApplianceEntity,
     CarEntity,
@@ -84,7 +86,7 @@ async def async_setup_entry(
     battery_coordinator = entry.runtime_data.battery_coordinator
     if battery_coordinator is not None:
         entities.extend([
-            BatteryScheduleSensor(battery_coordinator, entry),
+            BatteryStatusSensor(battery_coordinator, entry),
             NextChargeSensor(battery_coordinator, entry),
             NextDischargeSensor(battery_coordinator, entry),
             ActualPriceSensor(battery_coordinator, price_coordinator, entry),
@@ -95,7 +97,6 @@ async def async_setup_entry(
     # EMS status sensor (when EMS coordinator exists)
     ems_coordinator = entry.runtime_data.ems_coordinator
     if ems_coordinator is not None:
-        entities.append(EMSStatusSensor(ems_coordinator, entry))
         entities.append(CommandedChargeLimitSensor(ems_coordinator, entry))
 
     # Easee charger status sensor (when the Easee coordinator exists)
@@ -182,15 +183,30 @@ class EnergyManagerPriceSensor(PriceUnitEntity, EnergyManagerEntity, SensorEntit
         }
 
 
-class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
-    """Sensor showing current battery schedule state.
+class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
+    """Unified live battery status sensor.
 
-    State is the current battery mode: idle, grid_charging, discharging,
-    solar_charging, or exporting. Attributes expose the full schedule
-    (max 48 slots), slot counts, target EMS mode, and calculation metadata.
+    State is what EM is currently driving the battery to do -- the merge
+    of the price plan (BatteryScheduleCoordinator) and the live EMS layer
+    (EMSCoordinator) via derive_battery_status(): self_consumption /
+    solar_charging / grid_charging / discharging / exporting /
+    paused_car_priority. In observe-only mode (CORE-14) this is the
+    would-be action; the dry_run and command_verified attributes tell
+    whether commands are actually sent and applied. The state never
+    claims an action EM has not decided on -- a scheduled discharge with
+    a closed gate shows self_consumption, with the reason in
+    discharge_gate_reason.
+
+    Attributes merge both layers: the full schedule (max 48 slots), slot
+    counts and calculation metadata from the plan, plus the EMS mode,
+    charge limit, fuse headroom, override reason, verification and
+    observe-only (dry-run) state (CORE-14).
+
+    Re-renders on both coordinators: its own (5 min schedule) and the EMS
+    coordinator's 30 s tick, so live transitions appear promptly.
     """
 
-    _attr_translation_key = "battery_schedule"
+    _attr_translation_key = "battery_status"
     _attr_icon = "mdi:home-battery"
 
     def __init__(
@@ -198,30 +214,84 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
         coordinator,
         entry: EnergyManagerConfigEntry,
     ) -> None:
-        """Initialize the battery schedule sensor.
+        """Initialize the battery status sensor.
 
         Args:
-            coordinator: The BatteryScheduleCoordinator providing schedule data.
+            coordinator: The BatteryScheduleCoordinator providing plan data.
             entry: The config entry this sensor belongs to.
         """
         super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_battery_schedule"
+        self._attr_unique_id = f"{entry.entry_id}_battery_status"
+        self._entry = entry
+
+    async def async_added_to_hass(self) -> None:
+        """Also re-render on EMS coordinator updates (30 s live layer)."""
+        await super().async_added_to_hass()
+        runtime_data = getattr(self._entry, "runtime_data", None)
+        ems_coordinator = getattr(runtime_data, "ems_coordinator", None)
+        if ems_coordinator is not None:
+            self.async_on_remove(
+                ems_coordinator.async_add_listener(self.async_write_ha_state)
+            )
+
+    def _ems_data(self) -> EMSData | None:
+        """Return the EMS coordinator's data, or None before first refresh."""
+        runtime_data = getattr(self._entry, "runtime_data", None)
+        ems_coordinator = getattr(runtime_data, "ems_coordinator", None)
+        return getattr(ems_coordinator, "data", None)
+
+    def _read_battery_power_kw(self) -> float | None:
+        """Read the configured battery power entity in kW, or None.
+
+        Splits "holding" (battery genuinely doing nothing) from
+        "self_consumption" (actively balancing solar). The reading is
+        assumed to be in kW unless the entity's unit is exactly "W".
+        """
+        entity_id = self._entry.options.get(CONF_BATTERY_POWER_ENTITY, "")
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return None
+        try:
+            power = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        if state.attributes.get("unit_of_measurement", "") == "W":
+            power /= 1000.0
+        return power
 
     @property
     def native_value(self) -> str:
-        """Return the current battery state."""
-        data: BatteryScheduleData | None = self.coordinator.data
-        if data is None:
+        """Return the live battery status."""
+        plan: BatteryScheduleData | None = self.coordinator.data
+        if plan is None:
             return "unknown"
-        return data.current_state
+        ems = self._ems_data()
+        if ems is None:
+            # EMS layer not up yet: the plan alone cannot say what the
+            # battery is doing (gate state unknown) -- stay unknown; the
+            # planned action is in the scheduled_slot_state attribute.
+            return "unknown"
+        return derive_battery_status(
+            plan_state=plan.current_state,
+            ems_mode=ems.current_mode,
+            charge_limit_kw=ems.charge_limit_kw,
+            pv_charging_active=ems.pv_charging_active,
+            car_override_active=ems.car_override_active,
+            export_limit_kw=ems.export_limit_kw,
+            discharge_allowed=ems.discharge_allowed,
+            battery_power_kw=self._read_battery_power_kw(),
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return compact schedule attributes.
+        """Return merged plan + live EMS attributes.
 
-        Includes the full schedule (max 48 slots), slot counts,
-        target EMS mode, and calculation metadata. Does NOT include
-        full price arrays (already available on PriceCoordinator).
+        Plan: full schedule (max 48 slots), slot counts, target EMS mode,
+        and calculation metadata. Live: EMS mode, charge limit, fuse
+        headroom, override reason, verification, and observe-only (dry-run)
+        state. Full price arrays stay on the PriceCoordinator.
         """
         data: BatteryScheduleData | None = self.coordinator.data
         if data is None:
@@ -242,8 +312,9 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
                 "action": slot.action,
             })
 
-        return {
+        attributes: dict[str, Any] = {
             "schedule": schedule_list,
+            "scheduled_slot_state": data.current_state,
             "charging_slots": data.charging_slot_count,
             "discharging_slots": data.discharging_slot_count,
             "export_slots": data.export_slot_count,
@@ -256,6 +327,23 @@ class BatteryScheduleSensor(EnergyManagerEntity, SensorEntity):
             "discharge_gate_reason": data.discharge_gate_reason,
             "reserved_energy_kwh": round(data.reserved_energy_kwh, 2),
         }
+
+        ems = self._ems_data()
+        if ems is not None:
+            attributes.update({
+                "ems_mode": ems.current_mode,
+                "charge_limit_kw": round(ems.charge_limit_kw, 2),
+                "fuse_headroom_amps": round(ems.fuse_headroom_amps, 1),
+                "override_reason": ems.override_reason,
+                "command_verified": ems.command_verified,
+                "dry_run": ems.dry_run,
+                "last_suppressed_command": ems.last_suppressed_command,
+                "export_limit_kw": round(ems.export_limit_kw, 2)
+                if ems.export_limit_kw is not None
+                else None,
+            })
+
+        return attributes
 
 
 class NextChargeSensor(EnergyManagerEntity, SensorEntity):
@@ -519,74 +607,6 @@ class EffectiveDischargeThresholdSensor(PriceUnitEntity, EnergyManagerEntity, Se
             "battery_cycle_cost": self.coordinator.battery_cycle_cost,
             "grid_transfer_fee": self.coordinator.grid_transfer_fee,
             "manual_threshold": self.coordinator.discharge_threshold,
-        }
-
-
-class EMSStatusSensor(EnergyManagerEntity, SensorEntity):
-    """Sensor showing EMS controller status.
-
-    State is the current EMS mode, shown as "pv_charging" while the
-    PV-opportunistic override is active -- the generic command_charging
-    mode reads as grid charging when the battery is actually absorbing
-    solar. Attributes expose fuse headroom, target mode, override reason,
-    verification status, and observe-only (dry-run) status (CORE-14).
-    """
-
-    _attr_translation_key = "battery_ems_status"
-    _attr_icon = "mdi:lightning-bolt"
-
-    def __init__(
-        self,
-        coordinator,
-        entry: EnergyManagerConfigEntry,
-    ) -> None:
-        """Initialize the EMS status sensor.
-
-        Args:
-            coordinator: The EMSCoordinator providing EMS state data.
-            entry: The config entry this sensor belongs to.
-        """
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_ems_status"
-
-    @property
-    def native_value(self) -> str:
-        """Return the current EMS mode, or "pv_charging" during PV charging."""
-        data: EMSData | None = self.coordinator.data
-        if data is None:
-            return "unknown"
-        if data.pv_charging_active:
-            return "pv_charging"
-        return data.current_mode
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return EMS control attributes.
-
-        Exposes target mode, charge limit, fuse headroom, override reason,
-        command verification status, active override flags, observe-only
-        (dry-run) status with the last suppressed command (CORE-14), and
-        the fuse-capped export limit while an export slot is active (BATT-17).
-        """
-        data: EMSData | None = self.coordinator.data
-        if data is None:
-            return {}
-        return {
-            "ems_mode": data.current_mode,
-            "target_mode": data.target_mode,
-            "charge_limit_kw": round(data.charge_limit_kw, 2),
-            "fuse_headroom_amps": round(data.fuse_headroom_amps, 1),
-            "override_reason": data.override_reason,
-            "command_verified": data.command_verified,
-            "car_override_active": data.car_override_active,
-            "pv_charging_active": data.pv_charging_active,
-            "dry_run": data.dry_run,
-            "last_suppressed_command": data.last_suppressed_command,
-            "discharge_allowed": data.discharge_allowed,
-            "discharge_gate_reason": data.discharge_gate_reason,
-            "export_limit_kw": round(data.export_limit_kw, 2)
-            if data.export_limit_kw is not None
-            else None,
         }
 
 

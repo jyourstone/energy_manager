@@ -110,10 +110,9 @@ With Solar Appliances enabled, each appliance is likewise added as a **subentry*
 | Sensor | Description |
 |--------|--------------|
 | Electricity Price | Current Nordpool price |
-| Battery Schedule | Full multi-cycle charge/discharge schedule with status and attributes |
+| Battery status | Live battery state (`self_consumption` / `holding` / `solar_charging` / `grid_charging` / `discharging` / `exporting` / `paused_car_priority`) -- what EM is driving the battery to do right now (`holding` = battery genuinely doing nothing, e.g. at night with discharge blocked). Attributes carry the full schedule, EMS mode, charge limit, fuse headroom, and gate reasons |
 | Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
 | Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
-| Battery EMS status | Current SigenStor EMS mode (shows `pv_charging` while the battery absorbs solar) and fuse headroom |
 | Battery commanded charge limit *(diagnostic)* | Charge power limit EM sends to the battery (tracks live PV during solar charging; the would-be value in observe-only mode) |
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Schedule *(per car)* | Cheapest-slot charging schedule for that car |

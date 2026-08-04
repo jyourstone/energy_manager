@@ -437,17 +437,14 @@
       "electricity_price": {
         "name": "Electricity Price"
       },
-      "battery_schedule": {
-        "name": "Battery Schedule"
+      "battery_status": {
+        "name": "Battery status"
       },
       "battery_next_charging_slot": {
         "name": "Battery next charging slot"
       },
       "battery_next_discharging_slot": {
         "name": "Battery next discharging slot"
-      },
-      "battery_ems_status": {
-        "name": "Battery EMS status"
       },
       "battery_commanded_charge_limit": {
         "name": "Battery commanded charge limit"

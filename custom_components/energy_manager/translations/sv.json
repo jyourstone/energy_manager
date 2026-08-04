@@ -437,17 +437,14 @@
       "electricity_price": {
         "name": "Elpris"
       },
-      "battery_schedule": {
-        "name": "Batterischema"
+      "battery_status": {
+        "name": "Batteristatus"
       },
       "battery_next_charging_slot": {
         "name": "Batteriets nästa laddningstillfälle"
       },
       "battery_next_discharging_slot": {
         "name": "Batteriets nästa urladdningstillfälle"
-      },
-      "battery_ems_status": {
-        "name": "Batteriets EMS-status"
       },
       "battery_commanded_charge_limit": {
         "name": "Batteriets beordrade laddgräns"
