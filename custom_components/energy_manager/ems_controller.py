@@ -606,3 +606,51 @@ def build_command_decision(
     return CommandDecision(
         should_send=control_enabled, dry_run_message=dry_run_message
     )
+
+
+def derive_battery_status(
+    *,
+    plan_state: str,
+    ems_mode: str,
+    pv_charging_active: bool,
+    car_override_active: bool,
+    export_limit_kw: float | None,
+    discharge_allowed: bool,
+) -> str:
+    """Derive the single live battery status for the Battery status sensor.
+
+    Merges the price plan's current slot with the live EMS layer into one
+    honest state: the sensor must never claim an action that is not
+    physically happening. A scheduled discharge whose gate is closed, or a
+    scheduled solar-charge slot with no actual surplus, therefore resolves
+    to "self_consumption" (the SigenStor's autonomous max-self-consumption
+    behavior -- covering house load / absorbing small surplus), with the
+    blocking reason exposed via sensor attributes instead.
+
+    Args:
+        plan_state: The schedule's current slot state (idle / grid_charging /
+            solar_charging / discharging / exporting).
+        ems_mode: The EMS mode currently commanded (e.g. max_self_consumption,
+            command_charging).
+        pv_charging_active: Whether the PV-opportunistic override is active.
+        car_override_active: Whether car priority is pausing battery
+            grid-charging (EMS-03).
+        export_limit_kw: Fuse-capped export limit while an export slot is
+            active and the reserve floor is clear; None otherwise (BATT-17).
+        discharge_allowed: Whether the discharge gate is currently open.
+
+    Returns:
+        One of: self_consumption, solar_charging, grid_charging,
+        discharging, exporting, paused_car_priority.
+    """
+    if car_override_active:
+        return "paused_car_priority"
+    if pv_charging_active:
+        return "solar_charging"
+    if ems_mode == "command_charging":
+        return "grid_charging"
+    if export_limit_kw is not None:
+        return "exporting"
+    if plan_state == "discharging" and discharge_allowed:
+        return "discharging"
+    return "self_consumption"
