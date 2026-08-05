@@ -110,7 +110,7 @@
         "data_description": {
           "charger_status_entity": "Sensor showing charger connection status.",
           "charger_power_entity": "Sensor showing charger power output (W).",
-          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong.",
+          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong -- or leave it empty for a non-Easee charger: commands are then never sent and you automate on the command sensors instead.",
           "house_consumption_entity": "Sensor showing total house power consumption, used for solar-surplus charging. Auto-detected from SigenStor.",
           "excluded_power_entities": "Optional: power sensors to subtract from house consumption (e.g. a separately-managed water heater) before computing solar surplus.",
           "notify_service": "Optional notify service (e.g. 'notify.mobile_app_x') for safety notifications. Leave empty to disable notifications.",
@@ -395,7 +395,7 @@
         "data_description": {
           "charger_status_entity": "Sensor showing charger connection status.",
           "charger_power_entity": "Sensor showing charger power output (W).",
-          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong.",
+          "charger_device_id": "Auto-detected HA device ID of the Easee charger, used to address the easee.* control services. Leave the auto-detected value unless it is wrong -- or leave it empty for a non-Easee charger: commands are then never sent and you automate on the command sensors instead.",
           "house_consumption_entity": "Sensor showing total house power consumption, used for solar-surplus charging. Auto-detected from SigenStor.",
           "excluded_power_entities": "Optional: power sensors to subtract from house consumption (e.g. a separately-managed water heater) before computing solar surplus.",
           "notify_service": "Optional notify service (e.g. 'notify.mobile_app_x') for safety notifications. Leave empty to disable notifications.",
@@ -449,6 +449,12 @@
       "battery_commanded_charge_limit": {
         "name": "Battery commanded charge limit"
       },
+      "battery_commanded_mode": {
+        "name": "Battery commanded EMS mode"
+      },
+      "battery_commanded_discharge_limit": {
+        "name": "Battery commanded discharge limit"
+      },
       "battery_effective_discharge_threshold": {
         "name": "Battery effective discharge threshold"
       },
@@ -457,6 +463,12 @@
       },
       "ev_charger_status": {
         "name": "EV charger status"
+      },
+      "ev_commanded_current": {
+        "name": "Commanded charging current"
+      },
+      "ev_commanded_phase_mode": {
+        "name": "Commanded phase mode"
       },
       "actual_electricity_price": {
         "name": "Actual Electricity Price"

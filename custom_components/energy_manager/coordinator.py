@@ -490,6 +490,15 @@ class EMSData:
             send was skipped or failed (unconfigured/wrong-domain/unavailable
             entity, observe-only suppression). command_verified only covers
             EMS-mode verification, so it cannot stand in for this.
+        discharge_limit_kw: The discharge-limit TARGET computed this cycle
+            (fuse-capped export limit during an export slot, entity max /
+            hardware cap while discharge is allowed, 0.0 while the gate is
+            closed); None only before the schedule exists. Computed even
+            when no discharge-limit entity is configured (GEN-02).
+        discharge_limit_delivered: Whether the current discharge_limit_kw
+            has actually been sent to the discharge limit entity -- False
+            when the send was skipped or failed (same honesty rule as
+            charge_limit_delivered).
     """
 
     current_mode: str
@@ -507,6 +516,8 @@ class EMSData:
     discharge_gate_reason: str = ""
     export_limit_kw: float | None = None
     charge_limit_delivered: bool = False
+    discharge_limit_kw: float | None = None
+    discharge_limit_delivered: bool = False
 
 
 class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
@@ -1806,10 +1817,14 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         export_limit_kw: float | None = None
         target_ems_mode = schedule_data.target_ems_mode
         if target_ems_mode == "command_discharging":
-            if not self._discharge_limit_entity:
-                # Without the discharge-limit number the fuse cap cannot be
+            if self._ems_select_entity and not self._discharge_limit_entity:
+                # A configured EMS select would obey the export command, but
+                # without the discharge-limit number the fuse cap cannot be
                 # enforced -- the plant's own limit (14.4 kW) exceeds a 20 A
-                # fuse's ceiling, so export must never be commanded.
+                # fuse's ceiling, so export must never be commanded. With no
+                # select entity nothing is ever sent, so the intent (and the
+                # fuse-capped limit below) is safe to publish for
+                # sensor-driven automations (GEN-02).
                 target_ems_mode = "max_self_consumption"
             else:
                 export_limit_kw = compute_export_limit_kw(
@@ -1852,23 +1867,30 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # up front so the export branch in step 8 can send it BEFORE the
         # mode. BATT-17 export limit (fuse-capped) takes precedence;
         # otherwise mirror the scheduler's discharge_allowed decision.
+        # Computed even when no discharge-limit entity is configured -- the
+        # commanded value is published on EMSData for sensor-driven
+        # automations on non-Sigenergy hardware (GEN-02); the send paths
+        # below still skip cleanly when the entity is unset.
         target_discharge_limit: float | None = None
-        if self._discharge_limit_entity:
-            if export_limit_kw is not None:
-                target_discharge_limit = export_limit_kw
-            elif schedule_data.discharge_allowed:
-                limit_state = self.hass.states.get(self._discharge_limit_entity)
-                entity_max = (
-                    limit_state.attributes.get("max") if limit_state else None
+        if export_limit_kw is not None:
+            target_discharge_limit = export_limit_kw
+        elif schedule_data.discharge_allowed:
+            limit_state = (
+                self.hass.states.get(self._discharge_limit_entity)
+                if self._discharge_limit_entity
+                else None
+            )
+            entity_max = (
+                limit_state.attributes.get("max") if limit_state else None
+            )
+            try:
+                target_discharge_limit = min(
+                    float(entity_max), MAX_CHARGE_LIMIT_KW
                 )
-                try:
-                    target_discharge_limit = min(
-                        float(entity_max), MAX_CHARGE_LIMIT_KW
-                    )
-                except (TypeError, ValueError):
-                    target_discharge_limit = MAX_CHARGE_LIMIT_KW
-            else:
-                target_discharge_limit = 0.0
+            except (TypeError, ValueError):
+                target_discharge_limit = MAX_CHARGE_LIMIT_KW
+        else:
+            target_discharge_limit = 0.0
 
         # 8. Safe command ordering (Research Pitfall 3)
         mode_sent = False
@@ -1990,6 +2012,11 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # successfully sent value -- an unchanged limit stays delivered
         # without a re-send; a skipped/failed send leaves it undelivered.
         charge_limit_delivered = self._last_charge_limit == result.charge_limit_kw
+        # Same honesty rule for the discharge limit (GEN-02): delivered only
+        # when the computed target matches the last successfully sent value.
+        discharge_limit_delivered = (
+            self._last_sent_discharge_limit == target_discharge_limit
+        )
 
         # 11. Check pending verification
         command_verified = self._check_verification()
@@ -2011,6 +2038,8 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             discharge_gate_reason=schedule_data.discharge_gate_reason,
             export_limit_kw=export_limit_kw,
             charge_limit_delivered=charge_limit_delivered,
+            discharge_limit_kw=target_discharge_limit,
+            discharge_limit_delivered=discharge_limit_delivered,
         )
 
     def _is_control_enabled(self) -> bool:

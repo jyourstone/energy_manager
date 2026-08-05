@@ -105,7 +105,11 @@ class TestExportTranslationKeys:
         ("number", "battery_discharge_spread_threshold"),
         ("sensor", "battery_effective_discharge_threshold"),
         ("sensor", "battery_commanded_charge_limit"),
+        ("sensor", "battery_commanded_mode"),
+        ("sensor", "battery_commanded_discharge_limit"),
         ("sensor", "battery_status"),
+        ("sensor", "ev_commanded_current"),
+        ("sensor", "ev_commanded_phase_mode"),
         ("switch", "appliance_em_control"),
         ("sensor", "appliance_status"),
     )

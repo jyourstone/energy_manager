@@ -94,15 +94,26 @@ async def async_setup_entry(
             EffectiveDischargeThresholdSensor(battery_coordinator, entry),
         ])
 
-    # EMS status sensor (when EMS coordinator exists)
+    # EMS status sensors (when EMS coordinator exists)
     ems_coordinator = entry.runtime_data.ems_coordinator
     if ems_coordinator is not None:
-        entities.append(CommandedChargeLimitSensor(ems_coordinator, entry))
+        entities.extend([
+            CommandedChargeLimitSensor(ems_coordinator, entry),
+            CommandedEmsModeSensor(ems_coordinator, entry),
+            CommandedDischargeLimitSensor(ems_coordinator, entry),
+        ])
 
     # Easee charger status sensor (when the Easee coordinator exists)
     easee_coordinator = entry.runtime_data.easee_coordinator
     if easee_coordinator is not None:
         entities.append(EaseeChargerStatusSensor(easee_coordinator, entry))
+
+        # EV command sensors (GEN-03/04): the contract surface for
+        # non-Easee chargers -- automations act on the commanded values.
+        entities.extend([
+            CommandedChargeCurrentSensor(easee_coordinator, entry),
+            CommandedPhaseModeSensor(easee_coordinator, entry),
+        ])
 
         # House load + Solar surplus diagnostic sensors (CORE-11): both
         # derive from the Easee coordinator's solar-surplus inputs, so both
@@ -672,6 +683,139 @@ class CommandedChargeLimitSensor(EnergyManagerEntity, SensorEntity):
         }
 
 
+class CommandedEmsModeSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for the EMS mode EM commands (EMS-layer).
+
+    State is the internal EMS mode string EM drives the plant with
+    (EMSData.current_mode): command_charging / command_discharging /
+    max_self_consumption / standby -- the schedule's mode after the
+    EMS controller's own overrides (car-priority standby, EMS-03;
+    PV-opportunistic charging, EMS-08), i.e. exactly what a configured
+    EMS select entity would be sent. The contract surface for
+    non-Sigenergy hardware (GEN-01) -- automations trigger on it and
+    call their own inverter services. Why the driven mode differs from
+    the schedule's intent is exposed via the override_reason,
+    car_override_active and pv_charging_active attributes; in
+    observe-only mode (CORE-14) dry_run tells that no command is sent.
+    Unknown when EMS data is not available yet (same honesty rule as
+    battery_status).
+    """
+
+    _attr_translation_key = "battery_commanded_mode"
+    _attr_icon = "mdi:battery-sync"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the commanded EMS mode sensor.
+
+        Args:
+            coordinator: The EMSCoordinator providing EMS state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_battery_commanded_mode"
+
+    @property
+    def native_value(self) -> str:
+        """Return the EMS mode EM currently commands."""
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return "unknown"
+        return data.current_mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return context for the commanded mode.
+
+        Exposes why the commanded mode may differ from the schedule's
+        intent (override_reason, car_override_active, pv_charging_active),
+        whether commands are suppressed entirely (dry_run, CORE-14),
+        and whether the last sent mode was verified on the plant
+        (command_verified).
+        """
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "override_reason": data.override_reason,
+            "car_override_active": data.car_override_active,
+            "pv_charging_active": data.pv_charging_active,
+            "dry_run": data.dry_run,
+            "command_verified": data.command_verified,
+        }
+
+
+class CommandedDischargeLimitSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for the battery discharge limit EM commands.
+
+    State is the ESS discharge-limit TARGET the EMS controller commands
+    (number.set_value on the configured discharge limit entity) -- the
+    fuse-capped export limit during an export slot (BATT-17), the
+    entity max / hardware cap while discharge is allowed, and 0.0 while
+    the discharge gate is closed. Computed even when no discharge limit
+    entity is configured, so non-Sigenergy automations can act on it
+    (GEN-02); whether the current limit has actually reached the
+    battery is exposed via the discharge_limit_delivered and dry_run
+    attributes.
+    """
+
+    _attr_translation_key = "battery_commanded_discharge_limit"
+    _attr_icon = "mdi:battery-arrow-down"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "kW"
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the commanded discharge limit sensor.
+
+        Args:
+            coordinator: The EMSCoordinator providing EMS state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = (
+            f"{entry.entry_id}_battery_commanded_discharge_limit"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the discharge limit EM last computed for the battery."""
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return None
+        return data.discharge_limit_kw
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return context for the commanded limit.
+
+        Exposes whether the scheduler currently permits discharge at
+        all (discharge_allowed, with discharge_gate_reason explaining a
+        closed gate), whether commands are suppressed entirely
+        (dry_run, CORE-14), and whether the current limit was actually
+        sent to the discharge limit entity (discharge_limit_delivered
+        -- False when the send was skipped or failed).
+        """
+        data: EMSData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "discharge_allowed": data.discharge_allowed,
+            "discharge_gate_reason": data.discharge_gate_reason,
+            "dry_run": data.dry_run,
+            "discharge_limit_delivered": data.discharge_limit_delivered,
+        }
+
+
 class EaseeChargerStatusSensor(EnergyManagerEntity, SensorEntity):
     """Sensor showing Easee charger controller status.
 
@@ -732,6 +876,123 @@ class EaseeChargerStatusSensor(EnergyManagerEntity, SensorEntity):
             "dry_run": data.dry_run,
             "last_suppressed_command": data.last_suppressed_command,
         }
+
+
+class CommandedChargeCurrentSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for the charging current EM commands the charger.
+
+    State is the amp target the charger controller computed this tick
+    (EaseeData.target_amps). The contract surface for non-Easee
+    chargers (GEN-03): 0 = charging should be paused/stopped; values
+    above 0 but below the 6 A minimum = do not start (the state
+    machine's pre-start gate -- avoids start/stop churn below the
+    minimum and leaves a running session's limit untouched); at or
+    above 6 = charging should run at (up to) this limit. Automations
+    trigger on it and call their own charger services; in observe-only
+    mode (CORE-14) dry_run tells that no command is sent to the Easee
+    charger either.
+    """
+
+    _attr_translation_key = "ev_commanded_current"
+    _attr_icon = "mdi:current-ac"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.CURRENT
+    _attr_native_unit_of_measurement = "A"
+    _attr_suggested_display_precision = 1
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the commanded charging current sensor.
+
+        Args:
+            coordinator: The EaseeCoordinator providing charger state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_ev_commanded_current"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the charging current EM last computed for the charger."""
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return None
+        return data.target_amps
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return context for the commanded current.
+
+        Exposes the charger decision mode (charger_mode), the desired
+        phase mode and phase-switch sequence state, why behavior is
+        notable this tick (override_reason), the raw charger status,
+        and whether commands are suppressed entirely (dry_run, CORE-14).
+        """
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "charger_mode": data.mode,
+            "target_phase_mode": data.target_phase_mode,
+            "sequence_state": data.sequence_state,
+            "dry_run": data.dry_run,
+            "override_reason": data.override_reason,
+            "charger_status": data.charger_status,
+        }
+
+
+class CommandedPhaseModeSensor(EnergyManagerEntity, SensorEntity):
+    """Diagnostic sensor for the phase mode EM commands the charger.
+
+    State is the desired charger phase mode this tick
+    (EaseeData.target_phase_mode): "single" or "three". A separate
+    sensor so non-Easee automations (GEN-04) get clean state triggers
+    for phase switching, alongside the commanded current sensor.
+    Unknown when charger data is not available yet (same honesty rule
+    as ev_charger_status).
+    """
+
+    _attr_translation_key = "ev_commanded_phase_mode"
+    _attr_icon = "mdi:sine-wave"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+    ) -> None:
+        """Initialize the commanded phase mode sensor.
+
+        Args:
+            coordinator: The EaseeCoordinator providing charger state data.
+            entry: The config entry this sensor belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_ev_commanded_phase_mode"
+
+    @property
+    def native_value(self) -> str:
+        """Return the phase mode EM currently commands."""
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return "unknown"
+        return data.target_phase_mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return context for the commanded phase mode.
+
+        Exposes whether commands are suppressed entirely (dry_run,
+        CORE-14) -- so observe-only values can be told apart the same
+        way as on every other command sensor.
+        """
+        data: EaseeData | None = self.coordinator.data
+        if data is None:
+            return {}
+        return {"dry_run": data.dry_run}
 
 
 class HouseLoadSensor(EnergyManagerEntity, SensorEntity):
