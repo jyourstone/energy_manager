@@ -13,6 +13,7 @@ All functions are pure and HA-free so they can be unit tested directly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -199,6 +200,10 @@ def restore_fa_store(
     in_flight: InFlightDay | None = None
     raw_in_flight = raw.get("in_flight")
     if raw_in_flight is not None:
+        # OverflowError: float(huge int) must invalidate only the in-flight
+        # block, never bubble up and cost the whole history. Non-finite
+        # values ("nan"/"inf" survive float()) would poison the appended
+        # ratio, so they invalidate the block too.
         try:
             snapshot = raw_in_flight["snapshot_kwh"]
             in_flight = InFlightDay(
@@ -206,7 +211,12 @@ def restore_fa_store(
                 None if snapshot is None else float(snapshot),
                 float(raw_in_flight["accumulated_kwh"]),
             )
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
+            in_flight = None
+        if in_flight is not None and not (
+            math.isfinite(in_flight.accumulated_kwh)
+            and (in_flight.snapshot_kwh is None or math.isfinite(in_flight.snapshot_kwh))
+        ):
             in_flight = None
     if in_flight is not None and in_flight.day not in (
         today,

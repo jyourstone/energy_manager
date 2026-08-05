@@ -276,6 +276,35 @@ def test_restore_fa_store_malformed_in_flight_keeps_history() -> None:
         assert restore_fa_store(raw, TODAY) == (history, None)
 
 
+def test_restore_fa_store_non_finite_in_flight_keeps_history() -> None:
+    """nan/inf survive float() but would poison the appended ratio."""
+    history = [_record(0, 10.0, 8.0)]
+    for bad in (
+        {"day": TODAY.isoformat(), "snapshot_kwh": "nan", "accumulated_kwh": 2.0},
+        {"day": TODAY.isoformat(), "snapshot_kwh": 1.0, "accumulated_kwh": "inf"},
+        {"day": TODAY.isoformat(), "snapshot_kwh": float("nan"), "accumulated_kwh": 2.0},
+    ):
+        raw = {"history": serialize_history(history), "in_flight": bad}
+
+        assert restore_fa_store(raw, TODAY) == (history, None)
+
+
+def test_restore_fa_store_overflow_in_flight_keeps_history() -> None:
+    """float(huge int) raises OverflowError -- must cost only the in-flight
+    block, never the whole history."""
+    history = [_record(0, 10.0, 8.0)]
+    raw = {
+        "history": serialize_history(history),
+        "in_flight": {
+            "day": TODAY.isoformat(),
+            "snapshot_kwh": 10**400,
+            "accumulated_kwh": 2.0,
+        },
+    }
+
+    assert restore_fa_store(raw, TODAY) == (history, None)
+
+
 def test_restore_fa_store_stale_guard() -> None:
     """Only today's or yesterday's in-flight day is accepted."""
     for day, accepted in (

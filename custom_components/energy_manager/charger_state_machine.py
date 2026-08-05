@@ -46,11 +46,17 @@ PAUSED_STATUS = "paused"
 POWER_ACTIVE_THRESHOLD_KW = 0.5
 
 #: A restored solar-latch pending timer older than this is discarded --
-#: downtime must not count toward the continuously-held delay requirement.
-#: Twice MAX_SOLAR_DELAY_SECONDS, so even a delay configured at the allowed
-#: maximum keeps a full delay-width of margin, while any restart-spanning
-#: outage still clears the timer.
+#: garbage guard bounding the timer's absolute age. Twice
+#: MAX_SOLAR_DELAY_SECONDS, so even a delay configured at the allowed
+#: maximum keeps a full delay-width of margin.
 MAX_RESTORED_PENDING_AGE_SECONDS = 7200.0
+
+#: A restored pending timer is only kept when the gap between the payload's
+#: saved_at stamp and now is within this -- downtime is unobserved surplus,
+#: so it must not count toward the continuously-held delay requirement. A
+#: quick config-entry reload (seconds) keeps the timer running; a real
+#: restart or crash restarts the delay from zero.
+MAX_PENDING_DOWNTIME_SECONDS = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +565,10 @@ class SolarActivationTracker:
         Only active + pending_since are stored: _pending_target is fully
         derivable (a pending timer only ever exists while the raw condition
         disagrees with the latched state, so it is always `not active`).
-        Pure and HA-free so it can be unit tested directly.
+        This shape is also the change-detection key -- use
+        serialize_stored() for the persisted payload, which additionally
+        stamps saved_at. Pure and HA-free so it can be unit tested
+        directly.
         """
         return {
             "active": self._active,
@@ -570,19 +579,32 @@ class SolarActivationTracker:
             ),
         }
 
+    def serialize_stored(self, now: datetime) -> dict:
+        """Serialize for persistence: serialize() plus a saved_at stamp.
+
+        restore() uses saved_at to measure downtime -- a pending timer is
+        only kept when the save-to-restore gap is short enough that the
+        continuously-held delay requirement was effectively observed.
+        """
+        return {**self.serialize(), "saved_at": now.isoformat()}
+
     @classmethod
     def restore(cls, raw: object, now: datetime) -> SolarActivationTracker:
-        """Restore a tracker persisted by serialize().
+        """Restore a tracker persisted by serialize_stored().
 
         Tolerates None/garbage/malformed payloads by returning a fresh
         default tracker (inactive, no pending timer) -- corrupt storage
-        must never break charger control. A pending_since in the future of
-        `now` is dropped (clock skew or garbage would otherwise satisfy a
-        delay instantly or never); one older than
-        MAX_RESTORED_PENDING_AGE_SECONDS is also dropped, so downtime
-        cannot count toward the continuously-held requirement and let one
-        transient surplus spike flip the latch the moment HA is back.
-        Naive timestamps are coerced to UTC (mirrors
+        must never break charger control. The active latch survives on its
+        own merits (solar amps always come from live surplus, so a stale
+        latch cannot start a charge without one). The pending timer is
+        stricter, because downtime is UNOBSERVED surplus and must not
+        count toward the continuously-held delay: it is kept only when
+        saved_at proves the save-to-restore gap is at most
+        MAX_PENDING_DOWNTIME_SECONDS (quick reload), and dropped when
+        saved_at is missing/garbage/future, when the gap is longer (real
+        restart or crash), when pending_since is in the future of `now`,
+        or when it is older than MAX_RESTORED_PENDING_AGE_SECONDS
+        (garbage bound). Naive timestamps are coerced to UTC (mirrors
         coordinator._restore_samples). Pure and HA-free so it can be unit
         tested directly.
         """
@@ -612,10 +634,32 @@ class SolarActivationTracker:
                 > MAX_RESTORED_PENDING_AGE_SECONDS
             ):
                 pending = None
+        if pending is not None:
+            pending = cls._pending_if_gap_short(raw.get("saved_at"), now, pending)
         tracker._active = active
         tracker._pending_since = pending
         tracker._pending_target = (not active) if pending is not None else None
         return tracker
+
+    @staticmethod
+    def _pending_if_gap_short(
+        saved_at_raw: object, now: datetime, pending: datetime
+    ) -> datetime | None:
+        """Keep `pending` only when saved_at proves a short downtime gap."""
+        try:
+            saved_at = datetime.fromisoformat(saved_at_raw)
+        except (TypeError, ValueError):
+            return None
+        saved_at = (
+            saved_at.replace(tzinfo=timezone.utc)
+            if saved_at.tzinfo is None
+            else saved_at.astimezone(timezone.utc)
+        )
+        if saved_at > now:
+            return None
+        if (now - saved_at).total_seconds() > MAX_PENDING_DOWNTIME_SECONDS:
+            return None
+        return pending
 
 
 # ---------------------------------------------------------------------------

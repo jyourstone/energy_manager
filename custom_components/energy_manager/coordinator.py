@@ -3361,7 +3361,9 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         # as the consumption/forecast-accuracy delay_saves).
         if self._controller.solar_tracker.serialize() != solar_state_before:
             self._solar_tracker_store.async_delay_save(
-                lambda: self._controller.solar_tracker.serialize(),
+                lambda: self._controller.solar_tracker.serialize_stored(
+                    dt_util.utcnow()
+                ),
                 SOLAR_TRACKER_SAVE_DELAY_SECONDS,
             )
         await self._execute_commands(decision.commands)
@@ -3407,7 +3409,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         """
         try:
             await self._solar_tracker_store.async_save(
-                self._controller.solar_tracker.serialize()
+                self._controller.solar_tracker.serialize_stored(dt_util.utcnow())
             )
         except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
             _LOGGER.debug("Solar tracker store flush failed on unload: %s", err)

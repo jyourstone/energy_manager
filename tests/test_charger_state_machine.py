@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.energy_manager.charger_state_machine import (
+    MAX_PENDING_DOWNTIME_SECONDS,
     MAX_RESTORED_PENDING_AGE_SECONDS,
     CarDemand,
     ChargerAmpHysteresis,
@@ -614,7 +615,8 @@ class TestSolarTrackerPersistence:
         t.update(True, T0 + timedelta(seconds=300), 300.0, 60.0)  # latched on
         t.update(False, T0 + timedelta(seconds=310), 300.0, 60.0)  # pending_off
         restored = SolarActivationTracker.restore(
-            t.serialize(), T0 + timedelta(seconds=320)
+            t.serialize_stored(T0 + timedelta(seconds=310)),
+            T0 + timedelta(seconds=320),
         )
         assert restored.active is True
         # The deactivation countdown continues from the persisted
@@ -626,11 +628,12 @@ class TestSolarTrackerPersistence:
         t = SolarActivationTracker()
         t.update(True, T0, 300.0, 60.0)  # pending_on started
         restored = SolarActivationTracker.restore(
-            t.serialize(), T0 + timedelta(seconds=100)
+            t.serialize_stored(T0 + timedelta(seconds=90)),
+            T0 + timedelta(seconds=100),
         )
         assert restored.active is False
         # The activation countdown continues from the persisted
-        # pending_since (t=0) -- NOT restarted by the restore.
+        # pending_since (t=0) -- NOT restarted by a quick reload.
         assert restored.update(True, T0 + timedelta(seconds=299), 300.0, 60.0) is False
         assert restored.update(True, T0 + timedelta(seconds=300), 300.0, 60.0) is True
 
@@ -695,6 +698,7 @@ class TestSolarTrackerPersistence:
             "pending_since": (
                 T0 - timedelta(seconds=MAX_RESTORED_PENDING_AGE_SECONDS - 1)
             ).isoformat(),
+            "saved_at": T0.isoformat(),
         }
         restored = SolarActivationTracker.restore(raw, T0)
         assert restored.serialize()["pending_since"] is not None
@@ -706,15 +710,65 @@ class TestSolarTrackerPersistence:
         raw = {
             "active": False,
             "pending_since": T0.replace(tzinfo=None).isoformat(),
+            "saved_at": (T0 + timedelta(seconds=100)).isoformat(),
         }
         restored = SolarActivationTracker.restore(raw, T0 + timedelta(seconds=100))
         assert restored.active is False
         assert restored.update(True, T0 + timedelta(seconds=300), 300.0, 60.0) is True
 
+    def test_serialize_stored_stamps_saved_at(self):
+        t = SolarActivationTracker()
+        assert t.serialize_stored(T0) == {
+            "active": False,
+            "pending_since": None,
+            "saved_at": T0.isoformat(),
+        }
+
+    def test_missing_saved_at_drops_pending_keeps_active(self):
+        # Payload without saved_at gives no proof the downtime was short,
+        # so the pending timer restarts; the latch itself survives.
+        raw = {
+            "active": True,
+            "pending_since": (T0 - timedelta(seconds=30)).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.active is True
+        assert restored.serialize()["pending_since"] is None
+
+    def test_long_downtime_drops_pending(self):
+        # Downtime is unobserved surplus: a save-to-restore gap past
+        # MAX_PENDING_DOWNTIME_SECONDS must not count toward the delay.
+        saved = T0 - timedelta(seconds=MAX_PENDING_DOWNTIME_SECONDS + 5)
+        raw = {
+            "active": False,
+            "pending_since": (saved - timedelta(seconds=30)).isoformat(),
+            "saved_at": saved.isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is None
+
+    def test_future_saved_at_drops_pending(self):
+        raw = {
+            "active": False,
+            "pending_since": (T0 - timedelta(seconds=30)).isoformat(),
+            "saved_at": (T0 + timedelta(hours=1)).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is None
+
+    def test_garbage_saved_at_drops_pending(self):
+        raw = {
+            "active": False,
+            "pending_since": (T0 - timedelta(seconds=30)).isoformat(),
+            "saved_at": "not-a-timestamp",
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is None
+
     def test_serialize_none_pending_round_trips(self):
         t = SolarActivationTracker()
         assert t.serialize() == {"active": False, "pending_since": None}
-        restored = SolarActivationTracker.restore(t.serialize(), T0)
+        restored = SolarActivationTracker.restore(t.serialize_stored(T0), T0)
         assert restored.serialize() == {"active": False, "pending_since": None}
 
 
