@@ -2,6 +2,9 @@
 
 Full automations that follow the [command sensors](command-sensors.md) for a battery and an EV charger that aren't SigenStor/Easee. Adapt the `action:` calls to your own hardware's services — the trigger and condition are the reusable part.
 
+!!! tip "Check your entity IDs"
+    Entity IDs follow the entity's name at creation time and your Home Assistant language, so yours may differ from the `sensor.energy_manager_*` IDs below — copy the real IDs from the Energy Manager device page before pasting these automations.
+
 ## Battery: follow the commanded charge limit
 
 The commanded charge limit's state is in kW — convert if your inverter's entity takes W.
@@ -18,7 +21,7 @@ automation:
           {{ trigger.to_state.state not in ('unknown', 'unavailable')
              and not trigger.to_state.attributes.get('dry_run', true) }}
     actions:
-      - action: number.set_value # your inverter's charge-power limit
+      - action: number.set_value # your inverter's charge-power limit (assumed to take kW here)
         target:
           entity_id: number.my_inverter_max_charge_power
         data:

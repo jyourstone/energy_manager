@@ -15,8 +15,8 @@ Two number entities govern the feature:
 
 The discharge limit commanded during an export slot is capped at:
 
-```
-(fuse rating − safety buffer) × 3 × 230 V
+```text
+(fuse rating − safety buffer) × 3 × 230 V ÷ 1000  →  kW
 ```
 
 For example, a 20 A main fuse with the default 1 A safety buffer gives roughly a 13.1 kW export ceiling.
@@ -34,7 +34,7 @@ A slot only becomes an export slot when **both** of these hold:
 1. Its spread above the horizon's cheapest hour is at or above the export spread threshold.
 2. Selling now genuinely beats buying the same energy back later:
 
-```
+```text
 spot price > (cheapest future spot + grid transfer fee + electricity company fee) / 0.9 + battery cycle cost
 ```
 

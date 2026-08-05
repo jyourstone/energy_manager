@@ -2,6 +2,9 @@
 
 Every entity Energy Manager creates, in one place. This page is a lookup table — for the behavior behind each entity, see [Home Battery](../user-guide/home-battery.md), [EV Charging](../user-guide/ev-charging.md), [Battery → Grid Export Arbitrage](../user-guide/battery-export-arbitrage.md), [Solar Appliances](../user-guide/solar-appliances.md), and [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md).
 
+!!! note "Entities follow your configuration"
+    Only the Electricity Price sensor always exists. The rest appear with what you configure: battery and EMS sensors with the Home Battery module, charger/EV and house-load sensors with the EV Charging module, one Car Charging Schedule per car subentry, and appliance entities with the Solar Appliances module.
+
 ## Sensors
 
 | Sensor | Description |
