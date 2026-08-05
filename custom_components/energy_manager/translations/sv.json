@@ -110,7 +110,7 @@
         "data_description": {
           "charger_status_entity": "Sensor som visar laddarens anslutningsstatus.",
           "charger_power_entity": "Sensor som visar laddarens effektuttag (W).",
-          "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel.",
+          "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel -- eller lämna det tomt för en laddare som inte är från Easee: kommandon skickas då aldrig och du automatiserar istället via kommandosensorerna.",
           "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
           "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas.",
           "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
@@ -395,7 +395,7 @@
         "data_description": {
           "charger_status_entity": "Sensor som visar laddarens anslutningsstatus.",
           "charger_power_entity": "Sensor som visar laddarens effektuttag (W).",
-          "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel.",
+          "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel -- eller lämna det tomt för en laddare som inte är från Easee: kommandon skickas då aldrig och du automatiserar istället via kommandosensorerna.",
           "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
           "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas.",
           "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
@@ -449,6 +449,12 @@
       "battery_commanded_charge_limit": {
         "name": "Batteriets beordrade laddgräns"
       },
+      "battery_commanded_mode": {
+        "name": "Batteriets beordrade EMS-läge"
+      },
+      "battery_commanded_discharge_limit": {
+        "name": "Batteriets beordrade urladdningsgräns"
+      },
       "battery_effective_discharge_threshold": {
         "name": "Batteriets effektiva urladdningströskel"
       },
@@ -457,6 +463,12 @@
       },
       "ev_charger_status": {
         "name": "Elbilsladdarens status"
+      },
+      "ev_commanded_current": {
+        "name": "Beordrad laddström"
+      },
+      "ev_commanded_phase_mode": {
+        "name": "Beordrat fasläge"
       },
       "actual_electricity_price": {
         "name": "Faktiskt elpris"

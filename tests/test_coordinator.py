@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from custom_components.energy_manager.coordinator import (
+    EMSData,
     _prune_samples,
     _read_sun_dawn_dusk,
     _restore_samples,
@@ -293,3 +294,49 @@ def test_read_sun_dawn_dusk_missing_entity_returns_none_pair() -> None:
 def test_read_sun_dawn_dusk_missing_attributes_returns_none_pair() -> None:
     hass = FakeHass({"sun.sun": FakeState("above_horizon", {})})
     assert _read_sun_dawn_dusk(hass) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# EMSData -- GEN-02 discharge-limit command fields
+# ---------------------------------------------------------------------------
+
+
+def _minimal_ems_data(**overrides) -> EMSData:
+    """EMSData with only the required (non-default) fields filled."""
+    kwargs = {
+        "current_mode": "standby",
+        "target_mode": "standby",
+        "charge_limit_kw": 0.0,
+        "fuse_headroom_amps": 18.0,
+        "override_reason": None,
+        "command_verified": True,
+        "last_command_time": None,
+        "car_override_active": False,
+        "pv_charging_active": False,
+        "dry_run": True,
+        "last_suppressed_command": None,
+    }
+    kwargs.update(overrides)
+    return EMSData(**kwargs)
+
+
+def test_ems_data_discharge_limit_defaults() -> None:
+    """New GEN-02 fields default to not-computed / not-delivered.
+
+    The schedule-less early return constructs EMSData without them, so
+    the defaults must be honest: no commanded limit, nothing delivered.
+    """
+    data = _minimal_ems_data()
+
+    assert data.discharge_limit_kw is None
+    assert data.discharge_limit_delivered is False
+
+
+def test_ems_data_discharge_limit_fields_carried() -> None:
+    """The commanded discharge limit and delivered flag pass through."""
+    data = _minimal_ems_data(
+        discharge_limit_kw=4.2, discharge_limit_delivered=True
+    )
+
+    assert data.discharge_limit_kw == 4.2
+    assert data.discharge_limit_delivered is True
