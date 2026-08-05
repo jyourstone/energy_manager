@@ -1817,10 +1817,14 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         export_limit_kw: float | None = None
         target_ems_mode = schedule_data.target_ems_mode
         if target_ems_mode == "command_discharging":
-            if not self._discharge_limit_entity:
-                # Without the discharge-limit number the fuse cap cannot be
+            if self._ems_select_entity and not self._discharge_limit_entity:
+                # A configured EMS select would obey the export command, but
+                # without the discharge-limit number the fuse cap cannot be
                 # enforced -- the plant's own limit (14.4 kW) exceeds a 20 A
-                # fuse's ceiling, so export must never be commanded.
+                # fuse's ceiling, so export must never be commanded. With no
+                # select entity nothing is ever sent, so the intent (and the
+                # fuse-capped limit below) is safe to publish for
+                # sensor-driven automations (GEN-02).
                 target_ems_mode = "max_self_consumption"
             else:
                 export_limit_kw = compute_export_limit_kw(

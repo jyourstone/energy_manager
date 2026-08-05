@@ -226,7 +226,7 @@ All five command sensors are diagnostic entities on the Energy Manager device:
 |--------|-------|--------------------------------|
 | Battery commanded EMS mode | The mode EM commands right now: `command_charging` (grid-charge the battery — scheduled or PV-opportunistic), `command_discharging` (BATT-17 export slot, opt-in), `max_self_consumption` (normal operation), `standby` (hold the battery — car-charging priority); `unknown` until the first compute | Map each mode to your inverter's equivalent operating mode — `standby` must actually keep the battery from charging or discharging |
 | Battery commanded charge limit | Maximum battery charge power in kW (fuse-limited; tracks live PV during solar charging) | Write it to your inverter's charge-power limit |
-| Battery commanded discharge limit | Maximum battery discharge power in kW; `0` = discharge blocked by the scheduler (the `discharge_gate_reason` attribute says why) | Write it to your inverter's discharge-power limit — `0` must actually block discharge |
+| Battery commanded discharge limit | Maximum battery discharge power in kW; `0` = discharge blocked by the scheduler (the `discharge_gate_reason` attribute says why). During a `command_discharging` export slot this is the fuse-capped export power (reserve-SOC- and PV-aware). Outside export slots, when no SigenStor discharge-limit entity is configured the value is a 15 kW placeholder ceiling, not a device rating | Write it to your inverter's discharge-power limit, clamped to your inverter's own maximum (`min(value, your_max)`) — `0` must actually block discharge |
 | Commanded charging current | EV charging current in A: `0` = charging should be paused/stopped; above `0` but below the 6 A minimum = do **not** start charging (EM's own state machine never starts in this range — it avoids start/stop churn below the charger minimum — and leaves a running session's limit untouched); `>= 6` = charge at (up to) this current | Set your charger's dynamic current limit; pause/stop at `0`; never start below `6` |
 | Commanded phase mode | `single` or `three` | Switch the charger's phase mode if it supports that; ignore otherwise |
 
@@ -234,8 +234,8 @@ Entity IDs are slugs of the sensor names — e.g. `sensor.energy_manager_battery
 
 The sensors carry context attributes that explain each value: `dry_run` (observe-only mode), `override_reason`, `charge_limit_delivered` / `discharge_limit_delivered` (whether the value also reached a configured SigenStor entity), and the charger decision mode and status on the commanded current sensor.
 
-> [!IMPORTANT]
-> If you opt into [BATT-17 export](#battery--grid-export-arbitrage-batt-17) with your own inverter: the fuse-capped export power is only computed when a SigenStor discharge-limit entity is configured. Without one, the commanded discharge limit falls back to the hardware cap during export slots — apply your own fuse-safe export cap in your automation.
+> [!NOTE]
+> [BATT-17 export](#battery--grid-export-arbitrage-batt-17) works without any SigenStor entities: during export slots the commanded EMS mode shows `command_discharging` and the commanded discharge limit carries the fuse-capped export power, computed from the fuse rating and safety buffer you configure in Energy Manager's options. The demotion to `max_self_consumption` only happens on real SigenStor hardware (EMS select entity configured) missing its discharge-limit entity, where the command would otherwise run uncapped.
 
 **Update cadence:** command sensors are recomputed on the 30-second control loops (battery EMS and charger controllers). State-change automations follow automatically — no polling needed; a trigger only fires when the value actually changes.
 
@@ -291,7 +291,9 @@ automation:
         target:
           entity_id: number.my_inverter_max_charge_power
         data:
-          value: "{{ trigger.to_state.state | float }}"
+          # Clamp to your inverter's own maximum -- EM does not know your
+          # hardware's rating (5.0 kW here as an example).
+          value: "{{ [trigger.to_state.state | float, 5.0] | min }}"
 ```
 
 EV — follow the commanded current, pausing at `0` (values above `0` but below the 6 A minimum mean *do not start* — leave the charger as it is):
