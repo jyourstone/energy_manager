@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -44,6 +44,13 @@ PAUSED_STATUS = "paused"
 #: reported status disagrees -- status is unreliable (live watchdog evidence),
 #: power is always cross-checked.
 POWER_ACTIVE_THRESHOLD_KW = 0.5
+
+#: A restored solar-latch pending timer older than this is discarded --
+#: downtime must not count toward the continuously-held delay requirement.
+#: Twice MAX_SOLAR_DELAY_SECONDS, so even a delay configured at the allowed
+#: maximum keeps a full delay-width of margin, while any restart-spanning
+#: outage still clears the timer.
+MAX_RESTORED_PENDING_AGE_SECONDS = 7200.0
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +508,13 @@ class SolarActivationTracker:
     before turning on; deactivation requires it to be continuously false for
     deactivation_delay_s before turning off. The delays are supplied on each
     update() call (see ChargerAmpHysteresis docstring for why).
+
+    Because the delays are wall-clock (not tick-count) based, the state is
+    persistable: serialize()/restore() let the EaseeCoordinator survive a
+    config-entry reload or HA restart during active solar-only charging.
+    Without persistence a reload resets the latch, the charge is stopped as
+    an unauthorized session, and the charger is locked out for the full
+    activation delay before solar charging can resume.
     """
 
     def __init__(self) -> None:
@@ -539,6 +553,70 @@ class SolarActivationTracker:
             self._pending_target = None
         return self._active
 
+    def serialize(self) -> dict:
+        """Serialize the latch state to a JSON-storable dict.
+
+        Only active + pending_since are stored: _pending_target is fully
+        derivable (a pending timer only ever exists while the raw condition
+        disagrees with the latched state, so it is always `not active`).
+        Pure and HA-free so it can be unit tested directly.
+        """
+        return {
+            "active": self._active,
+            "pending_since": (
+                self._pending_since.isoformat()
+                if self._pending_since is not None
+                else None
+            ),
+        }
+
+    @classmethod
+    def restore(cls, raw: object, now: datetime) -> SolarActivationTracker:
+        """Restore a tracker persisted by serialize().
+
+        Tolerates None/garbage/malformed payloads by returning a fresh
+        default tracker (inactive, no pending timer) -- corrupt storage
+        must never break charger control. A pending_since in the future of
+        `now` is dropped (clock skew or garbage would otherwise satisfy a
+        delay instantly or never); one older than
+        MAX_RESTORED_PENDING_AGE_SECONDS is also dropped, so downtime
+        cannot count toward the continuously-held requirement and let one
+        transient surplus spike flip the latch the moment HA is back.
+        Naive timestamps are coerced to UTC (mirrors
+        coordinator._restore_samples). Pure and HA-free so it can be unit
+        tested directly.
+        """
+        tracker = cls()
+        if not isinstance(raw, dict):
+            return tracker
+        active = raw.get("active")
+        if not isinstance(active, bool):
+            return tracker
+        pending_raw = raw.get("pending_since")
+        pending: datetime | None
+        if pending_raw is None:
+            pending = None
+        else:
+            try:
+                pending = datetime.fromisoformat(pending_raw)
+            except (TypeError, ValueError):
+                return tracker
+            pending = (
+                pending.replace(tzinfo=timezone.utc)
+                if pending.tzinfo is None
+                else pending.astimezone(timezone.utc)
+            )
+            if (
+                pending > now
+                or (now - pending).total_seconds()
+                > MAX_RESTORED_PENDING_AGE_SECONDS
+            ):
+                pending = None
+        tracker._active = active
+        tracker._pending_since = pending
+        tracker._pending_target = (not active) if pending is not None else None
+        return tracker
+
 
 # ---------------------------------------------------------------------------
 # ChargerController -- stateful, owned by the coordinator, one decide() per tick
@@ -573,6 +651,25 @@ class ChargerController:
     def sequence_state(self) -> str:
         """Current phase-switch sequence state, for diagnostics."""
         return self._sequence_state
+
+    @property
+    def solar_tracker(self) -> SolarActivationTracker:
+        """The solar-activation latch, exposed for persistence.
+
+        The EaseeCoordinator serializes it after ticks that changed it and
+        must read THROUGH this property at save time -- a terminal-state
+        _reset_all() swaps the tracker object, so a captured reference
+        would serialize a stale snapshot.
+        """
+        return self._solar_tracker
+
+    def restore_solar_tracker(self, tracker: SolarActivationTracker) -> None:
+        """Adopt a restored solar-activation latch (called once at setup).
+
+        See SolarActivationTracker's class docstring for why the latch is
+        persisted across config-entry reloads and HA restarts.
+        """
+        self._solar_tracker = tracker
 
     def decide(self, inputs: ChargerInputs) -> ChargerDecision:
         """Compute this tick's charger decision.

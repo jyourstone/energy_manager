@@ -126,10 +126,21 @@ CONSUMPTION_STORAGE_VERSION = 1
 CONSUMPTION_STORAGE_SAVE_DELAY_SECONDS = 30.0
 
 # Stage-1 forecast-accuracy telemetry (observe-only) -- daily
-# forecast-vs-actual records persisted in their own Store (separate file
-# from the consumption samples by design; written once per day at the
-# local-midnight rollover).
+# forecast-vs-actual records plus the in-flight day persisted in their own
+# Store (separate file from the consumption samples by design; written at
+# the local-midnight rollover, with delayed batched saves for the in-flight
+# day so a mid-day restart or reload does not lose it).
 FORECAST_ACCURACY_STORAGE_VERSION = 1
+FORECAST_ACCURACY_SAVE_DELAY_SECONDS = 30.0
+
+# Solar-activation latch persistence (EaseeCoordinator) -- without it a
+# config-entry reload or HA restart during active solar-only charging
+# resets the latch, so the in-progress charge is stopped as an
+# unauthorized session and the charger is locked out for the full
+# activation delay. Delayed batched saves like the two stores above; a
+# clean unload flushes, so the delay only costs data on a hard crash.
+SOLAR_TRACKER_STORAGE_VERSION = 1
+SOLAR_TRACKER_SAVE_DELAY_SECONDS = 30.0
 
 # --- BATT-14 economics number entities (RestoreNumber, hub-level) ---
 # Reuses MIN_PRICE_THRESHOLD/MAX_PRICE_THRESHOLD/PRICE_THRESHOLD_STEP above

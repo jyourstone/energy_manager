@@ -27,6 +27,7 @@ from .const import (
     MODULE_APPLIANCES,
     MODULE_BATTERY,
     MODULE_EV,
+    SOLAR_TRACKER_STORAGE_VERSION,
     SUBENTRY_TYPE_CAR,
 )
 from .coordinator import (
@@ -40,6 +41,7 @@ from .coordinator import (
     PriceCoordinator,
     consumption_storage_key,
     forecast_accuracy_storage_key,
+    solar_tracker_storage_key,
 )
 from .repairs import ALL_ISSUE_IDS, async_clear_issue
 
@@ -214,20 +216,36 @@ async def async_unload_entry(
     for issue_id in ALL_ISSUE_IDS:
         async_clear_issue(hass, issue_id)
 
-    # Flush the pending delayed consumption save so it cannot fire after
-    # async_remove_entry deletes the file, or after a reload's fresh
-    # coordinator has already loaded the store.
-    battery_coordinator = getattr(entry.runtime_data, "battery_coordinator", None)
-    if battery_coordinator is not None:
-        await battery_coordinator.async_flush_consumption_store()
-
     forwarded = getattr(entry.runtime_data, "forwarded_platforms", None)
     if forwarded is not None:
         platforms = [Platform(p) for p in forwarded]
     else:
         platforms = _get_enabled_platforms(entry)
-    if platforms:
-        return await hass.config_entries.async_unload_platforms(entry, platforms)
+    if platforms and not await hass.config_entries.async_unload_platforms(
+        entry, platforms
+    ):
+        return False
+
+    # Shut the store-owning coordinators down BEFORE flushing: a refresh
+    # tick landing after the flush could otherwise schedule a new delayed
+    # save the flush cannot cancel, firing after async_remove_entry has
+    # deleted the files or after a reload's fresh coordinator has already
+    # loaded the stores. async_shutdown() makes further refresh requests
+    # no-ops, so the flushes below write the final word.
+    battery_coordinator = getattr(entry.runtime_data, "battery_coordinator", None)
+    if battery_coordinator is not None:
+        await battery_coordinator.async_shutdown()
+        await battery_coordinator.async_flush_consumption_store()
+        await battery_coordinator.async_flush_forecast_accuracy_store()
+
+    # Same flush for the Easee coordinator's solar-activation latch -- a
+    # reload during active solar-only charging must hand the fresh
+    # coordinator the current latch state, not a stale delayed save.
+    easee_coordinator = getattr(entry.runtime_data, "easee_coordinator", None)
+    if easee_coordinator is not None:
+        await easee_coordinator.async_shutdown()
+        await easee_coordinator.async_flush_solar_tracker_store()
+
     return True
 
 
@@ -250,6 +268,7 @@ async def async_remove_entry(
             FORECAST_ACCURACY_STORAGE_VERSION,
             forecast_accuracy_storage_key(entry.entry_id),
         ),
+        (SOLAR_TRACKER_STORAGE_VERSION, solar_tracker_storage_key(entry.entry_id)),
     ):
         await Store(hass, version, key).async_remove()
 

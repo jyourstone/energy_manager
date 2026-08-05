@@ -60,6 +60,7 @@ from .charger_state_machine import (
     ChargerCommand,
     ChargerController,
     ChargerInputs,
+    SolarActivationTracker,
     compute_solar_surplus_kw,
 )
 from .const import (
@@ -185,6 +186,7 @@ from .const import (
     EMS_MODE_MAP,
     EMS_UPDATE_INTERVAL_SECONDS,
     FALLBACK_STALE_THRESHOLD_MINUTES,
+    FORECAST_ACCURACY_SAVE_DELAY_SECONDS,
     FORECAST_ACCURACY_STORAGE_VERSION,
     FUSE_FALLBACK_ISSUE_THRESHOLD_SECONDS,
     MAX_CHARGE_LIMIT_KW,
@@ -192,6 +194,8 @@ from .const import (
     MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES,
     PRICE_UPDATE_INTERVAL_MINUTES,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+    SOLAR_TRACKER_SAVE_DELAY_SECONDS,
+    SOLAR_TRACKER_STORAGE_VERSION,
     SUBENTRY_TYPE_APPLIANCE,
     WATTS_TO_AMPS_3PHASE_DIVISOR,
 )
@@ -210,11 +214,12 @@ from .ems_controller import (
 from .forecast_accuracy import (
     MAX_SAMPLE_GAP_MINUTES,
     DailyAccuracyRecord,
+    InFlightDay,
     accumulate_energy_kwh,
     append_day,
     is_before_dawn,
-    restore_history,
-    serialize_history,
+    restore_fa_store,
+    serialize_fa_store,
 )
 from .nordpool_adapter import (
     DEFAULT_PRICE_UNIT,
@@ -580,8 +585,10 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # Stage-1 forecast-accuracy telemetry (observe-only): pre-dawn
         # Forecast.Solar snapshot + daily PV kWh accumulator, rolled into
         # one DailyAccuracyRecord at local midnight and persisted in a
-        # dedicated Store (one write per day, at rollover). Feeds only the
-        # diagnostic sensor -- never the scheduler.
+        # dedicated Store (immediate write at rollover, delayed batched
+        # writes for the in-flight day so a mid-day restart or reload does
+        # not lose it). Feeds only the diagnostic sensor -- never the
+        # scheduler.
         self.forecast_accuracy_history: list[DailyAccuracyRecord] = []
         self._fa_store: Store = Store(
             hass,
@@ -612,10 +619,19 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
             self._consumption_samples = []
 
-        # Stage-1 forecast accuracy: restore the persisted daily records
+        # Stage-1 forecast accuracy: restore the persisted daily records and
+        # the in-flight day, so a mid-day reload/restart keeps the pre-dawn
+        # snapshot and the kWh accumulated so far. A restored yesterday-day
+        # is handled by the normal rollover on the first refresh. The PV
+        # anchor stays None -- the first sample re-anchors safely.
         try:
-            restored_history = await self._fa_store.async_load()
-            self.forecast_accuracy_history = restore_history(restored_history)
+            restored_fa = await self._fa_store.async_load()
+            history, in_flight = restore_fa_store(restored_fa, dt_util.now().date())
+            self.forecast_accuracy_history = history
+            if in_flight is not None:
+                self._fa_day = in_flight.day
+                self._fa_snapshot_kwh = in_flight.snapshot_kwh
+                self._fa_accumulated_kwh = in_flight.accumulated_kwh
         except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
             self.forecast_accuracy_history = []
 
@@ -1014,17 +1030,42 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
             _LOGGER.debug("Consumption store flush failed on unload: %s", err)
 
+    def _fa_in_flight(self) -> InFlightDay:
+        """The current day's forecast-accuracy state, for persistence."""
+        return InFlightDay(
+            self._fa_day, self._fa_snapshot_kwh, self._fa_accumulated_kwh
+        )
+
+    async def async_flush_forecast_accuracy_store(self) -> None:
+        """Write the forecast-accuracy state now, cancelling any delayed save.
+
+        Called on entry unload: an in-flight async_delay_save would
+        otherwise fire AFTER async_remove_entry deletes the file (re-creating
+        the orphan it exists to prevent), or land after a reload's fresh
+        coordinator already loaded the store (dropping the in-flight day).
+        Store.async_save cancels the pending delayed listener.
+        """
+        try:
+            await self._fa_store.async_save(
+                serialize_fa_store(
+                    self.forecast_accuracy_history, self._fa_in_flight()
+                )
+            )
+        except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
+            _LOGGER.debug("Forecast accuracy store flush failed on unload: %s", err)
+
     async def _track_forecast_accuracy(self, dawn: datetime | None) -> None:
         """Run one observe-only forecast-accuracy telemetry step (Stage 1).
 
         At the first update past local midnight: append yesterday's record
         (skipped when no pre-dawn snapshot was captured -- e.g. forecast
-        entities unavailable all morning, or HA restarted mid-day), reset
-        the accumulator, and persist the history in the day's single Store
-        write. Every update: retry the pre-dawn Forecast.Solar snapshot
-        until dawn, and trapezoid-integrate the PV power entity into the
-        daily actual-kWh accumulator (unavailable readings are skipped,
-        never treated as zero).
+        entities unavailable all morning), reset the accumulator, and
+        persist the history immediately. Every update: retry the pre-dawn
+        Forecast.Solar snapshot until dawn, and trapezoid-integrate the PV
+        power entity into the daily actual-kWh accumulator (unavailable
+        readings are skipped, never treated as zero); when the update
+        changed the in-flight day, persist it via a delayed batched save so
+        a mid-day restart or reload does not lose the current day.
 
         Args:
             dawn: sun.sun's next_dawn (UTC-aware), or None if unavailable.
@@ -1053,9 +1094,13 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             self._fa_snapshot_kwh = None
             self._fa_accumulated_kwh = 0.0
             self._fa_last_pv_sample = None
+            # Saved after the reset so the persisted in-flight day is the
+            # fresh empty today, not the just-appended yesterday.
             try:
                 await self._fa_store.async_save(
-                    serialize_history(self.forecast_accuracy_history)
+                    serialize_fa_store(
+                        self.forecast_accuracy_history, self._fa_in_flight()
+                    )
                 )
             except Exception as err:  # noqa: BLE001 -- telemetry must never fail the refresh
                 _LOGGER.warning(
@@ -1067,6 +1112,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # Keep refreshing (max) while pre-dawn: the first post-midnight
         # reading can be Forecast.Solar's stale pre-rollover leftover (~0);
         # freezing it would drop or heavily bias the whole day.
+        snapshot_before = self._fa_snapshot_kwh
         if is_before_dawn(
             today, dt_util.as_local(dawn).date() if dawn else None
         ):
@@ -1088,6 +1134,19 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             self._fa_last_pv_sample, now, pv_kw, MAX_SAMPLE_GAP_MINUTES
         )
         self._fa_accumulated_kwh += delta_kwh
+
+        # Persist the in-flight day (delayed, batched -- only when this
+        # update changed it: snapshot newly set/raised or energy actually
+        # accumulated, so nights stay write-free). The lambda must re-read
+        # self.* at save time: capturing the values here would serialize a
+        # stale snapshot (same footgun as the consumption delay_save above).
+        if self._fa_snapshot_kwh != snapshot_before or delta_kwh > 0:
+            self._fa_store.async_delay_save(
+                lambda: serialize_fa_store(
+                    self.forecast_accuracy_history, self._fa_in_flight()
+                ),
+                FORECAST_ACCURACY_SAVE_DELAY_SECONDS,
+            )
 
 
 def sum_solar_forecast_wh(readings: list[tuple[float, str]]) -> float:
@@ -1162,11 +1221,22 @@ def forecast_accuracy_storage_key(entry_id: str) -> str:
     """Storage key for a config entry's Stage-1 forecast-accuracy history.
 
     Deliberately a separate Store from the consumption samples (different
-    lifecycle: one write per day at rollover vs. delayed batched writes).
+    payload and lifecycle: an immediate write at rollover plus delayed
+    batched in-flight-day writes vs. delayed batched sample writes).
     Shared with __init__.async_remove_entry so entry removal deletes the
     same .storage file this coordinator writes.
     """
     return f"{DOMAIN}.{entry_id}-forecast_accuracy"
+
+
+def solar_tracker_storage_key(entry_id: str) -> str:
+    """Storage key for a config entry's persisted solar-activation latch.
+
+    A third separate Store (tiny payload, EaseeCoordinator lifecycle rather
+    than BatteryScheduleCoordinator). Shared with __init__.async_remove_entry
+    so entry removal deletes the same .storage file this coordinator writes.
+    """
+    return f"{DOMAIN}.{entry_id}-solar-tracker"
 
 
 def _serialize_samples(samples: list[tuple[datetime, float]]) -> list[list]:
@@ -3032,6 +3102,17 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         )
         self._controller = ChargerController()
 
+        # Solar-activation latch persistence -- restored in _async_setup,
+        # saved (delayed) whenever a tick changes the latch state, so a
+        # reload/restart during active solar-only charging does not stop
+        # the charge and re-impose the activation delay (see
+        # SolarActivationTracker's class docstring).
+        self._solar_tracker_store: Store = Store(
+            hass,
+            SOLAR_TRACKER_STORAGE_VERSION,
+            solar_tracker_storage_key(entry.entry_id),
+        )
+
         # -- Entities --
         self._charger_status_entity: str = entry.options.get(
             CONF_CHARGER_STATUS_ENTITY, ""
@@ -3164,6 +3245,18 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         plain flags in runtime_data, not entities) -- Wave C's switch
         entities call async_request_refresh() directly instead.
         """
+        # Restore the persisted solar-activation latch so the FIRST tick
+        # after a reload/restart still sees an active latch (or a running
+        # pending timer) instead of stopping an in-progress solar charge
+        # as unauthorized and re-imposing the activation delay.
+        try:
+            restored = await self._solar_tracker_store.async_load()
+            self._controller.restore_solar_tracker(
+                SolarActivationTracker.restore(restored, dt_util.utcnow())
+            )
+        except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
+            self._controller.restore_solar_tracker(SolarActivationTracker())
+
         entities = [e for e in (self._charger_status_entity, self._charger_power_entity) if e]
         if entities:
             self.config_entry.async_on_unload(
@@ -3258,7 +3351,19 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             limit_reassert_interval_s=DEFAULT_LIMIT_REASSERT_INTERVAL_SECONDS,
         )
 
+        solar_state_before = self._controller.solar_tracker.serialize()
         decision = self._controller.decide(inputs)
+        # Persist the solar-activation latch (delayed, batched -- only when
+        # this tick changed it, so steady-state ticks stay write-free). The
+        # lambda must re-read the tracker THROUGH the controller at save
+        # time: a terminal-state reset swaps the tracker object, so
+        # capturing it here would serialize a stale snapshot (same footgun
+        # as the consumption/forecast-accuracy delay_saves).
+        if self._controller.solar_tracker.serialize() != solar_state_before:
+            self._solar_tracker_store.async_delay_save(
+                lambda: self._controller.solar_tracker.serialize(),
+                SOLAR_TRACKER_SAVE_DELAY_SECONDS,
+            )
         await self._execute_commands(decision.commands)
         await self._send_notifications(decision.notifications)
 
@@ -3290,6 +3395,22 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             house_consumption_kw=net_house_consumption_kw,
             solar_surplus_kw=solar_surplus_kw,
         )
+
+    async def async_flush_solar_tracker_store(self) -> None:
+        """Write the solar-activation latch now, cancelling any delayed save.
+
+        Called on entry unload: an in-flight async_delay_save would
+        otherwise fire AFTER async_remove_entry deletes the file (re-creating
+        the orphan it exists to prevent), or land after a reload's fresh
+        coordinator already loaded the store (dropping the latest latch
+        state). Store.async_save cancels the pending delayed listener.
+        """
+        try:
+            await self._solar_tracker_store.async_save(
+                self._controller.solar_tracker.serialize()
+            )
+        except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
+            _LOGGER.debug("Solar tracker store flush failed on unload: %s", err)
 
     def _is_control_enabled(self) -> bool:
         """Return the master "Device control" switch state (CORE-14)."""
