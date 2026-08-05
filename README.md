@@ -191,7 +191,9 @@ automation:
         entity_id: sensor.energy_manager_battery_commanded_charge_limit
     conditions:
       - condition: template
-        value_template: "{{ trigger.to_state.state not in ('unknown', 'unavailable') }}"
+        value_template: >-
+          {{ trigger.to_state.state not in ('unknown', 'unavailable')
+             and not trigger.to_state.attributes.get('dry_run', true) }}
     actions:
       - action: number.set_value # your inverter's charge-power limit
         target:
@@ -212,7 +214,9 @@ automation:
         entity_id: sensor.energy_manager_commanded_charging_current
     conditions:
       - condition: template
-        value_template: "{{ trigger.to_state.state not in ('unknown', 'unavailable') }}"
+        value_template: >-
+          {{ trigger.to_state.state not in ('unknown', 'unavailable')
+             and not trigger.to_state.attributes.get('dry_run', true) }}
     actions:
       - choose:
           # 0 = pause/stop

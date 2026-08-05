@@ -14,7 +14,9 @@ automation:
         entity_id: sensor.energy_manager_battery_commanded_charge_limit
     conditions:
       - condition: template
-        value_template: "{{ trigger.to_state.state not in ('unknown', 'unavailable') }}"
+        value_template: >-
+          {{ trigger.to_state.state not in ('unknown', 'unavailable')
+             and not trigger.to_state.attributes.get('dry_run', true) }}
     actions:
       - action: number.set_value # your inverter's charge-power limit
         target:
@@ -40,7 +42,9 @@ automation:
         entity_id: sensor.energy_manager_commanded_charging_current
     conditions:
       - condition: template
-        value_template: "{{ trigger.to_state.state not in ('unknown', 'unavailable') }}"
+        value_template: >-
+          {{ trigger.to_state.state not in ('unknown', 'unavailable')
+             and not trigger.to_state.attributes.get('dry_run', true) }}
     actions:
       - choose:
           # 0 = pause/stop
@@ -72,13 +76,15 @@ automation:
 Both automations use the same skeleton, and it's the one to copy for any other [command sensor](command-sensors.md#the-five-command-sensors):
 
 - **Trigger:** `state` on the command sensor's entity ID.
-- **Condition:** a template guard that skips the run while the sensor is `unknown` or `unavailable` — before Energy Manager's first compute, or if a coordinator hasn't populated data yet.
+- **Condition:** a template guard that skips the run while the sensor is `unknown` or `unavailable` — before Energy Manager's first compute, or if a coordinator hasn't populated data yet — and while the sensor's `dry_run` attribute is `true`, so your automation respects the master **Device control** switch exactly like the native SigenStor/Easee paths do.
 - **Action:** a `choose:` block (or a single action, for sensors with only one meaningful value) that maps each state to your hardware's own service call.
 
 ```yaml
 conditions:
   - condition: template
-    value_template: "{{ trigger.to_state.state not in ('unknown', 'unavailable') }}"
+    value_template: >-
+      {{ trigger.to_state.state not in ('unknown', 'unavailable')
+         and not trigger.to_state.attributes.get('dry_run', true) }}
 ```
 
-Reuse that condition verbatim for the commanded EMS mode and commanded discharge limit sensors too — every command sensor can be `unknown` before Energy Manager's first calculation.
+Reuse that condition verbatim for the commanded EMS mode and commanded discharge limit sensors too — every command sensor can be `unknown` before Energy Manager's first calculation, and every one carries the `dry_run` attribute. Without the `dry_run` guard, your automation would actuate hardware while Energy Manager is still in [observe-only mode](../getting-started/first-days.md).
