@@ -1,0 +1,43 @@
+/* Custom primary color to match logo */
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #2978B1;
+  --md-primary-fg-color--light: #4A92C4;
+  --md-primary-fg-color--dark: #1D5A88;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #2978B1;
+  --md-primary-fg-color--light: #4A92C4;
+  --md-primary-fg-color--dark: #1D5A88;
+}
+
+/* Custom accent/hover color */
+:root,
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color: #8ABB4A;
+  --md-accent-fg-color--transparent: rgba(138, 187, 74, 0.1);
+}
+
+/* Link colors - use accent color for better visibility */
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #2978B1;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-typeset-a-color: #5AA2D4;
+}
+
+/* Visual separation between major sections */
+.md-typeset h2 {
+  margin-top: 1.2em;
+  padding-top: 1.2em;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}

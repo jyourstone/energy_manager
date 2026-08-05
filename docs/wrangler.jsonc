@@ -1,0 +1,11 @@
+{
+  // energy-manager.dinsten.se — MkDocs site served as Worker static assets.
+  // Built by Cloudflare Workers Builds: root dir "docs", build command
+  // "pip install -r requirements.txt && mkdocs build", deploy "npx wrangler deploy".
+  "name": "energy-manager-docs",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "./site",
+    "not_found_handling": "404-page"
+  }
+}

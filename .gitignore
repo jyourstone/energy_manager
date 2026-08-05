@@ -28,3 +28,6 @@ dev/config/*
 
 # Session memory (never commit)
 primer.md
+
+# Docs build output
+docs/site/
