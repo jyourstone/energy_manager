@@ -23,4 +23,4 @@ Persistent degraded conditions surface in **Settings → Repairs** instead of on
 - Every active coordinator's current state (price, battery schedule, EMS, Easee charger, and each car)
 - The runtime control flags: **Device control**, **force charging**, and which platforms are forwarded
 
-Attach this file whenever you report a bug — it captures far more context than a screenshot of a single entity. The snapshot contains no credentials, but do skim it before posting publicly: it includes your entity IDs, configured fees, and schedule data.
+Attach this file whenever you [report a bug on GitHub](https://github.com/jyourstone/energy_manager/issues) — it captures far more context than a screenshot of a single entity. The snapshot contains no credentials, but do skim it before posting publicly: it includes your entity IDs, configured fees, and schedule data.

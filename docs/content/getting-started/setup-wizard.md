@@ -49,7 +49,7 @@ This step configures the battery itself, solar-aware scheduling, and the EMS (En
 | Fuse rating (A) | Your main fuse rating — the basis for every safe charging/discharging limit |
 | EMS mode select entity | Auto-detected from SigenStor; leave empty for non-SigenStor hardware (see [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md)) |
 | Max charging / discharging limit entities | Auto-detected from SigenStor |
-| Grid power / phase entities | Signed power sensors (positive = import, negative = export) used for fuse protection |
+| Grid power / phase entities | Signed power sensors (positive = import, negative = export) used for fuse protection — auto-detected from SigenStor where possible |
 | PV power sensor | Optional, enables opportunistic solar charging |
 
 See the [Home Battery](../user-guide/home-battery.md) page for what each field means and how it drives scheduling.

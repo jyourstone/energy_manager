@@ -289,7 +289,8 @@ def compute_export_limit_kw(
       the runtime reserve-floor stop, re-checked every cycle.
 
     The SigenStor inverter's own backup/min-SOC (hardware floor) is a
-    documented README precondition, not checked here.
+    documented precondition, not checked here — see
+    https://energy-manager.dinsten.se/user-guide/battery-export-arbitrage/
 
     Args:
         fuse_rating_amps: Installed main fuse rating in amps.

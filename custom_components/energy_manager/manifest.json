@@ -6,7 +6,7 @@
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/jyourstone/energy_manager",
+  "documentation": "https://energy-manager.dinsten.se",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/jyourstone/energy_manager/issues",

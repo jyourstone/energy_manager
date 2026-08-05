@@ -24,15 +24,17 @@
 
 ---
 
+> **📖 Full documentation: [energy-manager.dinsten.se](https://energy-manager.dinsten.se)** — setup wizard walkthrough, user guides for every module, the bring-your-own-hardware contracts with worked examples, and the full entity reference.
+
 ## What it does
 
 Electricity prices swing a lot from hour to hour. Energy Manager reads the day-ahead Nordpool prices and plans around them: it charges your home battery and your car during the cheapest hours, runs the house on battery power during the expensive ones, and puts solar surplus to work. Then it executes those plans — natively on SigenStor inverters and Easee chargers, or through your own automations on any other hardware.
 
 Three independent modules — enable any combination:
 
-- **Home Battery** — charges the battery in cheap hours and discharges it into expensive ones, planning several charge/discharge cycles ahead instead of just reacting to the current price. Optionally sells battery energy to the grid during extreme price spikes ([export arbitrage](#battery--grid-export-arbitrage)).
+- **Home Battery** — charges the battery in cheap hours and discharges it into expensive ones, planning several charge/discharge cycles ahead instead of just reacting to the current price. Optionally sells battery energy to the grid during extreme price spikes ([export arbitrage](https://energy-manager.dinsten.se/user-guide/battery-export-arbitrage/)).
 - **EV Charging** — a schedule per car: the cheapest hours that reach its target charge level before its departure time, plus charging on surplus solar.
-- **Solar Appliances** — turns switch loads (water heater, pool pump) on while measured solar surplus covers them, and off when it disappears ([details](#appliances-solar-surplus)).
+- **Solar Appliances** — turns switch loads (water heater, pool pump) on while measured solar surplus covers them, and off when it disappears ([details](https://energy-manager.dinsten.se/user-guide/solar-appliances/)).
 
 ## Two ways to use it
 
@@ -40,12 +42,12 @@ Energy Manager always does the planning. How the plans reach your hardware depen
 
 **1. Plug and play — SigenStor + Easee.** With a SigenStor battery inverter and/or an Easee EV charger (their Home Assistant integrations installed), Energy Manager controls the hardware directly: it sets the inverter's EMS (Energy Management System) mode and charge/discharge limits, and sends the charger current and phase-mode commands. Nothing for you to build.
 
-**2. Bring your own hardware — any inverter, any charger.** Energy Manager plans, your automations execute: all inputs (state of charge, power, and price entities) are free entity pickers, and every decision is published on diagnostic **command sensors** (battery EMS mode, charge/discharge limits, charger current, phase mode). You write one small automation per sensor that forwards the value to your hardware — the full sensor contract and worked YAML examples are in [Bring your own hardware](#bring-your-own-hardware).
+**2. Bring your own hardware — any inverter, any charger.** Energy Manager plans, your automations execute: all inputs (state of charge, power, and price entities) are free entity pickers, and every decision is published on diagnostic **command sensors** (battery EMS mode, charge/discharge limits, charger current, phase mode). You write one small automation per sensor that forwards the value to your hardware — the full sensor contract and worked YAML examples are in the [Bring your own hardware docs](https://energy-manager.dinsten.se/bring-your-own-hardware/command-sensors/).
 
 | | **Plug and play**<br>SigenStor + Easee | **Bring your own hardware**<br>any inverter, any charger |
 |---|---|---|
 | Price-optimized battery & EV schedules | Yes | Yes |
-| Battery control (EMS mode, charge/discharge limits) | Automatic | Your automations, following the [command sensors](#bring-your-own-hardware) |
+| Battery control (EMS mode, charge/discharge limits) | Automatic | Your automations, following the [command sensors](https://energy-manager.dinsten.se/bring-your-own-hardware/command-sensors/) |
 | EV charger control (current, phase mode) | Automatic | Your automations, following the command sensors |
 | Fuse protection — power capped to your main fuse's headroom, per phase | Yes | Yes, applied to the published commands |
 | Solar Appliances (any `switch`/`input_boolean`) | Yes | Yes |
@@ -69,9 +71,9 @@ Energy Manager is pre-release: under active development, with no stable 1.0 yet.
 
 - Home Assistant 2025.3.0 or newer (config subentry support)
 - A [Nordpool](https://www.home-assistant.io/integrations/nordpool/) sensor (native or HACS integration), configured and providing prices
-- Recommended: the [Forecast.Solar](https://www.home-assistant.io/integrations/forecast_solar/) integration for solar-aware battery scheduling — a separate integration you install and configure yourself. It relies on Home Assistant's built-in [Sun](https://www.home-assistant.io/integrations/sun/) integration (`sun.sun`, part of `default_config` and enabled on standard installs); if that has been removed, solar forecast data is ignored and scheduling still works, just without solar awareness
+- Recommended: the [Forecast.Solar](https://www.home-assistant.io/integrations/forecast_solar/) integration for solar-aware battery scheduling
 
-No specific battery, inverter, or charger is required to install — which hardware is controlled natively versus via your own automations is covered in [Two ways to use it](#two-ways-to-use-it).
+No specific battery, inverter, or charger is required to install — which hardware is controlled natively versus via your own automations is covered in [Two ways to use it](#two-ways-to-use-it). Full details in the [installation docs](https://energy-manager.dinsten.se/getting-started/installation/).
 
 ## Installation
 
@@ -94,266 +96,7 @@ Energy Manager is in the HACS default store:
 
 [![Add integration to your Home Assistant instance.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=energy_manager)
 
-Click the button above, or add it manually via **Settings** -> **Devices & Services** -> **Add Integration** -> search for **Energy Manager**.
-
-### Setup wizard
-
-**Step 1 — Price source:** Select your Nordpool sensor. Auto-detected if either the native or HACS Nordpool integration is installed.
-
-**Step 2 — Modules:** Choose which modules to enable — Home Battery, EV Charging, and/or Solar Appliances. All are optional and independent; you can enable just one.
-
-**Step 3 — Home Battery** *(if enabled)*: Battery SOC and power entities are auto-detected from a SigenStor integration if present. Also configures battery capacity (kWh) and, optionally, one or more Forecast.Solar "remaining today" entities for solar-aware scheduling (e.g. separate east + west arrays — their readings are summed), plus the battery scheduling tuning options (charge buffer %, solar production factor, estimated charge power, and peak-grouping gap). Matching Forecast.Solar "tomorrow" sensors are derived automatically from the configured "remaining today" sensors, so 48h planning also accounts for tomorrow's sun. Continues into EMS setup: fuse rating, EMS mode select entity, charge/discharge limit entities, and grid power/phase entities (all auto-detected from SigenStor where possible), plus an optional PV power entity for opportunistic charging.
-
-**Step 4 — EV Charging** *(if enabled)*: Charger status and power entities, auto-detected from an Easee integration if present, plus the charger's device ID (auto-detected) used to address the Easee control services. Also configures charger amp limits, grid charging power cap, phase-switch and solar-charging thresholds, and an optional notify service for charger safety alerts — all pre-filled with tuned defaults and grouped with the advanced options at the end of the step.
-
-**Step 5 — Economics** *(if Home Battery enabled)*: Battery cycle cost, grid transfer fee, electricity company fee, and maximum battery charging power. These seed the tunable number entities on first setup and stay adjustable from the device page afterward.
-
-**Step 6 — Done:** A setup-complete summary with next steps — adding cars as subentries (when EV Charging is enabled) and enabling **Device control** when you're ready to leave observe-only mode.
-
-After setup, each car is added separately as a **subentry** on the Energy Manager device: give it a name, battery capacity, optionally battery-level, charger-connected, and location entities (auto-detected from Skoda Connect or VW We Connect if present), and how many charger phases it actually uses (1/2/3, default 3).
-
-With Solar Appliances enabled, each appliance is likewise added as a **subentry**: a name, the actuator entity (`switch` or `input_boolean`), its rated power (W) and phases, an optional power sensor for measured credit-back, plus priority and the on/off threshold and timing fields (all pre-filled with tuned defaults). See [Appliances (solar surplus)](#appliances-solar-surplus) below.
-
-## Bring your own hardware
-
-Energy Manager's built-in actuation speaks SigenStor (EMS mode select + charge/discharge limit numbers) and Easee (`easee.*` services). Everything upstream of that is hardware-neutral: all input entities are free pickers, and every decision the controllers make is published on **command sensors** before any device command is sent. With other hardware, EM works as a pure planning brain — leave the control fields empty and let your own automations do the actuation:
-
-- **Battery:** leave the *EMS mode select entity* and the *charge/discharge limit entities* empty in the Home Battery step.
-- **EV:** leave the *Charger device ID* empty in the EV Charging step — Easee commands are then never sent.
-- Point the input pickers (SOC, powers, charger status) at your own hardware's sensors as usual.
-
-Alternatively (or additionally), keep the master **Device control** switch OFF: the command sensors publish the would-be values either way, with `dry_run: true` in their attributes while the switch is off.
-
-### The command sensor contract
-
-All five command sensors are diagnostic entities on the Energy Manager device:
-
-| Sensor | State | What your automation should do |
-|--------|-------|--------------------------------|
-| Battery commanded EMS mode | The mode EM commands right now: `command_charging` (grid-charge the battery — scheduled or PV-opportunistic), `command_discharging` (export-arbitrage slot, opt-in), `max_self_consumption` (normal operation), `standby` (hold the battery — car-charging priority); `unknown` until the first compute | Map each mode to your inverter's equivalent operating mode — `standby` must actually keep the battery from charging or discharging |
-| Battery commanded charge limit | Maximum battery charge power in kW (fuse-limited; tracks live PV during solar charging) | Write it to your inverter's charge-power limit |
-| Battery commanded discharge limit | Maximum battery discharge power in kW; `0` = discharge blocked by the scheduler (the `discharge_gate_reason` attribute says why). During a `command_discharging` export slot this is the fuse-capped export power (reserve-SOC- and PV-aware). Outside export slots, when no SigenStor discharge-limit entity is configured the value is a 15 kW placeholder ceiling, not a device rating | Write it to your inverter's discharge-power limit, clamped to your inverter's own maximum (`min(value, your_max)`) — `0` must actually block discharge |
-| Commanded charging current | EV charging current in A: `0` = charging should be paused/stopped; above `0` but below the 6 A minimum = do **not** start charging (EM's own state machine never starts in this range — it avoids start/stop churn below the charger minimum — and leaves a running session's limit untouched); `>= 6` = charge at (up to) this current | Set your charger's dynamic current limit; pause/stop at `0`; never start below `6` |
-| Commanded phase mode | `single` or `three` | Switch the charger's phase mode if it supports that; ignore otherwise |
-
-Entity IDs are slugs of the sensor names — e.g. `sensor.energy_manager_battery_commanded_charge_limit` on an English install. IDs follow your Home Assistant language at entity creation, so check the exact IDs on the Energy Manager device page.
-
-The sensors carry context attributes that explain each value: `dry_run` (observe-only mode), `override_reason`, `charge_limit_delivered` / `discharge_limit_delivered` (whether the value also reached a configured SigenStor entity), and the charger decision mode and status on the commanded current sensor.
-
-> [!NOTE]
-> [Export arbitrage](#battery--grid-export-arbitrage) works without any SigenStor entities: during export slots the commanded EMS mode shows `command_discharging` and the commanded discharge limit carries the fuse-capped export power, computed from the fuse rating and safety buffer you configure in Energy Manager's options. The demotion to `max_self_consumption` only happens on real SigenStor hardware (EMS select entity configured) missing its discharge-limit entity, where the command would otherwise run uncapped.
-
-**Update cadence:** command sensors are recomputed on the 30-second control loops (battery EMS and charger controllers). State-change automations follow automatically — no polling needed; a trigger only fires when the value actually changes.
-
-### Charger status contract
-
-EM's EV logic reads the configured *Charger status sensor* and expects the Easee integration's status vocabulary:
-
-| State | How EM uses it |
-|-------|-----------------|
-| `charging` | The car is actually drawing power — confirms that a start/resume command took effect (EM also infers drawing from measured charger power) |
-| `awaiting_start` | Car connected and waiting; counts as "car connected" for unrecognized-car fallback detection |
-| `paused` | Charging paused — EM resumes (rather than starts) from here |
-| `disconnected` / `completed` / `error` | Terminal: the controller resets to idle and commands `0` A — but only once measured charger power has actually stopped (physics beats status) |
-
-`unavailable` / `unknown` (and a missing entity) are treated as `disconnected`.
-
-With a non-Easee charger, map its states onto this vocabulary with a [template sensor](https://www.home-assistant.io/integrations/template/) and select that as the charger status sensor:
-
-```yaml
-template:
-  - sensor:
-      - name: "Wallbox status for Energy Manager"
-        state: >-
-          {{ {
-            "Idle": "disconnected",
-            "Connected": "awaiting_start",
-            "Charging": "charging",
-            "Paused": "paused",
-            "Finished": "completed",
-            "Error": "error",
-          }.get(states("sensor.my_wallbox_status"), "disconnected") }}
-        attributes:
-          config_phaseMode: 3
-```
-
-The `config_phaseMode` attribute is optional: EM reads it from the status sensor to learn the charger's *current* phase wiring (raw Easee convention: `1` = single-phase, anything else — or the attribute missing entirely — is treated as three-phase).
-
-### Worked examples
-
-Battery — follow the commanded charge limit (the value is in kW; convert if your inverter's entity takes W):
-
-```yaml
-automation:
-  - alias: "EM: follow battery commanded charge limit"
-    triggers:
-      - trigger: state
-        entity_id: sensor.energy_manager_battery_commanded_charge_limit
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ('unknown', 'unavailable')
-             and not trigger.to_state.attributes.get('dry_run', true) }}
-    actions:
-      - action: number.set_value # your inverter's charge-power limit
-        target:
-          entity_id: number.my_inverter_max_charge_power
-        data:
-          # Clamp to your inverter's own maximum -- EM does not know your
-          # hardware's rating (5.0 kW here as an example).
-          value: "{{ [trigger.to_state.state | float, 5.0] | min }}"
-```
-
-EV — follow the commanded current, pausing at `0` (values above `0` but below the 6 A minimum mean *do not start* — leave the charger as it is):
-
-```yaml
-automation:
-  - alias: "EM: follow EV commanded current"
-    triggers:
-      - trigger: state
-        entity_id: sensor.energy_manager_commanded_charging_current
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ('unknown', 'unavailable')
-             and not trigger.to_state.attributes.get('dry_run', true) }}
-    actions:
-      - choose:
-          # 0 = pause/stop
-          - conditions:
-              - condition: template
-                value_template: "{{ trigger.to_state.state | float(0) == 0 }}"
-            sequence:
-              - action: switch.turn_off # your charger's charging/pause switch or stop service
-                target:
-                  entity_id: switch.my_charger_charging
-          # >= 6 = charge at (up to) this current
-          - conditions:
-              - condition: template
-                value_template: "{{ trigger.to_state.state | float(0) >= 6 }}"
-            sequence:
-              - action: number.set_value # your charger's current-limit entity or set-current service
-                target:
-                  entity_id: number.my_charger_dynamic_limit
-                data:
-                  value: "{{ trigger.to_state.state | float | round(0, 'floor') }}"
-              - action: switch.turn_on
-                target:
-                  entity_id: switch.my_charger_charging
-        # no branch for 0 < value < 6: below the charger minimum, do not start
-```
-
-## Battery → grid export arbitrage
-
-Opt-in feature that sells battery energy to the grid during extreme price spikes. **Off by default**: with the *Battery export spread threshold* unset or 0, no export slot is ever scheduled and battery schedules are unchanged.
-
-- **Battery export spread threshold** — a number entity (like the charge/discharge thresholds): the price spread above the period's cheapest hour at or above which a slot may become an export slot. Adapts automatically when the overall price level shifts. Set to 0 to disable (default). The **Battery export reserve level** number entity (default 20%) is the SOC floor below which the battery never sells.
-- **Export reserve SOC (%)** — never export below this battery level (default 20%). Enforced twice: the scheduler's export energy budget only plans with energy above the floor, and at runtime the floor is re-checked every 30 s — export drops back to self-consumption at or below the floor, or whenever the battery SOC sensor is unavailable.
-- **Fuse-capped export power** — the discharge limit commanded during an export slot is capped at `(fuse rating − safety buffer) × 3 × 230 V`, without adding house load (house load can sit on a single phase, so the cap is derived per-phase-safe). The plant's own discharge limit is never commanded during export: a 20 A main fuse with the default 1 A safety buffer gives a ~13.1 kW ceiling.
-- **Qualification** — a slot only exports when its spread above the period's cheapest hour is at or above the threshold AND selling now beats buying the same energy back later: `spot > (cheapest future spot + grid transfer fee + electricity company fee) / 0.9 + battery cycle cost` (0.9 = assumed round-trip efficiency). Export never demotes a scheduled self-consumption discharge slot worth more per kWh.
-- **Observe-only first** — like all device actuation, export commands sit behind the master *Device control* switch. Leave it off to watch the scheduled `export` slots and the `exporting` state across a few spike events before enabling.
-
-> [!IMPORTANT]
-> **Setup precondition:** the SigenStor inverter's own backup/minimum SOC must be configured at the plant level to at least Energy Manager's minimum SOC. This hardware floor is the last line of defense if Home Assistant goes down mid-export — it is documented here as a requirement and is **not** runtime-verified in v1.
-
-## Appliances (solar surplus)
-
-Off by default (the **Solar Appliances** module flag in the Modules step). Turns user-selected switch loads on when measured solar surplus (grid export) exceeds the load's rated draw with margin, and off when the surplus disappears. Surplus-only on purpose: there is no cheap-hours appliance scheduling in Energy Manager — price-based schedulers like [Power Saver](https://github.com/jyourstone/power_saver) keep that job, and the two coexist (see the recipe below).
-
-- **Surplus signal** — measured grid export minus battery discharge power (arbitrage export is not solar surplus), never computed PV-minus-loads. Battery and car charging need no arbitration: export only appears at the meter once everything upstream is satisfied.
-- **Priority allocation** — appliances are evaluated in priority order (1 = highest); each admitted appliance consumes its measured (if a power sensor is configured) or rated draw from the surplus pool.
-- **Anti-short-cycling** — per-appliance on/off sustain delays plus hard minimum on/off times, so a water heater or heat-pump plug is never rapid-cycled.
-- **Fuse admission** — an appliance only turns on if its rated amps fit the live measured fuse headroom minus the safety buffer.
-- **Observe-only by default** — commands are only sent when BOTH the master **Device control** switch AND that appliance's **EM control** switch are ON. Until then the status sensor and dry-run messages show exactly what would happen.
-
-### Per-appliance configuration
-
-Each appliance subentry has these fields — every threshold and timing is user-configurable per appliance, pre-filled with these defaults:
-
-| Field | Default | Description |
-|-------|---------|--------------|
-| Appliance name | — | Friendly name, e.g. "Water heater" |
-| Actuator switch | — | The `switch` or `input_boolean` Energy Manager toggles (smart plug, relay, or another integration's override switch) |
-| Rated power (W) | — | Expected draw when running, e.g. 4200 |
-| Phases | 3 | 1 or 3; converts rated power to per-phase amps for the fuse admission check |
-| Power sensor | *(optional)* | Sensor measuring actual draw; if set, the measured draw is credited back to the surplus pool instead of the rated power |
-| Priority | 5 | Allocation priority when appliances compete for the surplus (1 = highest); ties broken by the order appliances were added |
-| On threshold (%) | 110 | Turn on when the surplus pool reaches this percentage of rated power, sustained |
-| Off threshold (%) | 90 | Turn off when the pool stays below this percentage of rated power, sustained |
-| On sustain time (min) | 5 | How long the surplus must persist before turning on (filters passing clouds) |
-| Off sustain time (min) | 15 | How long the deficit must persist before turning off (deliberately slower than the on side) |
-| Minimum on time (min) | 15 | Hard floor once on, regardless of surplus |
-| Minimum off time (min) | 5 | Hard floor once off (heat-pump plugs: raise this) |
-
-Each appliance gets its own device with exactly two entities: the **EM control** switch (the per-appliance hand-over valve, default OFF, restored across restarts) and the **Status** sensor whose state and attributes explain every decision — see the entity tables below.
-
-### Managing a load another integration schedules
-
-Never point Energy Manager at a relay that another integration already reconciles — one writer per switch (single-writer rule). Instead, point the appliance's actuator picker at that integration's own override/boost switch. With [Power Saver](https://github.com/jyourstone/power_saver) as the example: PS keeps cheap-hours scheduling for guaranteed runtime, and you set the appliance's actuator to PS's `always_on` override switch (e.g. `switch.heater_power_saver_always_on`) instead of the physical relay. Energy Manager forces the load on while solar surplus lasts, Power Saver keeps its year-round guarantee, and no two integrations ever fight over the same relay.
-
-## Entities created
-
-### Sensors
-
-| Sensor | Description |
-|--------|--------------|
-| Electricity Price | Current Nordpool price |
-| Battery status | Live battery state (`self_consumption` / `holding` / `solar_charging` / `grid_charging` / `discharging` / `exporting` / `paused_car_priority`) -- what EM is driving the battery to do right now (`holding` = battery genuinely doing nothing, e.g. at night with discharge blocked). Attributes carry the full schedule, EMS mode, charge limit, fuse headroom, and gate reasons |
-| Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
-| Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
-| Battery commanded charge limit *(diagnostic)* | Charge power limit EM sends to the battery (tracks live PV during solar charging; the would-be value in observe-only mode) |
-| Battery commanded EMS mode *(diagnostic)* | EMS mode EM commands the battery plant right now (`command_charging` / `command_discharging` / `max_self_consumption` / `standby`), including the car-priority and PV-opportunistic overrides — the trigger surface for non-SigenStor automations (see [Bring your own hardware](#bring-your-own-hardware)) |
-| Battery commanded discharge limit *(diagnostic)* | Discharge power limit EM sends to the battery (`0` while the discharge gate is closed; the fuse-capped export limit during export slots) |
-| Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
-| Car Charging Schedule *(per car)* | Cheapest-slot charging schedule for that car |
-| EV charger status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
-| Commanded charging current *(diagnostic)* | Charging current EM commands the charger (`0` = pause/stop, above `0` but below the 6 A minimum = do not start, `>= 6` = charge at up to this limit) — the trigger surface for non-Easee automations (see [Bring your own hardware](#bring-your-own-hardware)) |
-| Commanded phase mode *(diagnostic)* | Charger phase mode EM commands (`single` / `three`) |
-| House Load *(diagnostic)* | Filtered house consumption (house consumption minus excluded power entities), with the rolling mean consumption as an attribute (rolling window persists across restarts) |
-| Solar Forecast Accuracy *(diagnostic)* | Observe-only solar forecast accuracy tracking: daily forecast-vs-actual ratios and a suggested production factor (needs 7+ valid days; does not affect scheduling) |
-| Battery effective discharge threshold *(diagnostic)* | The discharge spread threshold the scheduler is actually using right now, with attributes showing whether it comes from the manual entity or the Battery Cycle Cost formula |
-| Solar Balance *(diagnostic)* | Signed net solar balance (PV minus house load minus battery charging plus charger draw): positive means surplus available for the charger, negative means deficit. Raw value before the charger's own activation gating |
-| Status *(per appliance)* | Surplus-control decision status (`off_no_surplus`, `on_surplus`, `blocked_fuse`, ...) with attributes (thresholds, surplus components, allocation, last command message) that explain every decision |
-
-### Switches
-
-| Entity | Description |
-|--------|--------------|
-| Device control | Master observe-only switch; OFF means every coordinator still computes and publishes decisions, but no device command is actually sent |
-| EV charger force charging | Forces the Easee charger to grid-charge regardless of schedule or solar state |
-| EM control *(per appliance)* | Hand-over valve: Energy Manager only manages this appliance's actuator while this is ON (on top of the master Device control switch). Default OFF |
-
-### Numbers
-
-| Entity | Description |
-|--------|--------------|
-| Battery charge spread threshold | Spread (SEK/kWh): a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
-| Battery discharge spread threshold | Spread (SEK/kWh): a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by the Battery Cycle Cost formula below when that is set above 0 -- the entity shows as unavailable while overridden |
-| Battery max charging power | Maximum battery charge power (kW) |
-| Battery Cycle Cost | Cost of one battery charge/discharge cycle (SEK/kWh). When above 0, the effective discharge threshold becomes `max(0, battery_cycle_cost - grid_transfer_fee)` — clamped to 0 when the fee exceeds the cycle cost, in which case any spread above the horizon minimum qualifies — overriding the manual Battery discharge spread threshold above (which shows as unavailable while overridden). Default 0 (disabled) |
-| Grid Transfer Fee | Grid transfer fee (SEK/kWh); feeds the Battery Cycle Cost formula and the Actual Electricity Price sensor |
-| Electricity Company Fee | Electricity company fee (SEK/kWh); used only by the Actual Electricity Price sensor |
-| Grid charging target *(per car)* | Target state of charge for scheduled price-based charging |
-| Solar charging target *(per car)* | SOC ceiling for solar-surplus charging (default 100%) |
-| Max Charge Power *(per car)* | Maximum charge power for that car (kW) |
-
-### Time
-
-| Entity | Description |
-|--------|--------------|
-| Car Departure Time *(per car)* | Deadline used to compute that car's charging schedule |
-
-All number entities persist their value across Home Assistant restarts.
-
-> **All price thresholds are spreads, not absolute prices.** A slot qualifies by its price *relative to the cheapest slot in the horizon* (or the peak's max, for charging) — never by crossing a fixed price. This keeps the thresholds meaningful when the overall price level shifts between weeks.
-
-## Repairs
-
-Persistent degraded conditions surface in **Settings → Repairs** instead of only the log: fuse-protection sensors continuously falling back to the assumed load (5+ minutes), and misconfigured charge/discharge limit entities (wrong domain). Issues clear automatically when the condition recovers.
-
-## Diagnostics
-
-Settings > Devices & Services > Energy Manager > Download diagnostics gives a full snapshot of the config entry (data/options), every active coordinator's current state, and the runtime control flags (device control, force charging, forwarded platforms) — useful when reporting a bug.
+Click the button above, or add it manually via **Settings** -> **Devices & Services** -> **Add Integration** -> search for **Energy Manager**. A guided wizard walks you through the rest — the [Setup Wizard docs](https://energy-manager.dinsten.se/getting-started/setup-wizard/) cover every step and field.
 
 ## Disclaimer
 
