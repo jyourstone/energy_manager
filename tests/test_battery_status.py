@@ -90,6 +90,24 @@ def test_unknown_battery_power_keeps_self_consumption() -> None:
     assert _status(battery_power_kw=None) == "self_consumption"
 
 
+def test_commanded_standby_without_power_sensor_is_holding() -> None:
+    """No power sensor -> trust the commanded standby hold."""
+    assert _status(ems_mode="standby", battery_power_kw=None) == "holding"
+
+
+def test_measured_discharge_overrides_commanded_standby() -> None:
+    """A failed standby write leaves the hardware discharging in MSC -- the
+    sensor must report the measured truth, never claim "holding"."""
+    assert _status(ems_mode="standby", battery_power_kw=-2.5) == "self_consumption"
+
+
+def test_car_priority_outranks_commanded_standby_hold() -> None:
+    assert (
+        _status(ems_mode="standby", car_override_active=True, battery_power_kw=None)
+        == "paused_car_priority"
+    )
+
+
 def test_holding_never_overrides_active_states() -> None:
     assert _status(battery_power_kw=0.0, ems_mode="command_charging") == (
         "grid_charging"

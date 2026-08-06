@@ -203,6 +203,7 @@ from .ems_controller import (
     ESSLimitRateLimiter,
     PVHysteresisTracker,
     build_command_decision,
+    car_actively_charging,
     car_demands_priority_charging,
     compute_available_ess_amps,
     compute_ems_state,
@@ -1858,6 +1859,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # slot AND home+plugged demands priority (EMS-03). Schedules stay
         # visible regardless of plugged state -- this only gates the battery.
         car_priority = self._check_car_priority()
+        # Live car draw (status/power, not schedule) -- feeds the standby
+        # hold: MSC must never run while the car draws (EMS-03).
+        car_active = self._check_car_actively_charging()
 
         # 4. Update PV hysteresis tracker
         pv_active = self._pv_tracker.update(pv_power_w)
@@ -1927,6 +1931,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             safety_buffer_amps=self._safety_buffer_amps,
             sensor_blocked=sensor_blocked,
             available_ess_amps=applied_ess_ceiling,
+            discharge_allowed=schedule_data.discharge_allowed,
+            discharge_gate_reason=schedule_data.discharge_gate_reason,
+            car_charging_active=car_active,
         )
 
         # 7. Determine if mode or limit changed
@@ -2244,6 +2251,40 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             cars.append((active_slot, data.home_and_plugged))
 
         return car_demands_priority_charging(cars)
+
+    def _check_car_actively_charging(self) -> bool:
+        """Check whether a car is actively drawing charge right now.
+
+        Feeds the EMS standby hold: max_self_consumption must never run
+        while the car draws, because the SigenStor discharges freely in MSC
+        regardless of the discharge-limit register. Two signal sources,
+        freshest wins: the raw charger-status entity (fresh on the very
+        cycle the status flips, and available on the first refresh after a
+        reload, before runtime_data exists) and the EaseeCoordinator's
+        measured charger power. Charger module disabled or no status entity
+        means False -- never fail toward standby, which would freeze the
+        battery with no car contract at all.
+
+        Returns:
+            True if a car is actively charging.
+        """
+        # Same normalization as EaseeCoordinator._read_charger_status():
+        # missing/unavailable/unknown reads as "disconnected".
+        if not self._charger_status_entity:
+            charger_status = "disconnected"
+        else:
+            state = self.hass.states.get(self._charger_status_entity)
+            if state is None or state.state in ("unavailable", "unknown"):
+                charger_status = "disconnected"
+            else:
+                charger_status = state.state
+
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        easee_coordinator = getattr(runtime_data, "easee_coordinator", None)
+        easee_data = getattr(easee_coordinator, "data", None)
+        charger_power_kw = getattr(easee_data, "charger_power_kw", None)
+
+        return car_actively_charging(charger_status, charger_power_kw)
 
     async def _send_ems_mode(self, mode: str) -> bool:
         """Send EMS mode change to SigenStor via HA service call.
