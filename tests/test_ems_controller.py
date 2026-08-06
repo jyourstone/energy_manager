@@ -23,6 +23,7 @@ from custom_components.energy_manager.ems_controller import (
     ESSLimitRateLimiter,
     PVHysteresisTracker,
     build_command_decision,
+    car_actively_charging,
     car_demands_priority_charging,
     clamp_amps,
     compute_available_ess_amps,
@@ -53,6 +54,9 @@ class TestModeSelection:
             car_plugged_in=False,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert isinstance(result, EMSDecision)
         assert result.target_mode == "command_charging"
@@ -70,6 +74,9 @@ class TestModeSelection:
             car_plugged_in=False,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "max_self_consumption"
         assert result.override_reason is None
@@ -86,6 +93,9 @@ class TestModeSelection:
             car_plugged_in=False,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "standby"
         assert result.override_reason is None
@@ -103,6 +113,9 @@ class TestModeSelection:
             car_plugged_in=False,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "max_self_consumption"
 
@@ -128,6 +141,9 @@ class TestFuseProtection:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=2.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.fuse_headroom_amps == pytest.approx(6.0)
 
@@ -144,6 +160,9 @@ class TestFuseProtection:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=2.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.fuse_headroom_amps == 0.0
 
@@ -162,6 +181,9 @@ class TestFuseProtection:
             pv_hysteresis_active=False,
             safety_buffer_amps=2.0,
             voltage=230.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         expected_kw = (3.0 * 230.0) / 1000.0  # 0.69 kW
         assert result.charge_limit_kw == pytest.approx(expected_kw)
@@ -179,6 +201,9 @@ class TestFuseProtection:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=2.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.charge_limit_kw == 0.0
 
@@ -196,6 +221,9 @@ class TestFuseProtection:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=2.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.charge_limit_kw == pytest.approx(5.0)
 
@@ -221,6 +249,9 @@ class TestCarPriorityOverride:
             car_plugged_in=True,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "standby"
         assert result.override_reason == "car_charging_priority"
@@ -237,6 +268,9 @@ class TestCarPriorityOverride:
             car_plugged_in=True,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason is None
@@ -253,6 +287,9 @@ class TestCarPriorityOverride:
             car_plugged_in=False,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason is None
@@ -270,6 +307,9 @@ class TestCarPriorityOverride:
             car_plugged_in=True,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "max_self_consumption"
         assert result.override_reason is None
@@ -326,6 +366,9 @@ class TestPVOpportunisticCharging:
             pv_power_w=800.0,
             pv_hysteresis_active=True,
             max_soc_pct=95.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason == "pv_opportunistic"
@@ -343,6 +386,9 @@ class TestPVOpportunisticCharging:
             pv_power_w=800.0,
             pv_hysteresis_active=True,
             max_soc_pct=95.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "standby"
         assert result.override_reason is None
@@ -360,6 +406,9 @@ class TestPVOpportunisticCharging:
             pv_power_w=2000.0,
             pv_hysteresis_active=True,
             max_soc_pct=95.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_charging"
         assert result.charge_limit_kw == pytest.approx(2.0)
@@ -376,6 +425,9 @@ class TestPVOpportunisticCharging:
             car_plugged_in=False,
             pv_power_w=2000.0,
             pv_hysteresis_active=True,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_charging"
         # Should NOT have pv_opportunistic override -- it was already charging
@@ -497,6 +549,9 @@ class TestSignedFuseCurrent:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=1.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         result_zero = compute_ems_state(
             target_ems_mode="command_charging",
@@ -509,6 +564,9 @@ class TestSignedFuseCurrent:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=1.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result_export.fuse_headroom_amps > result_zero.fuse_headroom_amps
         assert result_export.fuse_headroom_amps == pytest.approx(29.0)  # 20 -(-10) -1
@@ -531,6 +589,9 @@ class TestSignedFuseCurrent:
             pv_power_w=0.0,
             pv_hysteresis_active=False,
             safety_buffer_amps=1.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         # 30A already exceeds the 20A fuse rating -- headroom must be 0, not
         # the ~4.7A a balanced-average estimate (13.3A) would have produced.
@@ -581,6 +642,9 @@ class TestSensorFallback:
             pv_hysteresis_active=False,
             safety_buffer_amps=1.0,
             sensor_blocked=fallback.force_zero_headroom,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.fuse_headroom_amps == pytest.approx(9.0)  # 20 - 10 - 1
 
@@ -602,6 +666,9 @@ class TestSensorFallback:
             pv_hysteresis_active=False,
             safety_buffer_amps=1.0,
             sensor_blocked=fallback.force_zero_headroom,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.fuse_headroom_amps == 0.0
         assert result.charge_limit_kw == 0.0
@@ -763,6 +830,9 @@ class TestCarPriorityWiring:
             car_plugged_in=car_priority,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason is None
@@ -781,9 +851,181 @@ class TestCarPriorityWiring:
             car_plugged_in=car_priority,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "standby"
         assert result.override_reason == "car_charging_priority"
+
+
+# ---------------------------------------------------------------------------
+# Standby hold: closed discharge gate / active car charge (step 6)
+# ---------------------------------------------------------------------------
+
+
+def _hold_state(**overrides: object) -> EMSDecision:
+    """compute_ems_state with quiet-house MSC defaults for the hold tests."""
+    defaults: dict[str, object] = {
+        "target_ems_mode": "max_self_consumption",
+        "current_l_amps": 5.0,
+        "fuse_rating_amps": 25.0,
+        "max_charge_power_kw": 5.0,
+        "battery_soc_pct": 50.0,
+        "car_scheduled": False,
+        "car_plugged_in": False,
+        "pv_power_w": 0.0,
+        "pv_hysteresis_active": False,
+        "discharge_allowed": True,
+        "discharge_gate_reason": "scheduled_discharge",
+        "car_charging_active": False,
+    }
+    defaults.update(overrides)
+    return compute_ems_state(**defaults)  # type: ignore[arg-type]
+
+
+class TestDischargeGateHold:
+    """A closed discharge gate must command standby, not MSC + limit 0 --
+    the SigenStor ignores the max-discharging-limit register in MSC
+    (verified on hardware: limit 0.0, mode MSC, battery discharging)."""
+
+    def test_gate_closed_below_threshold_holds_in_standby(self):
+        result = _hold_state(
+            discharge_allowed=False, discharge_gate_reason="below_threshold"
+        )
+        assert result.target_mode == "standby"
+        assert result.override_reason == "discharge_gate_closed"
+        assert result.charge_limit_kw == 0.0
+
+    def test_gate_closed_reserved_for_peak_holds_in_standby(self):
+        result = _hold_state(
+            discharge_allowed=False, discharge_gate_reason="reserved_for_peak"
+        )
+        assert result.target_mode == "standby"
+        assert result.override_reason == "discharge_gate_closed"
+
+    def test_no_schedule_falls_back_to_msc(self):
+        """Price-feed outage / cold boot must NOT freeze the battery --
+        graceful degradation to self-consumption at unknown prices."""
+        result = _hold_state(
+            discharge_allowed=False, discharge_gate_reason="no_schedule"
+        )
+        assert result.target_mode == "max_self_consumption"
+        assert result.override_reason is None
+
+    def test_gate_open_stays_msc(self):
+        result = _hold_state()
+        assert result.target_mode == "max_self_consumption"
+        assert result.override_reason is None
+
+    def test_command_charging_untouched_by_closed_gate(self):
+        """The hold only applies to MSC -- a scheduled grid charge runs
+        regardless of the discharge gate."""
+        result = _hold_state(
+            target_ems_mode="command_charging",
+            discharge_allowed=False,
+            discharge_gate_reason="below_threshold",
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason is None
+
+    def test_standby_input_passthrough_unchanged(self):
+        """Scheduler-commanded standby passes through without gaining the
+        override reason -- the hold step only rewrites MSC."""
+        result = _hold_state(
+            target_ems_mode="standby",
+            discharge_allowed=False,
+            discharge_gate_reason="below_threshold",
+        )
+        assert result.target_mode == "standby"
+        assert result.override_reason is None
+
+
+class TestCarChargingActiveHold:
+    """MSC must never run while a car actively draws -- the battery
+    discharges freely in MSC (owner rule: battery never discharges into
+    the car). Export stays exempt; PV promotion precedes the hold."""
+
+    def test_msc_with_active_car_holds_in_standby(self):
+        result = _hold_state(car_charging_active=True)
+        assert result.target_mode == "standby"
+        assert result.override_reason == "car_charging_priority"
+        assert result.charge_limit_kw == 0.0
+
+    def test_command_charging_coexists_with_car_session(self):
+        """No schedule slot (car_scheduled False) -- battery cheap-night
+        grid charge legitimately coexists with a car session (charger draw
+        is already inside current_l_amps and the ESS ceiling)."""
+        result = _hold_state(
+            target_ems_mode="command_charging", car_charging_active=True
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason is None
+
+    def test_export_exempt_from_car_hold(self):
+        """Battery export offsets car import at the meter (EMS-03) -- it
+        never adds fuse load, so command_discharging passes through."""
+        result = _hold_state(
+            target_ems_mode="command_discharging", car_charging_active=True
+        )
+        assert result.target_mode == "command_discharging"
+        assert result.override_reason is None
+
+    def test_pv_promotion_precedes_car_hold(self):
+        """PV surplus still promotes MSC to charging during a car session --
+        the battery soaks surplus instead of freezing."""
+        result = _hold_state(
+            car_charging_active=True,
+            pv_power_w=800.0,
+            pv_hysteresis_active=True,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason == "pv_opportunistic"
+
+    def test_pv_promotion_precedes_gate_hold(self):
+        """PV surplus wins over a closed discharge gate."""
+        result = _hold_state(
+            discharge_allowed=False,
+            discharge_gate_reason="below_threshold",
+            pv_power_w=800.0,
+            pv_hysteresis_active=True,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason == "pv_opportunistic"
+
+    def test_pv_promotion_with_sensor_blocked_clamps_limit(self):
+        """Regression pin of the existing shape: sensor_blocked zeroes the
+        charge authorization, but the PV branch still claims the mode."""
+        result = _hold_state(
+            discharge_allowed=False,
+            discharge_gate_reason="below_threshold",
+            pv_power_w=800.0,
+            pv_hysteresis_active=True,
+            sensor_blocked=True,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason == "pv_opportunistic"
+        assert result.charge_limit_kw == 0.0
+
+
+class TestCarActivelyCharging:
+    """Tests for the car_actively_charging() pure helper -- measured truth
+    only, no forced-mode term."""
+
+    def test_status_charging_is_active(self):
+        assert car_actively_charging("charging", None) is True
+
+    def test_power_above_threshold_is_active(self):
+        assert car_actively_charging(None, 0.6) is True
+
+    def test_power_at_threshold_not_active(self):
+        """Strict > -- mirrors the charger state machine comparison."""
+        assert car_actively_charging(None, 0.5) is False
+
+    @pytest.mark.parametrize("status", ["paused", "awaiting_start", None])
+    @pytest.mark.parametrize("power", [None, 0.0])
+    def test_inactive_status_and_no_power_not_active(self, status, power):
+        assert car_actively_charging(status, power) is False
 
 
 # ---------------------------------------------------------------------------
@@ -996,6 +1238,9 @@ class TestCommandDischargingPassthrough:
             car_plugged_in=False,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_discharging"
         assert result.charge_limit_kw == 0.0
@@ -1013,6 +1258,9 @@ class TestCommandDischargingPassthrough:
             car_plugged_in=True,
             pv_power_w=0.0,
             pv_hysteresis_active=False,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
         )
         assert result.target_mode == "command_discharging"
         assert result.override_reason is None

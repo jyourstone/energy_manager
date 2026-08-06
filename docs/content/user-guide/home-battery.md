@@ -66,7 +66,7 @@ The **Battery status** sensor is the single place to see what Energy Manager is 
 | State | Meaning |
 |-------|---------|
 | `self_consumption` | Normal operation — the battery balances solar/house load, no scheduled charge or discharge active |
-| `holding` | The battery is genuinely doing nothing — e.g. overnight with the discharge gate closed |
+| `holding` | The battery is genuinely doing nothing — e.g. overnight with the discharge gate closed. EM enforces holds by commanding Standby, because SigenStor ignores the discharge-limit register in Maximum Self Consumption mode |
 | `solar_charging` | Charging opportunistically from PV surplus outside a scheduled slot |
 | `grid_charging` | Charging from the grid during a scheduled cheap slot |
 | `discharging` | Discharging to serve house load during a scheduled expensive slot |

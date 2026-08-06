@@ -18,6 +18,8 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
+from .charger_state_machine import POWER_ACTIVE_THRESHOLD_KW
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -34,7 +36,8 @@ class EMSDecision:
             Only non-zero when target_mode is "command_charging".
         fuse_headroom_amps: Available fuse headroom in amps. Always >= 0.
         override_reason: Why mode differs from the schedule target, or None.
-            Possible values: "car_charging_priority", "pv_opportunistic".
+            Possible values: "car_charging_priority", "pv_opportunistic",
+            "discharge_gate_closed".
     """
 
     target_mode: str
@@ -152,6 +155,10 @@ def compute_ems_state(
     voltage: float = 230.0,
     sensor_blocked: bool = False,
     available_ess_amps: float | None = None,
+    *,
+    discharge_allowed: bool,
+    discharge_gate_reason: str,
+    car_charging_active: bool,
 ) -> EMSDecision:
     """Compute the EMS mode and safe charging limit.
 
@@ -164,7 +171,8 @@ def compute_ems_state(
         3. Car priority override check
         4. Fuse-limited charging power
         5. PV opportunistic charging check
-        6. Return final decision
+        6. Standby hold check (closed discharge gate / active car charge)
+        7. Return final decision
 
     Args:
         target_ems_mode: Schedule-driven target mode from BatteryScheduleCoordinator.
@@ -196,6 +204,23 @@ def compute_ems_state(
             to use the raw fuse headroom directly (previous behavior).
             fuse_headroom_amps in the result always reports the raw,
             instantaneous physical headroom regardless of this override.
+        discharge_allowed: Whether the discharge gate is currently open
+            (from compute_discharge_gate). The SigenStor IGNORES the
+            max-discharging-limit register in max_self_consumption mode
+            (verified on hardware), so a closed gate must be enforced by
+            commanding "standby" -- MSC + limit 0 does not hold the battery.
+        discharge_gate_reason: Why the gate is closed. Only economic reasons
+            ("below_threshold", "reserved_for_peak") trigger the standby
+            hold; "no_schedule" (price-feed outage / cold boot) falls back
+            to max_self_consumption -- graceful degradation, a frozen full
+            battery during a multi-day price outage is worse than
+            self-consumption at unknown prices.
+        car_charging_active: Whether a car is actively drawing charge right
+            now (see car_actively_charging()). MSC must never run while the
+            car draws -- the battery discharges freely in MSC (owner rule:
+            battery never discharges into the car). Export
+            (command_discharging) stays exempt by design: it offsets car
+            import at the meter (EMS-03).
 
     Returns:
         EMSDecision with the target mode, safe charge limit, fuse headroom,
@@ -248,7 +273,27 @@ def compute_ems_state(
             override_reason="pv_opportunistic",
         )
 
-    # 6. Return final decision
+    # 6. Standby hold: the SigenStor ignores the max-discharging-limit
+    # register in max_self_consumption, so any state that must hold the
+    # battery has to command "standby" instead of MSC. Placed after step 5
+    # so PV surplus still promotes out of MSC.
+    if mode == "max_self_consumption":
+        if car_charging_active:
+            return EMSDecision(
+                target_mode="standby",
+                charge_limit_kw=0.0,
+                fuse_headroom_amps=headroom,
+                override_reason="car_charging_priority",
+            )
+        if not discharge_allowed and discharge_gate_reason != "no_schedule":
+            return EMSDecision(
+                target_mode="standby",
+                charge_limit_kw=0.0,
+                fuse_headroom_amps=headroom,
+                override_reason="discharge_gate_closed",
+            )
+
+    # 7. Return final decision
     charge_limit = safe_charge_kw if mode == "command_charging" else 0.0
     return EMSDecision(
         target_mode=mode,
@@ -484,6 +529,34 @@ def car_demands_priority_charging(cars: list[tuple[bool, bool]]) -> bool:
     )
 
 
+def car_actively_charging(
+    charger_status: str | None,
+    charger_power_kw: float | None,
+) -> bool:
+    """Return True if a car is actively drawing charge right now.
+
+    Measured truth only: the reported status says "charging", or measured
+    power exceeds POWER_ACTIVE_THRESHOLD_KW (status is unreliable, power is
+    always cross-checked -- same rule as the charger state machine).
+    Deliberately no charger-mode ("forced") term: forced mode persists for
+    days with a plugged-but-not-accepting car and would freeze the battery
+    with zero current flowing.
+
+    Args:
+        charger_status: Normalized charger status string, or None when
+            unavailable.
+        charger_power_kw: Measured charger power in kW, or None when
+            unavailable.
+
+    Returns:
+        True if a car is actively charging.
+    """
+    return (
+        charger_status == "charging"
+        or (charger_power_kw or 0.0) > POWER_ACTIVE_THRESHOLD_KW
+    )
+
+
 class ESSLimitRateLimiter:
     """Asymmetric timing for ESS (battery) charge-limit changes.
 
@@ -653,7 +726,11 @@ def derive_battery_status(
             state: |power| below the noise floor means the battery is
             genuinely doing nothing (night, discharge blocked, house on
             grid) -> "holding"; otherwise it is actively balancing solar
-            -> "self_consumption". None keeps "self_consumption".
+            -> "self_consumption". None keeps "self_consumption" unless
+            "standby" is commanded, which reports "holding" (the commanded
+            intent) -- but a live nonzero reading always wins: a failed
+            select write leaves the hardware in MSC discharging, and the
+            sensor must keep reporting the measured truth.
 
     Returns:
         One of: self_consumption, holding, solar_charging, grid_charging,
@@ -670,5 +747,9 @@ def derive_battery_status(
     if plan_state == "discharging" and discharge_allowed:
         return "discharging"
     if battery_power_kw is not None and abs(battery_power_kw) < 0.05:
+        return "holding"
+    # No power sensor: trust the commanded standby hold. Checked only after
+    # the measured-power branch so a live nonzero reading is never shadowed.
+    if ems_mode == "standby" and battery_power_kw is None:
         return "holding"
     return "self_consumption"

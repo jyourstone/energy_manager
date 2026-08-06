@@ -1195,13 +1195,16 @@ def _find_next_slot(
 def _action_to_ems_mode(action: str) -> str:
     """Map a scheduler action to the corresponding EMS mode.
 
-    Idle now means the battery is free to self-consume; discharge
-    permission is governed by the discharge gate (see
-    compute_discharge_gate), not by freezing the battery in "standby".
-    "standby" is no longer produced by the scheduler -- it remains only
-    for the EMS car-priority override elsewhere. "export" maps to
-    "command_discharging" (BATT-17): the EMS commands forced discharge at
-    the fuse-capped export limit.
+    Idle means the battery is free to self-consume. The scheduler emits
+    schedule intent only and never produces "standby" itself: holds are
+    enforced downstream by the EMS layer (compute_ems_state), which
+    converts "max_self_consumption" to "standby" when the discharge gate
+    is closed for economic reasons or a car is actively charging -- the
+    SigenStor ignores the max-discharging-limit register in
+    max_self_consumption mode, so a closed gate cannot hold the battery
+    without the mode change. "export" maps to "command_discharging"
+    (BATT-17): the EMS commands forced discharge at the fuse-capped
+    export limit.
 
     Args:
         action: Scheduler action string.

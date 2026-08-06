@@ -22,11 +22,14 @@ All five are diagnostic entities on the Energy Manager device.
 
 | Sensor | State | What your automation should do |
 |--------|-------|--------------------------------|
-| Battery commanded EMS mode | `command_charging` (grid-charge the battery — scheduled or PV-opportunistic), `command_discharging` (export-arbitrage slot, opt-in), `max_self_consumption` (normal operation), `standby` (hold the battery — car-charging priority); `unknown` until the first compute | Map each mode to your inverter's equivalent operating mode — `standby` must actually keep the battery from charging or discharging |
+| Battery commanded EMS mode | `command_charging` (grid-charge the battery — scheduled or PV-opportunistic), `command_discharging` (export-arbitrage slot, opt-in), `max_self_consumption` (normal operation), `standby` (hold the battery — a car has charging priority: scheduled and plugged in during a battery charge slot, or actively drawing power; or the discharge gate is closed for economic reasons); `unknown` until the first compute | Map each mode to your inverter's equivalent operating mode — `standby` is the authoritative hold signal: it must actually keep the battery from charging or discharging, even when the commanded discharge limit is nonzero (the car-active case with the gate open) |
 | Battery commanded charge limit | Maximum battery charge power in kW (fuse-limited; tracks live PV during solar charging) | Write it to your inverter's charge-power limit |
 | Battery commanded discharge limit | Maximum battery discharge power in kW; `0` = discharge blocked by the scheduler (the `discharge_gate_reason` attribute says why). During a `command_discharging` export slot this is the fuse-capped export power (reserve-SOC- and PV-aware). Outside export slots, when no SigenStor discharge-limit entity is configured the value is a 15 kW placeholder ceiling, not a device rating | Write it to your inverter's discharge-power limit, clamped to your inverter's own maximum (`min(value, your_max)`) — `0` must actually block discharge |
 | Commanded charging current | EV charging current in A: `0` = charging should be paused/stopped; above `0` but below the 6 A minimum = do **not** start charging (EM's own state machine never starts in this range — it avoids start/stop churn below the charger minimum — and leaves a running session's limit untouched); `>= 6` = charge at (up to) this current | Set your charger's dynamic current limit; pause/stop at `0`; never start below `6` |
 | Commanded phase mode | `single` or `three` | Switch the charger's phase mode if it supports that; ignore otherwise |
+
+!!! note "Behavior change"
+    Previously, `standby` was only commanded while a scheduled car was plugged in during a battery charge slot. It now also fires whenever the discharge gate is closed for economic reasons (spread below threshold, energy reserved for a later peak) and whenever a car is actively drawing charging power — automations should treat `standby`, not the discharge-limit value, as the signal to stop discharge.
 
 !!! tip "Entity IDs"
     Entity IDs are slugs of the sensor names — e.g. `sensor.energy_manager_battery_commanded_charge_limit` on an English install. IDs follow your Home Assistant language at entity creation, so always check the exact IDs on the Energy Manager device page rather than assuming the English slug.
@@ -38,7 +41,7 @@ Every command sensor carries extra attributes that explain the state — read th
 | Attribute | On which sensors | Meaning |
 |-----------|-------------------|---------|
 | `dry_run` | All five | `true` while the **Device control** switch is off — the state is still the value EM would have written, but nothing was sent to a device |
-| `override_reason` | EMS mode, commanded current | Why this tick's value differs from the plain schedule, e.g. `car_charging_priority`, `pv_opportunistic`, or a terminal-status reason |
+| `override_reason` | EMS mode, commanded current | Why this tick's value differs from the plain schedule, e.g. `car_charging_priority`, `discharge_gate_closed`, `pv_opportunistic`, or a terminal-status reason |
 | `charge_limit_delivered` | Commanded charge limit | Whether the value also reached a configured SigenStor charge-limit entity (`false` when the send was skipped or failed) |
 | `discharge_limit_delivered` | Commanded discharge limit | Whether the value also reached a configured SigenStor discharge-limit entity (`false` when the send was skipped or failed) |
 | `discharge_gate_reason` | Commanded discharge limit | Why discharge is currently allowed or blocked, e.g. `scheduled_discharge`, `no_schedule` |

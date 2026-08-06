@@ -14,7 +14,7 @@ Every entity Energy Manager creates, in one place. This page is a lookup table �
 | Battery next charging slot | Timestamp of the battery's next scheduled charge slot |
 | Battery next discharging slot | Timestamp of the battery's next scheduled discharge slot |
 | Battery commanded charge limit *(diagnostic)* | Charge power limit EM sends to the battery (tracks live PV during solar charging; the would-be value in observe-only mode) |
-| Battery commanded EMS mode *(diagnostic)* | EMS mode EM commands the battery plant right now (`command_charging` / `command_discharging` / `max_self_consumption` / `standby`), including the car-priority and PV-opportunistic overrides — the trigger surface for non-SigenStor automations (see [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md)) |
+| Battery commanded EMS mode *(diagnostic)* | EMS mode EM commands the battery plant right now (`command_charging` / `command_discharging` / `max_self_consumption` / `standby`), including the car-priority, PV-opportunistic, and discharge-gate overrides — `standby` also fires while the discharge gate is closed, with `override_reason: discharge_gate_closed`. The trigger surface for non-SigenStor automations (see [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md)) |
 | Battery commanded discharge limit *(diagnostic)* | Discharge power limit EM sends to the battery (`0` while the discharge gate is closed; the fuse-capped export limit during export slots) |
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Charging Schedule *(per car)* | Cheapest-slot charging schedule for that car |

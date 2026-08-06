@@ -49,7 +49,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **EMS-01**: Integration sets battery EMS mode (command_charging, max_self_consumption, standby) based on current schedule
 - [x] **EMS-02**: Fuse protection dynamically limits battery charging power based on current phase load
-- [x] **EMS-03**: When car is scheduled to charge AND plugged in, battery charging pauses to free fuse capacity
+- [x] **EMS-03**: When car is scheduled to charge AND plugged in, battery charging pauses to free fuse capacity; while a car is actively drawing, the battery is held in standby so it never discharges into the car -- except during export slots, which stay exempt because export offsets the car's import at the meter and adds no fuse load
 - [x] **EMS-04**: Safety guards enforce hard limits -- calculated amp values clamped to safe range, never negative
 - [x] **EMS-05**: Command verification reads back actual state after sending control commands
 - [x] **EMS-06**: Fuse rating is a required config field with validation
