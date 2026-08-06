@@ -17,11 +17,14 @@ from custom_components.energy_manager.forecast_accuracy import (
     MAX_HISTORY_DAYS,
     MIN_VALID_DAYS,
     DailyAccuracyRecord,
+    InFlightDay,
     accumulate_energy_kwh,
     append_day,
     is_before_dawn,
     mean_ratio,
+    restore_fa_store,
     restore_history,
+    serialize_fa_store,
     serialize_history,
     suggested_factor,
     valid_ratios,
@@ -205,6 +208,126 @@ def test_restore_history_caps_length_keeping_newest() -> None:
 
     assert len(restored) == MAX_HISTORY_DAYS
     assert restored[-1].date == _record(MAX_HISTORY_DAYS + 9, 10.0, 8.0).date
+
+
+# ---------------------------------------------------------------------------
+# serialize_fa_store() / restore_fa_store() -- in-flight day persistence
+# ---------------------------------------------------------------------------
+
+TODAY = date(2026, 3, 15)
+
+
+def test_fa_store_round_trip_with_in_flight() -> None:
+    history = [_record(0, 12.5, 9.75), _record(1, 8.0, 8.2)]
+    in_flight = InFlightDay(TODAY, 11.25, 3.4)
+
+    assert restore_fa_store(serialize_fa_store(history, in_flight), TODAY) == (
+        history,
+        in_flight,
+    )
+
+
+def test_fa_store_round_trip_without_in_flight() -> None:
+    history = [_record(0, 12.5, 9.75)]
+
+    assert restore_fa_store(serialize_fa_store(history, None), TODAY) == (
+        history,
+        None,
+    )
+
+
+def test_serialize_fa_store_shape() -> None:
+    assert serialize_fa_store(
+        [_record(0, 12.5, 9.75)], InFlightDay(TODAY, 11.25, 3.4)
+    ) == {
+        "history": [{"date": "2026-03-01", "forecast_kwh": 12.5, "actual_kwh": 9.75}],
+        "in_flight": {
+            "day": "2026-03-15",
+            "snapshot_kwh": 11.25,
+            "accumulated_kwh": 3.4,
+        },
+    }
+
+
+def test_restore_fa_store_legacy_bare_list() -> None:
+    """Pre-wrapper payloads were the bare serialize_history() list."""
+    history = [_record(0, 10.0, 8.0)]
+
+    assert restore_fa_store(serialize_history(history), TODAY) == (history, None)
+
+
+def test_restore_fa_store_tolerates_none_and_garbage() -> None:
+    assert restore_fa_store(None, TODAY) == ([], None)
+    assert restore_fa_store("garbage", TODAY) == ([], None)
+    assert restore_fa_store(42, TODAY) == ([], None)
+
+
+def test_restore_fa_store_malformed_in_flight_keeps_history() -> None:
+    history = [_record(0, 10.0, 8.0)]
+    for bad in (
+        {"day": "not-a-date", "snapshot_kwh": 1.0, "accumulated_kwh": 2.0},
+        {"day": "2026-03-15", "snapshot_kwh": "junk", "accumulated_kwh": 2.0},
+        {"day": "2026-03-15", "snapshot_kwh": 1.0},  # missing key
+        "junk",
+        42,
+    ):
+        raw = {"history": serialize_history(history), "in_flight": bad}
+
+        assert restore_fa_store(raw, TODAY) == (history, None)
+
+
+def test_restore_fa_store_non_finite_in_flight_keeps_history() -> None:
+    """nan/inf survive float() but would poison the appended ratio."""
+    history = [_record(0, 10.0, 8.0)]
+    for bad in (
+        {"day": TODAY.isoformat(), "snapshot_kwh": "nan", "accumulated_kwh": 2.0},
+        {"day": TODAY.isoformat(), "snapshot_kwh": 1.0, "accumulated_kwh": "inf"},
+        {"day": TODAY.isoformat(), "snapshot_kwh": float("nan"), "accumulated_kwh": 2.0},
+    ):
+        raw = {"history": serialize_history(history), "in_flight": bad}
+
+        assert restore_fa_store(raw, TODAY) == (history, None)
+
+
+def test_restore_fa_store_overflow_in_flight_keeps_history() -> None:
+    """float(huge int) raises OverflowError -- must cost only the in-flight
+    block, never the whole history."""
+    history = [_record(0, 10.0, 8.0)]
+    raw = {
+        "history": serialize_history(history),
+        "in_flight": {
+            "day": TODAY.isoformat(),
+            "snapshot_kwh": 10**400,
+            "accumulated_kwh": 2.0,
+        },
+    }
+
+    assert restore_fa_store(raw, TODAY) == (history, None)
+
+
+def test_restore_fa_store_stale_guard() -> None:
+    """Only today's or yesterday's in-flight day is accepted."""
+    for day, accepted in (
+        (TODAY, True),
+        (TODAY - timedelta(days=1), True),  # rollover appends it on refresh
+        (TODAY - timedelta(days=2), False),  # multi-day outage: truncated
+        (TODAY + timedelta(days=1), False),  # clock skew / garbage
+    ):
+        in_flight = InFlightDay(day, 11.25, 3.4)
+        _, restored = restore_fa_store(serialize_fa_store([], in_flight), TODAY)
+
+        assert restored == (in_flight if accepted else None)
+
+
+def test_restore_fa_store_snapshot_none_round_trips_as_none() -> None:
+    """A missing pre-dawn snapshot must not become 0.0 (a 'captured' zero)."""
+    in_flight = InFlightDay(TODAY, None, 1.2)
+
+    _, restored = restore_fa_store(serialize_fa_store([], in_flight), TODAY)
+
+    assert restored is not None
+    assert restored.snapshot_kwh is None
+    assert restored.accumulated_kwh == pytest.approx(1.2)
 
 
 # ---------------------------------------------------------------------------

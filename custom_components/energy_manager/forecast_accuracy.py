@@ -13,8 +13,9 @@ All functions are pure and HA-free so they can be unit tested directly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 # Days with a forecast below this are skipped entirely -- a ratio against
 # a near-zero forecast is meaningless and would swing the suggested factor.
@@ -44,6 +45,23 @@ class DailyAccuracyRecord:
     date: date
     forecast_kwh: float
     actual_kwh: float
+
+
+@dataclass(frozen=True, slots=True)
+class InFlightDay:
+    """The current (not yet rolled-over) day's accuracy state.
+
+    Persisted alongside the history so a config-entry reload or HA restart
+    mid-day does not lose the pre-dawn snapshot and the kWh accumulated so
+    far. snapshot_kwh is None until the pre-dawn snapshot succeeds. The PV
+    integration anchor is deliberately NOT part of this -- on restore the
+    first PV sample re-anchors via accumulate_energy_kwh's gap guard, so at
+    most ~one refresh interval of production is lost per reload.
+    """
+
+    day: date
+    snapshot_kwh: float | None
+    accumulated_kwh: float
 
 
 def append_day(
@@ -130,6 +148,82 @@ def restore_history(raw: object) -> list[DailyAccuracyRecord]:
             continue
         history.append(record)
     return history[-MAX_HISTORY_DAYS:]
+
+
+def serialize_fa_store(
+    history: list[DailyAccuracyRecord], in_flight: InFlightDay | None
+) -> dict:
+    """Serialize the forecast-accuracy Store payload (history + in-flight day).
+
+    Wraps serialize_history() in a dict so the current day's state can ride
+    along; restore_fa_store() still accepts the pre-wrapper bare-list shape.
+    snapshot_kwh None round-trips as null, never 0.0 -- a 0.0 snapshot would
+    count as "captured" and append a bogus zero-forecast day at rollover.
+    """
+    return {
+        "history": serialize_history(history),
+        "in_flight": None
+        if in_flight is None
+        else {
+            "day": in_flight.day.isoformat(),
+            "snapshot_kwh": in_flight.snapshot_kwh,
+            "accumulated_kwh": in_flight.accumulated_kwh,
+        },
+    }
+
+
+def restore_fa_store(
+    raw: object, today: date
+) -> tuple[list[DailyAccuracyRecord], InFlightDay | None]:
+    """Restore the payload persisted by serialize_fa_store().
+
+    Accepts the legacy bare-list payload (history only, no in-flight day)
+    and the current dict shape; anything else restores to ([], None). A
+    malformed in-flight block (bad date, non-numeric kWh, missing key)
+    drops only the in-flight day, never the history.
+
+    Stale guard: the in-flight day is accepted only when it is today or
+    yesterday (relative to the caller's local date). Yesterday is fine --
+    the coordinator's rollover appends it on the first refresh. A future
+    day means clock skew or garbage; anything older means a multi-day
+    outage whose truncated actual would bias the suggested factor low.
+    Accepted tradeoff: a yesterday-day truncated by an outage that began
+    mid-production is still appended and biases that one ratio low; the
+    common cases (quick reload, overnight restart) lose nothing, and one
+    low day out of the 14-day window is bounded by the factor clamp.
+    """
+    if isinstance(raw, list):
+        return restore_history(raw), None
+    if not isinstance(raw, dict):
+        return [], None
+    history = restore_history(raw.get("history"))
+    in_flight: InFlightDay | None = None
+    raw_in_flight = raw.get("in_flight")
+    if raw_in_flight is not None:
+        # OverflowError: float(huge int) must invalidate only the in-flight
+        # block, never bubble up and cost the whole history. Non-finite
+        # values ("nan"/"inf" survive float()) would poison the appended
+        # ratio, so they invalidate the block too.
+        try:
+            snapshot = raw_in_flight["snapshot_kwh"]
+            in_flight = InFlightDay(
+                date.fromisoformat(raw_in_flight["day"]),
+                None if snapshot is None else float(snapshot),
+                float(raw_in_flight["accumulated_kwh"]),
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            in_flight = None
+        if in_flight is not None and not (
+            math.isfinite(in_flight.accumulated_kwh)
+            and (in_flight.snapshot_kwh is None or math.isfinite(in_flight.snapshot_kwh))
+        ):
+            in_flight = None
+    if in_flight is not None and in_flight.day not in (
+        today,
+        today - timedelta(days=1),
+    ):
+        in_flight = None
+    return history, in_flight
 
 
 def accumulate_energy_kwh(

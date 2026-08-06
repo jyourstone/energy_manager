@@ -22,7 +22,7 @@ A few tuning options (set in the wizard, adjustable later via **Configure**) sha
 - **Peak-grouping gap (h)** — expensive hours within this many hours of each other are treated as one discharge peak rather than several separate ones, so the plan sizes a single charge deficit (and a single solar recharge window) to cover the whole peak instead of fragmenting it.
 
 !!! tip "Solar Forecast Accuracy is observe-only"
-    The diagnostic **Solar Forecast Accuracy** sensor tracks daily forecast-vs-actual production ratios and, once it has 7 or more valid days of history, suggests a production factor you could set instead. It never changes your configured value itself — it's there so you can tune the production factor from real data rather than guesswork. Days with a near-zero forecast are skipped so they can't skew the suggestion.
+    The diagnostic **Solar Forecast Accuracy** sensor tracks daily forecast-vs-actual production ratios and, once it has 7 or more valid days of history, suggests a production factor you could set instead. It never changes your configured value itself — it's there so you can tune the production factor from real data rather than guesswork. Days with a near-zero forecast are skipped so they can't skew the suggestion. The current day's progress is persisted too, so a mid-day restart or config reload no longer loses that day's record.
 
 ## Tuning the discharge and charge thresholds
 

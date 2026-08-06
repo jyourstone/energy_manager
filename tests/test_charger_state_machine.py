@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.energy_manager.charger_state_machine import (
+    MAX_PENDING_DOWNTIME_SECONDS,
+    MAX_RESTORED_PENDING_AGE_SECONDS,
     CarDemand,
     ChargerAmpHysteresis,
     ChargerCommand,
@@ -599,6 +601,175 @@ class TestSolarActivationTracker:
         active = t.update(True, T0 + timedelta(seconds=350), 300.0, 60.0)
         # A fresh 300s wait is required from t=100's cancel, not from t=0.
         assert active is False
+
+
+# ---------------------------------------------------------------------------
+# SolarActivationTracker -- serialize/restore persistence
+# ---------------------------------------------------------------------------
+
+
+class TestSolarTrackerPersistence:
+    def test_round_trip_active_with_pending_off(self):
+        t = SolarActivationTracker()
+        t.update(True, T0, 300.0, 60.0)
+        t.update(True, T0 + timedelta(seconds=300), 300.0, 60.0)  # latched on
+        t.update(False, T0 + timedelta(seconds=310), 300.0, 60.0)  # pending_off
+        restored = SolarActivationTracker.restore(
+            t.serialize_stored(T0 + timedelta(seconds=310)),
+            T0 + timedelta(seconds=320),
+        )
+        assert restored.active is True
+        # The deactivation countdown continues from the persisted
+        # pending_since (t=310), so 60s after it the latch drops.
+        assert restored.update(False, T0 + timedelta(seconds=350), 300.0, 60.0) is True
+        assert restored.update(False, T0 + timedelta(seconds=370), 300.0, 60.0) is False
+
+    def test_round_trip_inactive_with_pending_on(self):
+        t = SolarActivationTracker()
+        t.update(True, T0, 300.0, 60.0)  # pending_on started
+        restored = SolarActivationTracker.restore(
+            t.serialize_stored(T0 + timedelta(seconds=90)),
+            T0 + timedelta(seconds=100),
+        )
+        assert restored.active is False
+        # The activation countdown continues from the persisted
+        # pending_since (t=0) -- NOT restarted by a quick reload.
+        assert restored.update(True, T0 + timedelta(seconds=299), 300.0, 60.0) is False
+        assert restored.update(True, T0 + timedelta(seconds=300), 300.0, 60.0) is True
+
+    def test_round_trip_active_no_pending(self):
+        t = SolarActivationTracker()
+        t.update(True, T0, 300.0, 60.0)
+        t.update(True, T0 + timedelta(seconds=300), 300.0, 60.0)
+        restored = SolarActivationTracker.restore(
+            t.serialize(), T0 + timedelta(seconds=400)
+        )
+        assert restored.active is True
+        assert restored.serialize()["pending_since"] is None
+
+    @pytest.mark.parametrize("raw", [None, "garbage", 42, [], ["active", True]])
+    def test_garbage_restores_fresh_default(self, raw):
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.active is False
+        assert restored.serialize() == {"active": False, "pending_since": None}
+
+    def test_malformed_partial_dict_restores_fresh_default(self):
+        restored = SolarActivationTracker.restore({"pending_since": None}, T0)
+        assert restored.active is False
+
+    def test_non_bool_active_restores_fresh_default(self):
+        restored = SolarActivationTracker.restore(
+            {"active": "yes", "pending_since": None}, T0
+        )
+        assert restored.active is False
+
+    def test_unparseable_pending_since_restores_fresh_default(self):
+        restored = SolarActivationTracker.restore(
+            {"active": True, "pending_since": "not-a-timestamp"}, T0
+        )
+        assert restored.active is False
+
+    def test_future_pending_since_dropped_but_active_kept(self):
+        raw = {
+            "active": True,
+            "pending_since": (T0 + timedelta(hours=1)).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.active is True
+        assert restored.serialize()["pending_since"] is None
+
+    def test_stale_pending_since_dropped_but_active_kept(self):
+        # Downtime must not count toward the continuously-held delay: a
+        # pending timer older than MAX_RESTORED_PENDING_AGE_SECONDS is
+        # discarded so one post-restart surplus spike cannot flip the latch.
+        raw = {
+            "active": True,
+            "pending_since": (
+                T0 - timedelta(seconds=MAX_RESTORED_PENDING_AGE_SECONDS + 1)
+            ).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.active is True
+        assert restored.serialize()["pending_since"] is None
+
+    def test_pending_since_within_age_bound_kept(self):
+        raw = {
+            "active": False,
+            "pending_since": (
+                T0 - timedelta(seconds=MAX_RESTORED_PENDING_AGE_SECONDS - 1)
+            ).isoformat(),
+            "saved_at": T0.isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is not None
+
+    def test_naive_pending_since_coerced_to_utc(self):
+        # Persisted by an older/foreign writer without tzinfo -- must be
+        # treated as UTC, and elapsed-time math against an aware `now`
+        # must not raise.
+        raw = {
+            "active": False,
+            "pending_since": T0.replace(tzinfo=None).isoformat(),
+            "saved_at": (T0 + timedelta(seconds=100)).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0 + timedelta(seconds=100))
+        assert restored.active is False
+        assert restored.update(True, T0 + timedelta(seconds=300), 300.0, 60.0) is True
+
+    def test_serialize_stored_stamps_saved_at(self):
+        t = SolarActivationTracker()
+        assert t.serialize_stored(T0) == {
+            "active": False,
+            "pending_since": None,
+            "saved_at": T0.isoformat(),
+        }
+
+    def test_missing_saved_at_drops_pending_keeps_active(self):
+        # Payload without saved_at gives no proof the downtime was short,
+        # so the pending timer restarts; the latch itself survives.
+        raw = {
+            "active": True,
+            "pending_since": (T0 - timedelta(seconds=30)).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.active is True
+        assert restored.serialize()["pending_since"] is None
+
+    def test_long_downtime_drops_pending(self):
+        # Downtime is unobserved surplus: a save-to-restore gap past
+        # MAX_PENDING_DOWNTIME_SECONDS must not count toward the delay.
+        saved = T0 - timedelta(seconds=MAX_PENDING_DOWNTIME_SECONDS + 5)
+        raw = {
+            "active": False,
+            "pending_since": (saved - timedelta(seconds=30)).isoformat(),
+            "saved_at": saved.isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is None
+
+    def test_future_saved_at_drops_pending(self):
+        raw = {
+            "active": False,
+            "pending_since": (T0 - timedelta(seconds=30)).isoformat(),
+            "saved_at": (T0 + timedelta(hours=1)).isoformat(),
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is None
+
+    def test_garbage_saved_at_drops_pending(self):
+        raw = {
+            "active": False,
+            "pending_since": (T0 - timedelta(seconds=30)).isoformat(),
+            "saved_at": "not-a-timestamp",
+        }
+        restored = SolarActivationTracker.restore(raw, T0)
+        assert restored.serialize()["pending_since"] is None
+
+    def test_serialize_none_pending_round_trips(self):
+        t = SolarActivationTracker()
+        assert t.serialize() == {"active": False, "pending_since": None}
+        restored = SolarActivationTracker.restore(t.serialize_stored(T0), T0)
+        assert restored.serialize() == {"active": False, "pending_since": None}
 
 
 # ---------------------------------------------------------------------------
