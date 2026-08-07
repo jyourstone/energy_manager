@@ -159,6 +159,7 @@ def compute_ems_state(
     discharge_allowed: bool,
     discharge_gate_reason: str,
     car_charging_active: bool,
+    house_consumption_kw: float,
 ) -> EMSDecision:
     """Compute the EMS mode and safe charging limit.
 
@@ -170,7 +171,8 @@ def compute_ems_state(
         2. Map "idle" to "max_self_consumption"
         3. Car priority override check
         4. Fuse-limited charging power
-        5. PV opportunistic charging check
+        5. PV opportunistic charging check (surplus-capped: PV minus house
+           consumption, never gross PV)
         6. Standby hold check (closed discharge gate / active car charge)
         7. Return final decision
 
@@ -221,6 +223,12 @@ def compute_ems_state(
             battery never discharges into the car). Export
             (command_discharging) stays exempt by design: it offsets car
             import at the meter (EMS-03).
+        house_consumption_kw: Net house consumption in kW (CORE-11
+            exclusions applied), 0.0 when no house-consumption entity is
+            configured. Must EXCLUDE the battery's own charging draw (the
+            existing EV surplus formula makes the same assumption).
+            Deliberately INCLUDES the EV charger draw, so an active car
+            charging session claims the surplus before the battery does.
 
     Returns:
         EMSDecision with the target mode, safe charge limit, fuse headroom,
@@ -272,19 +280,26 @@ def compute_ems_state(
     headroom_kw = (charge_ceiling_amps * voltage) / 1000.0
     safe_charge_kw = max(0.0, min(max_charge_power_kw, headroom_kw))
 
-    # 5. PV opportunistic charging (EMS-08)
+    # 5. PV opportunistic charging (EMS-08): the SigenStor executes
+    # command_charging as "Command Charging (PV First)" -- prefer PV, but
+    # top up from the grid to reach the commanded limit. Commanding gross
+    # PV power (rather than the surplus left over after house load) would
+    # therefore push the house's own consumption onto the grid as an
+    # import, silently grid-charging the battery outside any scheduled
+    # cheap slot. Capping at surplus keeps this branch grid-neutral.
     if (
         mode in ("standby", "max_self_consumption")
         and pv_hysteresis_active
         and battery_soc_pct < max_soc_pct
     ):
-        pv_kw = pv_power_w / 1000.0
-        return EMSDecision(
-            target_mode="command_charging",
-            charge_limit_kw=min(pv_kw, safe_charge_kw),
-            fuse_headroom_amps=headroom,
-            override_reason="pv_opportunistic",
-        )
+        pv_surplus_kw = max(0.0, pv_power_w / 1000.0 - house_consumption_kw)
+        if pv_surplus_kw > 0.0:
+            return EMSDecision(
+                target_mode="command_charging",
+                charge_limit_kw=min(pv_surplus_kw, safe_charge_kw),
+                fuse_headroom_amps=headroom,
+                override_reason="pv_opportunistic",
+            )
 
     # 6. Standby hold: the SigenStor ignores the max-discharging-limit
     # register in max_self_consumption, so any state that must hold the
