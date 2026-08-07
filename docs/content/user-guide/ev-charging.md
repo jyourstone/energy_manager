@@ -28,7 +28,10 @@ Configured in Step 4 of the [Setup Wizard](../getting-started/setup-wizard.md):
 | Solar charging start threshold (kW) | 1.5 | Minimum net solar surplus, sustained past the activation delay, before solar charging begins |
 | Notification service | — | Optional `notify.*` service for safety alerts — fuse emergency overload pauses and the 0A safety stop |
 
-A handful of further tuning knobs (current increase/decrease delay, solar activation/deactivation delay, the battery SOC gate, the emergency overload margin) live in the same step's advanced options, pre-filled with tuned defaults.
+A handful of further tuning knobs (current increase/decrease delay, solar activation/deactivation delay, the emergency overload margin) live in the same step's advanced options, pre-filled with tuned defaults.
+
+!!! tip "No reload needed"
+    **Maximum grid charging power**, **Solar charging start threshold**, and the advanced-options **battery SOC gate** field only seed their number entities on first setup (see [Entities](../reference/entities.md)) — adjust them afterward from the Energy Manager device page and the new value applies on the next 30-second coordinator tick, no reload, and persists across restarts.
 
 ## Adding a Car
 
