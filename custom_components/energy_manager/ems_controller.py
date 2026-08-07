@@ -37,7 +37,7 @@ class EMSDecision:
         fuse_headroom_amps: Available fuse headroom in amps. Always >= 0.
         override_reason: Why mode differs from the schedule target, or None.
             Possible values: "car_charging_priority", "pv_opportunistic",
-            "discharge_gate_closed".
+            "discharge_gate_closed", "max_soc_reached".
     """
 
     target_mode: str
@@ -150,7 +150,7 @@ def compute_ems_state(
     car_plugged_in: bool,
     pv_power_w: float,
     pv_hysteresis_active: bool,
-    max_soc_pct: float = 95.0,
+    max_soc_pct: float = 100.0,
     safety_buffer_amps: float = 1.0,
     voltage: float = 230.0,
     sensor_blocked: bool = False,
@@ -253,6 +253,19 @@ def compute_ems_state(
             charge_limit_kw=0.0,
             fuse_headroom_amps=headroom,
             override_reason="car_charging_priority",
+        )
+
+    # 3b. Max-SoC ceiling: the schedule only sizes charge slots at
+    # recalculation time, so a slot can outlive the target being reached.
+    # Standby (not MSC) -- the gate is definitionally open during a charge
+    # slot, and MSC would immediately cycle the just-stored energy into
+    # house load at the cheap prices the slot was scheduled for.
+    if mode == "command_charging" and battery_soc_pct >= max_soc_pct:
+        return EMSDecision(
+            target_mode="standby",
+            charge_limit_kw=0.0,
+            fuse_headroom_amps=headroom,
+            override_reason="max_soc_reached",
         )
 
     # 4. Fuse-limited charging power (EMS-02)

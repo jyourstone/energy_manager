@@ -460,6 +460,52 @@ class TestPVOpportunisticCharging:
 # ---------------------------------------------------------------------------
 
 
+class TestMaxSocCeiling:
+    """Scheduled charging must stop at the max-SoC target -- the schedule
+    only sizes charge slots at recalculation time, so a slot can outlive
+    the target being reached."""
+
+    def _charge_state(self, **overrides: object) -> EMSDecision:
+        defaults: dict[str, object] = {
+            "target_ems_mode": "command_charging",
+            "current_l_amps": 5.0,
+            "fuse_rating_amps": 25.0,
+            "max_charge_power_kw": 5.0,
+            "battery_soc_pct": 95.0,
+            "car_scheduled": False,
+            "car_plugged_in": False,
+            "pv_power_w": 0.0,
+            "pv_hysteresis_active": False,
+            "max_soc_pct": 95.0,
+            "discharge_allowed": True,
+            "discharge_gate_reason": "charging_slot",
+            "car_charging_active": False,
+        }
+        defaults.update(overrides)
+        return compute_ems_state(**defaults)  # type: ignore[arg-type]
+
+    def test_charge_slot_stops_at_target(self):
+        """soc == target during a charge slot => standby, not MSC (MSC
+        would cycle the just-stored energy into house load)."""
+        result = self._charge_state()
+        assert result.target_mode == "standby"
+        assert result.override_reason == "max_soc_reached"
+        assert result.charge_limit_kw == 0.0
+
+    def test_charge_slot_continues_below_target(self):
+        result = self._charge_state(battery_soc_pct=94.9)
+        assert result.target_mode == "command_charging"
+        assert result.override_reason is None
+        assert result.charge_limit_kw > 0.0
+
+    def test_car_priority_reason_wins_over_max_soc(self):
+        """Both overrides yield standby -- the EMS-03 car reason is the
+        one surfaced (checked first)."""
+        result = self._charge_state(car_scheduled=True, car_plugged_in=True)
+        assert result.target_mode == "standby"
+        assert result.override_reason == "car_charging_priority"
+
+
 class TestPVHysteresisTracker:
     """Tests for PV hysteresis state machine preventing oscillation."""
 

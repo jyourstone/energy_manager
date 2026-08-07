@@ -521,7 +521,7 @@
         "name": "Reserverad batterinivå vid export"
       },
       "battery_max_soc_target": {
-        "name": "Batteri max laddningsnivå"
+        "name": "Batteriets max laddningsnivå"
       }
     },
     "time": {
