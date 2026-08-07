@@ -186,6 +186,7 @@ from .const import (
     DEFAULT_TARGET_SOC_PCT,
     DOMAIN,
     EASEE_UPDATE_INTERVAL_SECONDS,
+    EMS_MISMATCH_WARNING_INTERVAL_SECONDS,
     EMS_MODE_MAP,
     EMS_UPDATE_INTERVAL_SECONDS,
     FALLBACK_STALE_THRESHOLD_MINUTES,
@@ -205,12 +206,16 @@ from .const import (
 from .ems_controller import (
     ESSLimitRateLimiter,
     PVHysteresisTracker,
+    StandbyDischargeMonitor,
+    WriteRejectionBackoff,
     build_command_decision,
     car_actively_charging,
     car_demands_priority_charging,
     compute_available_ess_amps,
     compute_ems_state,
     compute_export_limit_kw,
+    ems_select_mismatch,
+    guarded_device_write,
     resolve_current_sensor_fallback,
     should_file_fallback_issue,
     worst_case_signed_amps,
@@ -1776,6 +1781,21 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._pending_verification: dict | None = None
         self._verification_attempts: int = 0
 
+        # Rejected-write backoff, one per write target (incident
+        # 2026-08-07): a Modbus-rejected register write raised through
+        # async_call on every cycle for hours -- see guarded_device_write().
+        self._write_backoffs: dict[str, WriteRejectionBackoff] = {
+            "ems_mode": WriteRejectionBackoff(),
+            "charge_limit": WriteRejectionBackoff(),
+            "discharge_limit": WriteRejectionBackoff(),
+        }
+
+        # Commanded-vs-measured standby alarm and reconciliation warning
+        # rate limiting (incident 2026-08-07)
+        self._standby_discharge_monitor = StandbyDischargeMonitor()
+        self._reconcile_warned_at: datetime | None = None
+        self._standby_discharge_warned_at: datetime | None = None
+
         # Observe-only mode (CORE-14): most recently suppressed dry-run command
         self._last_suppressed_command: str | None = None
 
@@ -1958,6 +1978,48 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             house_consumption_kw=house_consumption_kw,
         )
 
+        # 6b. Reconcile the mode belief against the live select entity
+        # (incident 2026-08-07): a crash between the select send and the
+        # end-of-cycle belief update left _last_sent_mode behind the
+        # hardware, and the dedup below then silently dropped every later
+        # command for the actually-needed mode for hours. On mismatch,
+        # reset the belief so the mode is re-sent by the ordered send
+        # logic below. Skipped while a verification is pending (Modbus
+        # apply latency) and when the select is unavailable (normal for
+        # ~2 min after an HA restart).
+        if (
+            self._ems_select_entity
+            and self._last_sent_mode is not None
+            and self._pending_verification is None
+        ):
+            select_state = self.hass.states.get(self._ems_select_entity)
+            live_option = (
+                None
+                if select_state is None
+                or select_state.state in ("unavailable", "unknown")
+                else select_state.state
+            )
+            if ems_select_mismatch(
+                self._last_sent_mode, live_option, EMS_MODE_MAP
+            ):
+                now = dt_util.utcnow()
+                if (
+                    self._reconcile_warned_at is None
+                    or (now - self._reconcile_warned_at).total_seconds()
+                    >= EMS_MISMATCH_WARNING_INTERVAL_SECONDS
+                ):
+                    _LOGGER.warning(
+                        "EMS select %s reads '%s' but the last commanded "
+                        "mode was '%s' (%s) -- resetting belief so the "
+                        "mode is re-sent",
+                        self._ems_select_entity,
+                        live_option,
+                        self._last_sent_mode,
+                        EMS_MODE_MAP.get(self._last_sent_mode),
+                    )
+                    self._reconcile_warned_at = now
+                self._last_sent_mode = None
+
         # 7. Determine if mode or limit changed
         mode_changed = result.target_mode != self._last_sent_mode
         limit_changed = result.charge_limit_kw != self._last_charge_limit
@@ -1991,16 +2053,33 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         else:
             target_discharge_limit = 0.0
 
-        # 8. Safe command ordering (Research Pitfall 3)
+        # 8. Safe command ordering (Research Pitfall 3). Every device write
+        # goes through guarded_device_write (incident 2026-08-07): one
+        # raising write logs and fails THAT write only -- later sends,
+        # verification scheduling and EMSData publishing all still run,
+        # and persistent rejections back off.
         mode_sent = False
         limit_sent = False
+        # Belief snapshot taken BEFORE step 8's mode send below:
+        # _last_sent_mode now advances immediately inside
+        # _send_ems_mode_guarded, on the successful service call (incident
+        # 2026-08-07), so by the time 8b evaluates its raise-guard the live
+        # attribute already reads the NEW mode on the exact cycle EM sends
+        # the mode that exits command_discharging. 8b's guard arm needs the
+        # pre-send belief to still hold the discharge limit through that
+        # transition cycle (commits 80179ee, 5d5e640).
+        mode_belief_before_send = self._last_sent_mode
         if mode_changed or limit_changed:
             if result.target_mode == "command_charging":
                 # Switching TO command_charging: send limit FIRST, then mode
                 if limit_changed:
-                    limit_sent = await self._send_charge_limit(result.charge_limit_kw)
+                    limit_sent = await self._send_charge_limit_guarded(
+                        result.charge_limit_kw
+                    )
                 if mode_changed:
-                    mode_sent = await self._send_ems_mode(result.target_mode)
+                    mode_sent = await self._send_ems_mode_guarded(
+                        result.target_mode
+                    )
             elif result.target_mode == "command_discharging":
                 # Entering export: the fuse-capped discharge limit must be
                 # CONFIRMED on the plant before the mode is commanded --
@@ -2011,7 +2090,9 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 if (
                     target_discharge_limit is not None
                     and target_discharge_limit != self._last_sent_discharge_limit
-                    and await self._send_discharge_limit(target_discharge_limit)
+                    and await self._send_discharge_limit_guarded(
+                        target_discharge_limit
+                    )
                 ):
                     self._last_sent_discharge_limit = target_discharge_limit
                 if (
@@ -2020,18 +2101,26 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                     and self._last_sent_discharge_limit == target_discharge_limit
                     and self._discharge_limit_reads_at_most(target_discharge_limit)
                 ):
-                    mode_sent = await self._send_ems_mode(result.target_mode)
+                    mode_sent = await self._send_ems_mode_guarded(
+                        result.target_mode
+                    )
                 if limit_changed:
-                    limit_sent = await self._send_charge_limit(result.charge_limit_kw)
+                    limit_sent = await self._send_charge_limit_guarded(
+                        result.charge_limit_kw
+                    )
             else:
                 # Switching FROM command_charging (or between non-charge modes):
                 # send mode FIRST, then zero limit. Leaving export restores
                 # safely too: the mode drops to max_self_consumption here
                 # before 8b raises the limit back to entity max.
                 if mode_changed:
-                    mode_sent = await self._send_ems_mode(result.target_mode)
+                    mode_sent = await self._send_ems_mode_guarded(
+                        result.target_mode
+                    )
                 if limit_changed:
-                    limit_sent = await self._send_charge_limit(result.charge_limit_kw)
+                    limit_sent = await self._send_charge_limit_guarded(
+                        result.charge_limit_kw
+                    )
 
         # 8b. Discharge limit dedup send: mirror the scheduler's
         # discharge_allowed decision (or the BATT-17 export limit, computed
@@ -2063,7 +2152,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 raising
                 and result.target_mode != "command_discharging"
                 and (
-                    self._last_sent_mode == "command_discharging"
+                    mode_belief_before_send == "command_discharging"
                     or self._plant_mode_is_command_discharging()
                 )
             ):
@@ -2074,16 +2163,20 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 # Export-mode exit not yet confirmed: either the mode send
                 # failed/was suppressed, or it succeeded but the inverter's
                 # select entity still READS Command Discharging (Modbus
-                # apply latency -- Greptile PR #7). Never raise the limit
-                # toward entity max while the plant may still be
-                # discharging. Retries next cycle.
+                # apply latency -- Greptile PR #7). Uses the PRE-send
+                # belief (mode_belief_before_send), not the live
+                # _last_sent_mode: the latter already advanced inside step
+                # 8's _send_ems_mode_guarded on the transition cycle, which
+                # would make this arm dead exactly when it matters most.
+                # Never raise the limit toward entity max while the plant
+                # may still be discharging. Retries next cycle.
                 _LOGGER.debug(
                     "Holding discharge limit at %.1f kW until export-mode "
                     "exit is confirmed",
                     self._last_sent_discharge_limit,
                 )
             else:
-                discharge_sent = await self._send_discharge_limit(
+                discharge_sent = await self._send_discharge_limit_guarded(
                     target_discharge_limit
                 )
                 if discharge_sent:
@@ -2103,8 +2196,10 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         # sent. A suppressed (observe-only) or failed command must NOT be
         # recorded as sent, otherwise it is never retried once control is
         # enabled or the entity recovers (CodeRabbit/Greptile PR #1 review).
-        if mode_sent:
-            self._last_sent_mode = result.target_mode
+        # _last_sent_mode already advanced inside _send_ems_mode_guarded,
+        # immediately after the successful service call (incident
+        # 2026-08-07): a later failure in the cycle must never leave the
+        # belief behind the hardware.
         if limit_sent:
             self._last_charge_limit = result.charge_limit_kw
         # The computed limit is only "delivered" when it matches the last
@@ -2116,6 +2211,43 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         discharge_limit_delivered = (
             self._last_sent_discharge_limit == target_discharge_limit
         )
+
+        # 10b. Commanded-vs-measured alarm (incident 2026-08-07): the
+        # inverter can sit in another mode discharging the home battery
+        # while EM believes it commanded a hold (a select write applied
+        # but never believed, or a mode the hardware ignored). Requires
+        # 2+ consecutive cycles above 0.5 kW so a stale reading right
+        # after a mode change cannot cry wolf; skipped while a mode
+        # verification is still pending. Sign convention as in
+        # _read_battery_own_amps(): positive = charging, so discharge is
+        # the negated reading.
+        battery_discharge_kw: float | None = None
+        if self._battery_power_entity and _entity_has_value(
+            self.hass, self._battery_power_entity
+        ):
+            battery_discharge_kw = max(
+                0.0, -_read_power_kw(self.hass, self._battery_power_entity)
+            )
+        commanded_standby = (
+            self._last_sent_mode == "standby"
+            and self._pending_verification is None
+        )
+        if self._standby_discharge_monitor.update(
+            commanded_standby, battery_discharge_kw
+        ):
+            now = dt_util.utcnow()
+            if (
+                self._standby_discharge_warned_at is None
+                or (now - self._standby_discharge_warned_at).total_seconds()
+                >= EMS_MISMATCH_WARNING_INTERVAL_SECONDS
+            ):
+                _LOGGER.warning(
+                    "Battery is discharging %.1f kW although the commanded "
+                    "EMS mode is standby -- the inverter is not honoring "
+                    "the hold",
+                    battery_discharge_kw,
+                )
+                self._standby_discharge_warned_at = now
 
         # 11. Check pending verification
         command_verified = self._check_verification()
@@ -2307,6 +2439,56 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         charger_power_kw = getattr(easee_data, "charger_power_kw", None)
 
         return car_actively_charging(charger_status, charger_power_kw)
+
+    async def _send_ems_mode_guarded(self, mode: str) -> bool:
+        """Send the EMS mode with exception isolation and rejection backoff.
+
+        _last_sent_mode advances HERE, immediately after the successful
+        service call -- never at the end of the cycle (incident
+        2026-08-07): a later exception in the same cycle left the belief
+        behind the hardware, and the command dedup then silently dropped
+        every future command for the actually-needed mode.
+        """
+        sent = await guarded_device_write(
+            f"EMS mode select ({self._ems_select_entity})",
+            lambda: self._send_ems_mode(mode),
+            self._write_backoffs["ems_mode"],
+        )
+        if sent:
+            self._last_sent_mode = mode
+        return sent
+
+    async def _send_charge_limit_guarded(self, limit_kw: float) -> bool:
+        """Send the charge limit with exception isolation and backoff."""
+        # Decreases are safety-critical (ESSLimitRateLimiter invariant):
+        # shrinking the fuse cap must land now, even mid-backoff. A
+        # persistently failing decrease logging every cycle is acceptable
+        # visibility. Belief None/unknown never bypasses.
+        bypass_backoff = (
+            self._last_charge_limit is not None
+            and limit_kw < self._last_charge_limit
+        )
+        return await guarded_device_write(
+            f"charge limit ({self._charge_limit_entity})",
+            lambda: self._send_charge_limit(limit_kw),
+            self._write_backoffs["charge_limit"],
+            bypass_backoff=bypass_backoff,
+        )
+
+    async def _send_discharge_limit_guarded(self, limit_kw: float) -> bool:
+        """Send the discharge limit with exception isolation and backoff."""
+        # Same decrease-bypass invariant as _send_charge_limit_guarded
+        # above: shrinking a safety-critical limit must land now.
+        bypass_backoff = (
+            self._last_sent_discharge_limit is not None
+            and limit_kw < self._last_sent_discharge_limit
+        )
+        return await guarded_device_write(
+            f"discharge limit ({self._discharge_limit_entity})",
+            lambda: self._send_discharge_limit(limit_kw),
+            self._write_backoffs["discharge_limit"],
+            bypass_backoff=bypass_backoff,
+        )
 
     async def _send_ems_mode(self, mode: str) -> bool:
         """Send EMS mode change to SigenStor via HA service call.

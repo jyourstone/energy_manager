@@ -14,11 +14,15 @@ The EMSCoordinator (Plan 03-02) will call compute_ems_state() and handle all I/O
 
 from __future__ import annotations
 
+import logging
 import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
 from .charger_state_machine import POWER_ACTIVE_THRESHOLD_KW
+
+_LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -653,6 +657,237 @@ class ESSLimitRateLimiter:
             self._pending_since = None
 
         return self._applied
+
+
+# ---------------------------------------------------------------------------
+# Command-path resilience (incident 2026-08-07)
+# ---------------------------------------------------------------------------
+
+
+class WriteRejectionBackoff:
+    """Retry throttle for a device write that keeps getting rejected.
+
+    A Modbus-level rejection (e.g. an ExceptionResponse raised through the
+    vendor integration's service call) is typically not transient:
+    retrying every evaluation cycle produced an error line every ~10s for
+    five hours (incident 2026-08-07). After failure_threshold consecutive
+    failures the write is only retried every retry_every_n_cycles-th
+    wanted cycle (~5 min at the 30s cadence). Any success resets to full
+    cadence.
+
+    Only genuine service-call failures count: a write skipped for other
+    reasons (observe-only suppression, unavailable entity) leaves the
+    counter untouched.
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 3,
+        retry_every_n_cycles: int = 10,
+    ) -> None:
+        """Initialize the backoff.
+
+        Args:
+            failure_threshold: Consecutive failures that enter backoff.
+            retry_every_n_cycles: Retry interval, in wanted-write cycles,
+                while in backoff.
+        """
+        self._failure_threshold = failure_threshold
+        self._retry_every_n_cycles = retry_every_n_cycles
+        self._consecutive_failures = 0
+        self._skipped_cycles = 0
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Current consecutive-failure count."""
+        return self._consecutive_failures
+
+    @property
+    def retry_every_n_cycles(self) -> int:
+        """Backoff retry interval in wanted-write cycles."""
+        return self._retry_every_n_cycles
+
+    @property
+    def in_backoff(self) -> bool:
+        """True once failure_threshold consecutive failures are recorded."""
+        return self._consecutive_failures >= self._failure_threshold
+
+    def should_attempt(self) -> bool:
+        """Whether this cycle's wanted write should actually be attempted.
+
+        Call exactly once per evaluation cycle that WANTS this write --
+        skipped wanted cycles are what the backoff interval counts.
+        """
+        if not self.in_backoff:
+            return True
+        self._skipped_cycles += 1
+        if self._skipped_cycles >= self._retry_every_n_cycles:
+            self._skipped_cycles = 0
+            return True
+        return False
+
+    def record_success(self) -> None:
+        """Reset to full retry cadence after a successful write."""
+        self._consecutive_failures = 0
+        self._skipped_cycles = 0
+
+    def record_failure(self) -> bool:
+        """Record a rejected write.
+
+        Returns:
+            True exactly when this failure ENTERS backoff -- the caller
+            logs its one-time WARNING on that transition.
+        """
+        was_in_backoff = self.in_backoff
+        self._consecutive_failures += 1
+        return self.in_backoff and not was_in_backoff
+
+
+async def guarded_device_write(
+    target: str,
+    send: Callable[[], Awaitable[bool]],
+    backoff: WriteRejectionBackoff,
+    bypass_backoff: bool = False,
+) -> bool:
+    """Run one device write with exception isolation and rejection backoff.
+
+    Incident 2026-08-07: a SigenergyModbusError raised straight through
+    hass.services.async_call(blocking=True) aborted the whole EMS cycle
+    every ~10s for five hours -- everything after the raising write (later
+    sends, the mode-belief update, verification scheduling, EMSData
+    publishing) never ran. Each write is therefore isolated: a raising
+    write logs and fails THAT write only, and persistent rejections back
+    off via backoff. Broad Exception on purpose -- vendor integrations
+    raise arbitrary types.
+
+    Args:
+        target: Human-readable write-target description for log lines.
+        send: Zero-arg coroutine factory performing the actual write;
+            returns True when the service call was made, False when it was
+            skipped (unavailable entity, observe-only suppression).
+        backoff: The per-target WriteRejectionBackoff.
+        bypass_backoff: Skip the should_attempt() gate (safety-critical
+            limit decreases must never be delayed by another target's
+            backoff -- incident 2026-08-07 saw a SigenStor accept 0.0 but
+            reject a nonzero value on the same register) while still
+            recording the outcome on backoff, so a persistently rejected
+            bypassed write still enters backoff for its own future
+            increases.
+
+    Returns:
+        True when the write was actually sent, False otherwise.
+    """
+    if not bypass_backoff and not backoff.should_attempt():
+        _LOGGER.debug(
+            "Skipping %s write: backing off after %d consecutive rejections",
+            target,
+            backoff.consecutive_failures,
+        )
+        return False
+    try:
+        sent = await send()
+    except Exception as err:  # noqa: BLE001 -- vendor integrations raise arbitrary types
+        _LOGGER.error("%s write failed: %s", target, err)
+        if backoff.record_failure():
+            _LOGGER.warning(
+                "%s write rejected %d consecutive times -- backing off to "
+                "one retry every %d cycles",
+                target,
+                backoff.consecutive_failures,
+                backoff.retry_every_n_cycles,
+            )
+        return False
+    if sent:
+        backoff.record_success()
+    return sent
+
+
+def ems_select_mismatch(
+    last_sent_mode: str | None,
+    live_option: str | None,
+    mode_map: dict[str, str],
+) -> bool:
+    """Whether the live EMS select option contradicts the mode belief.
+
+    Incident 2026-08-07: a crash between the select send and the
+    end-of-cycle belief update left _last_sent_mode behind the hardware,
+    and command dedup then silently dropped every later command for the
+    actually-needed mode. Reconciling belief against the live select each
+    cycle makes that state self-healing.
+
+    Args:
+        last_sent_mode: Internal mode EM believes it last sent, or None
+            when nothing has been commanded yet -- never a mismatch.
+        live_option: The select entity's current option, or None when the
+            entity is unavailable (normal for ~2 min after an HA restart)
+            -- never a mismatch.
+        mode_map: Internal mode -> select option string (EMS_MODE_MAP).
+
+    Returns:
+        True when both sides are known and disagree (including a live
+        option EM never sends -- the hardware is still not in the
+        commanded mode).
+    """
+    if last_sent_mode is None or live_option is None:
+        return False
+    expected = mode_map.get(last_sent_mode)
+    if expected is None:
+        return False
+    return live_option != expected
+
+
+class StandbyDischargeMonitor:
+    """Commanded-vs-measured alarm condition for the standby hold.
+
+    Standby is a hard hold contract (owner rule: the battery never
+    discharges into the car), but the inverter can sit in another mode
+    discharging freely while EM believes it commanded standby (incident
+    2026-08-07: 12 kW from the home battery into the car for hours).
+    Fires only after required_consecutive cycles above threshold_kw so a
+    single stale power reading right after a mode change cannot cry wolf.
+    """
+
+    def __init__(
+        self,
+        threshold_kw: float = 0.5,
+        required_consecutive: int = 2,
+    ) -> None:
+        """Initialize the monitor.
+
+        Args:
+            threshold_kw: Discharge power that must be exceeded to count.
+            required_consecutive: Consecutive qualifying cycles before the
+                alarm condition holds.
+        """
+        self._threshold_kw = threshold_kw
+        self._required_consecutive = required_consecutive
+        self._count = 0
+
+    def update(
+        self, commanded_standby: bool, discharge_kw: float | None
+    ) -> bool:
+        """Process one cycle's commanded/measured pair.
+
+        Args:
+            commanded_standby: Whether EM currently believes it commanded
+                standby (and no mode verification is still pending).
+            discharge_kw: Measured battery discharge in kW (>= 0), or None
+                when the battery power sensor is unavailable -- resets the
+                streak, never alarms.
+
+        Returns:
+            True while the alarm condition holds (the caller rate-limits
+            the actual log line).
+        """
+        if (
+            not commanded_standby
+            or discharge_kw is None
+            or discharge_kw <= self._threshold_kw
+        ):
+            self._count = 0
+            return False
+        self._count += 1
+        return self._count >= self._required_consecutive
 
 
 # ---------------------------------------------------------------------------

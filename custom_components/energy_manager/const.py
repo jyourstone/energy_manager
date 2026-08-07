@@ -217,6 +217,10 @@ WATTS_TO_AMPS_3PHASE_DIVISOR = 692.8
 # EMS update interval (seconds) -- faster than schedule for real-time control
 EMS_UPDATE_INTERVAL_SECONDS = 30
 
+# Rate limit for the EMS reconciliation / commanded-vs-measured warnings
+# (incident 2026-08-07): keep the signal without a line on every 30s tick.
+EMS_MISMATCH_WARNING_INTERVAL_SECONDS = 600.0
+
 # EMS mode mapping: internal mode -> SigenStor select option string
 EMS_MODE_MAP = {
     "command_charging": "Command Charging (PV First)",

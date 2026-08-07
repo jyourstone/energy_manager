@@ -25,9 +25,12 @@ commands via the easee integration's services.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+_LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -684,7 +687,11 @@ class ChargerController:
         self._solar_tracker = SolarActivationTracker()
         self._last_command_expect_active: bool | None = None
         self._last_command_at: datetime | None = None
+        self._last_command_action: str | None = None
         self._stuck: bool = False
+        # One-WARNING-per-stuck-episode guard (2026-08-07 incident: stuck
+        # was set silently while the charger ignored "stop" for 7 minutes)
+        self._stuck_logged: bool = False
         # Belief about what was last actually emitted (Easee reconciler) --
         # commands are re-sent on value change or heartbeat, never per tick.
         self._last_sent_limit: float | None = None
@@ -752,7 +759,9 @@ class ChargerController:
                 override_reason=f"terminal_{inputs.charger_status}",
             )
 
-        self._resolve_command_tracking(is_drawing, now, inputs.command_stuck_timeout_s)
+        self._resolve_command_tracking(
+            is_drawing, now, inputs.command_stuck_timeout_s, inputs.charger_status
+        )
         if is_drawing:
             # A confirmed draw completes any start/resume attempt -- a later
             # external stop may trigger a fresh start/resume immediately.
@@ -796,8 +805,19 @@ class ChargerController:
             self._sequence_state = "idle"
             self._pending_phase_mode = None
             if is_drawing:
-                self._note_command_expectation(False, now)
-                commands: tuple[ChargerCommand, ...] = (ChargerCommand("stop"),)
+                self._note_command_expectation(False, now, "stop")
+                # "stop" only deauthorizes -- an auth-free charger
+                # (authorizationRequired=false) ignores it and keeps
+                # charging (2026-08-07 incident), so the dynamic limit is
+                # also driven to 0 A, which halts the draw regardless of
+                # authorization mode. Belief-gated like every other limit
+                # write; the heartbeat re-asserts the 0 A. "stop" is kept
+                # for auth-required chargers, where it is the correct end.
+                suppress: list[ChargerCommand] = []
+                if self._emit_limit(0.0, now, inputs.limit_reassert_interval_s):
+                    suppress.append(ChargerCommand("set_dynamic_limit", 0.0))
+                suppress.append(ChargerCommand("stop"))
+                commands: tuple[ChargerCommand, ...] = tuple(suppress)
                 reason = note or "unauthorized_charge_suppressed"
             else:
                 commands = ()
@@ -823,7 +843,7 @@ class ChargerController:
         ):
             self._sequence_state = "idle"
             self._pending_phase_mode = None
-            self._note_command_expectation(False, now)
+            self._note_command_expectation(False, now, "pause")
             msg = (
                 "Nödläge: Laddaren pausad – uppmätt fasström "
                 f"{inputs.measured_worst_case_signed_amps:.1f} A överskrider "
@@ -885,7 +905,7 @@ class ChargerController:
                         "fortfarande ström – pausar."
                     ),
                 )
-                self._note_command_expectation(False, now)
+                self._note_command_expectation(False, now, "pause")
             return ChargerDecision(
                 mode=mode,
                 target_amps=0.0,
@@ -927,6 +947,7 @@ class ChargerController:
                 self._sequence_mode = mode
                 self._last_command_expect_active = None
                 self._last_command_at = None
+                self._last_command_action = None
                 return ChargerDecision(
                     mode=mode,
                     target_amps=0.0,
@@ -957,7 +978,7 @@ class ChargerController:
         if not is_drawing and self._should_emit_start(now, inputs.command_stuck_timeout_s):
             action = "resume" if inputs.charger_status == PAUSED_STATUS else "start"
             commands_out.append(ChargerCommand(action))
-            self._note_command_expectation(True, now)
+            self._note_command_expectation(True, now, action)
         # Quantize to whole amps (floor) -- Easee's API takes integer amps,
         # and comparing against our own last-sent belief (instead of the
         # power-derived current_dynamic_limit_amps estimate) is what stops
@@ -1108,9 +1129,14 @@ class ChargerController:
 
     def _abort_sequence_timeout(self, inputs: ChargerInputs, reason: str) -> ChargerDecision:
         """Per-state sequence timeout -- abort to a safe paused state, flag stuck."""
+        ignored = {
+            "pausing": "pause",
+            "set_phase": "set_phase_mode",
+            "resuming": "resume",
+        }.get(self._sequence_state, self._sequence_state)
         self._sequence_state = "idle"
         self._pending_phase_mode = None
-        self._stuck = True
+        self._set_stuck(inputs.charger_status, ignored)
         return ChargerDecision(
             mode=self._sequence_mode,
             target_amps=0.0,
@@ -1197,19 +1223,23 @@ class ChargerController:
 
     # -- Generic stuck-command tracking (outside phase-switch sequences) --
 
-    def _note_command_expectation(self, expect_active: bool, now: datetime) -> None:
+    def _note_command_expectation(
+        self, expect_active: bool, now: datetime, action: str
+    ) -> None:
         """Record that a start/resume/pause/stop command was just issued.
 
         Only (re)starts the timeout clock when the expectation actually
         changes -- reissuing the same command every tick while waiting must
-        not keep pushing the stuck timeout back.
+        not keep pushing the stuck timeout back. The action name is kept
+        for the stuck warning (the command the charger is ignoring).
         """
         if self._last_command_expect_active != expect_active:
             self._last_command_expect_active = expect_active
             self._last_command_at = now
+            self._last_command_action = action
 
     def _resolve_command_tracking(
-        self, is_drawing: bool, now: datetime, timeout_s: float
+        self, is_drawing: bool, now: datetime, timeout_s: float, charger_status: str
     ) -> None:
         """Confirm or time out the currently tracked plain command, if any."""
         if self._last_command_expect_active is None:
@@ -1217,13 +1247,32 @@ class ChargerController:
         if is_drawing == self._last_command_expect_active:
             self._last_command_expect_active = None
             self._last_command_at = None
+            self._last_command_action = None
             self._stuck = False
+            self._stuck_logged = False
             return
         if (
             self._last_command_at is not None
             and (now - self._last_command_at).total_seconds() >= timeout_s
         ):
-            self._stuck = True
+            self._set_stuck(charger_status, self._last_command_action or "unknown")
+
+    def _set_stuck(self, charger_status: str, ignored_command: str) -> None:
+        """Raise the stuck flag, logging one WARNING per stuck episode.
+
+        The 2026-08-07 incident set stuck silently while the charger
+        ignored "stop" for 7 minutes -- the flag must leave a log trail,
+        but only once per episode (not per tick).
+        """
+        self._stuck = True
+        if not self._stuck_logged:
+            self._stuck_logged = True
+            _LOGGER.warning(
+                "Charger is ignoring the %r command -- status is still %r "
+                "with no observable effect within the stuck timeout",
+                ignored_command,
+                charger_status,
+            )
 
     def _reset_all(self) -> None:
         """Full reset on a terminal charger state -- new session starts clean."""
@@ -1235,5 +1284,7 @@ class ChargerController:
         self._solar_tracker = SolarActivationTracker()
         self._last_command_expect_active = None
         self._last_command_at = None
+        self._last_command_action = None
         self._stuck = False
+        self._stuck_logged = False
         self.reset_command_belief()
