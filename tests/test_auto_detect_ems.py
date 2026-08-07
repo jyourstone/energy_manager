@@ -124,9 +124,8 @@ def _run_all_detectors(
     """Run the ems step's detector union against the same fake registry.
 
     Merges find_sigenstor_ems_entities, find_sigenstor_entities and
-    find_house_consumption_entity in the same order config_flow.py's
-    async_step_ems builds its auto-detect prefill (setup :522, options
-    :1288-1290).
+    find_house_consumption_entity in the same order async_step_ems builds
+    its auto-detect prefill, in both the setup and the options flow.
     """
     if global_entities is None:
         global_entities = sigen_entities
