@@ -19,10 +19,10 @@ Four number entities (seeded from the wizard's answers on first setup) shape how
 - **Solar production factor** — a multiplier applied to the raw forecast to correct for its typical optimism. Forecast.Solar tends to over-predict, so this scales the forecast down before it's used to size how much grid charging is still needed for a given peak.
 - **Charge buffer** — extra margin (%) added on top of the calculated charge deficit, so a slightly-worse-than-expected day (dimmer sun, more house load) doesn't leave the battery short right when a price peak hits.
 - **Estimated charge power** — the assumed charging rate (kW) used to work out how many slots a charge deficit needs. The actual per-slot energy uses whichever is lower: this value or your fuse-limited maximum.
-- **Minimum peak gap** — expensive hours within this many hours of each other are treated as one discharge peak rather than several separate ones, so the plan sizes a single charge deficit (and a single solar recharge window) to cover the whole peak instead of fragmenting it.
+- **Peak grouping gap** — expensive hours within this many hours of each other are treated as one discharge peak rather than several separate ones, so the plan sizes a single charge deficit (and a single solar recharge window) to cover the whole peak instead of fragmenting it.
 
 !!! tip "No reload needed"
-    All four entities apply on the next 30-second coordinator tick and persist across restarts — the wizard only seeds their starting value; there's no need to go back through **Configure** to tune them afterward.
+    All four entities apply on the next coordinator refresh — changing one triggers a refresh immediately — and persist across restarts — the wizard only seeds their starting value; there's no need to go back through **Configure** to tune them afterward.
 
 !!! tip "Solar Forecast Accuracy is observe-only"
     The diagnostic **Solar Forecast Accuracy** sensor tracks daily forecast-vs-actual production ratios and, once it has 7 or more valid days of history, suggests a production factor you could set instead. It never changes your configured value itself — it's there so you can tune the production factor from real data rather than guesswork. Days with a near-zero forecast are skipped so they can't skew the suggestion. The current day's progress is persisted too, so a mid-day restart or config reload no longer loses that day's record.

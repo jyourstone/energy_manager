@@ -50,7 +50,7 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 | Charge buffer | Extra margin (%) added on top of the calculated solar-charge deficit, so a slightly-worse-than-expected day doesn't leave the battery short (default 20%) |
 | Solar production factor | Multiplier applied to the raw Forecast.Solar prediction to correct for its typical optimism before it's used to size grid charging (default 0.8) |
 | Estimated charge power | Assumed charging rate (kW) used to work out how many slots a solar-charge deficit needs; the actual per-slot energy still uses whichever is lower — this value or the fuse-limited maximum (default 6 kW) |
-| Minimum peak gap | Expensive hours within this many hours of each other are treated as one discharge peak rather than several separate ones (default 2h) |
+| Peak grouping gap | Expensive hours within this many hours of each other are treated as one discharge peak rather than several separate ones (default 2h) |
 | Battery Cycle Cost | Cost per kWh of one battery charge/discharge cycle. When above 0, it replaces the manual discharge spread threshold with a derived value — see [Tuning the discharge and charge thresholds](../user-guide/home-battery.md#tuning-the-discharge-and-charge-thresholds) for the formula and its edge cases. Default 0 (disabled) |
 | Battery export spread threshold | Spread per kWh above the horizon's cheapest hour at or above which a slot may become an export slot; 0 = export arbitrage disabled (the default) — see [Battery to Grid Export Arbitrage](../user-guide/battery-export-arbitrage.md) |
 | Battery export reserve level | SOC floor (default 20%) below which the battery never sells energy during export slots — see [Battery to Grid Export Arbitrage](../user-guide/battery-export-arbitrage.md) |
@@ -64,7 +64,7 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 | Battery SOC gate | Minimum house-battery SOC (%) before EV solar charging starts — the battery fills first, only the surplus left over goes to the car (default 100%) |
 | Priority *(per appliance)* | Allocation priority when appliances compete for the surplus pool (1 = highest); ties broken by the order appliances were added (default 5) |
 | On threshold *(per appliance)* | Turn on when the surplus pool reaches this percentage of rated power, sustained (default 110%) |
-| Off threshold *(per appliance)* | Turn off when the pool stays below this percentage of rated power, sustained; clamped to always stay below the on threshold (default 90%) |
+| Off threshold *(per appliance)* | Turn off when the pool stays below this percentage of rated power, sustained; if set at or above the on threshold, scheduling uses an effective value clamped just below it (default 90%) |
 | On sustain time *(per appliance)* | How long the surplus must persist before turning on, filtering passing clouds (default 5 min) |
 | Off sustain time *(per appliance)* | How long the deficit must persist before turning off, deliberately slower than the on side (default 15 min) |
 

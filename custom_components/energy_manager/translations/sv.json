@@ -524,7 +524,7 @@
         "name": "Beräknad laddeffekt"
       },
       "battery_peak_gap_hours": {
-        "name": "Minsta gap mellan pristoppar"
+        "name": "Största gap mellan pristoppar"
       },
       "ev_max_grid_charge_power": {
         "name": "Max nätladdningseffekt"

@@ -9,7 +9,7 @@ Energy Manager is configured through a guided config flow that auto-detects your
 Click the button above, or add it manually via **Settings** → **Devices & Services** → **Add Integration** → search for **Energy Manager**.
 
 !!! tip "Everything stays editable"
-    Nothing in the wizard is a one-shot decision. Every setting — price source, modules, entities, thresholds — can be changed later via **Configure** on the Energy Manager integration card. There is no need to remove and re-add the integration to fix or tune something.
+    Nothing in the wizard is a one-shot decision. Wiring and safety settings — price source, modules, entities, fuse limits — can be changed later via **Configure** on the Energy Manager integration card, and the tuning values live on as number entities on the Energy Manager device page. There is no need to remove and re-add the integration to fix or tune something.
 
 ## Step 1 — Price Source
 
@@ -40,7 +40,7 @@ This step configures the battery itself, solar-aware scheduling, and the EMS (En
 | Charge buffer (%) | Seeds the **Charge buffer** number entity: extra margin added on top of the calculated charge deficit |
 | Solar production factor | Seeds the **Solar production factor** number entity: multiplier applied to the forecast to correct for forecast optimism |
 | Estimated charge power (kW) | Seeds the **Estimated charge power** number entity: assumed charging rate used to size how many slots a charge deficit needs |
-| Peak grouping gap (h) | Seeds the **Minimum peak gap** number entity: max gap between expensive hours still treated as the same discharge peak |
+| Peak grouping gap (h) | Seeds the **Peak grouping gap** number entity: max gap between expensive hours still treated as the same discharge peak |
 
 These four values just seed their corresponding number entities on first setup — every one stays adjustable afterward from the Energy Manager device page, without going back through the wizard.
 

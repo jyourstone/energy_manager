@@ -524,7 +524,7 @@
         "name": "Estimated charge power"
       },
       "battery_peak_gap_hours": {
-        "name": "Minimum peak gap"
+        "name": "Peak grouping gap"
       },
       "ev_max_grid_charge_power": {
         "name": "Max grid charge power"
