@@ -1954,22 +1954,14 @@ class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
 
         errors: dict[str, str] = {}
         if user_input is not None:
-            # An inverted hysteresis band (off >= on) guarantees perpetual
-            # on/off cycling -- exactly what APPL-05 exists to prevent.
-            if (
-                user_input[CONF_APPLIANCE_OFF_THRESHOLD_PCT]
-                >= user_input[CONF_APPLIANCE_ON_THRESHOLD_PCT]
-            ):
-                errors[CONF_APPLIANCE_OFF_THRESHOLD_PCT] = "off_must_be_below_on"
-            else:
-                # async_create_entry here would ADD a duplicate subentry --
-                # subentry reconfigure must update the existing one.
-                return self.async_update_and_abort(
-                    self._get_entry(),
-                    subentry,
-                    title=user_input[CONF_APPLIANCE_NAME],
-                    data=user_input,
-                )
+            # async_create_entry here would ADD a duplicate subentry --
+            # subentry reconfigure must update the existing one.
+            return self.async_update_and_abort(
+                self._get_entry(),
+                subentry,
+                title=user_input[CONF_APPLIANCE_NAME],
+                data={**existing_data, **user_input},
+            )
 
         schema = vol.Schema(
             {
@@ -1987,41 +1979,6 @@ class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
                 ): NumberSelector(NumberSelectorConfig(min=1, max=3, step=2)),
                 vol.Optional(CONF_APPLIANCE_POWER_SENSOR_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor", device_class="power")
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_PRIORITY, default=DEFAULT_APPLIANCE_PRIORITY
-                ): NumberSelector(NumberSelectorConfig(min=1, max=10, step=1)),
-                vol.Optional(
-                    CONF_APPLIANCE_ON_THRESHOLD_PCT,
-                    default=DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=50, max=300, step=1, unit_of_measurement="%"
-                    )
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
-                    default=DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=150, step=1, unit_of_measurement="%"
-                    )
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
-                    default=DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=720, step=1, unit_of_measurement="min"
-                    )
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
-                    default=DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=720, step=1, unit_of_measurement="min"
-                    )
                 ),
                 vol.Optional(
                     CONF_APPLIANCE_MIN_ON_MINUTES,

@@ -30,6 +30,7 @@ from custom_components.energy_manager.appliance_controller import (
     ApplianceConfig,
     ApplianceInputs,
     ApplianceTracker,
+    clamp_hysteresis,
     compute_raw_surplus_kw,
     decide_appliances,
 )
@@ -907,3 +908,25 @@ class TestDeterminism:
             STATUS_ON_SURPLUS,
             STATUS_BLOCKED_PRIORITY,
         ]
+
+
+# ---------------------------------------------------------------------------
+# clamp_hysteresis() -- APPL-05 invariant enforced at the consume side
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_hysteresis_returns_same_config_when_band_valid() -> None:
+    config = _config(on_threshold_pct=100, off_threshold_pct=40)
+    assert clamp_hysteresis(config) is config
+
+
+def test_clamp_hysteresis_forces_off_below_on() -> None:
+    config = _config(on_threshold_pct=80, off_threshold_pct=90)
+    clamped = clamp_hysteresis(config)
+    assert clamped.off_threshold_pct == 79
+    assert clamped.on_threshold_pct == 80
+
+
+def test_clamp_hysteresis_equal_thresholds_also_clamped() -> None:
+    config = _config(on_threshold_pct=100, off_threshold_pct=100)
+    assert clamp_hysteresis(config).off_threshold_pct == 99

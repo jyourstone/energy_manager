@@ -27,12 +27,22 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     CAR_CHARGE_POWER_STEP_KW,
     CHARGE_POWER_STEP_KW,
+    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
+    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
+    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
+    CONF_APPLIANCE_ON_THRESHOLD_PCT,
+    CONF_APPLIANCE_PRIORITY,
     CONF_BATTERY_CYCLE_COST,
     CONF_ELECTRICITY_COMPANY_FEE,
     CONF_EXPORT_RESERVE_SOC_PCT,
     CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_GRID_TRANSFER_FEE,
     CONF_MAX_CHARGE_POWER,
+    DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
+    DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
+    DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
+    DEFAULT_APPLIANCE_PRIORITY,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
@@ -54,10 +64,11 @@ from .const import (
     MIN_PRICE_THRESHOLD,
     MIN_TARGET_SOC_PCT,
     PRICE_THRESHOLD_STEP,
+    SUBENTRY_TYPE_APPLIANCE,
     TARGET_SOC_STEP_PCT,
 )
 from .coordinator import BatteryScheduleCoordinator, EnergyManagerConfigEntry
-from .entity import CarEntity, EnergyManagerEntity, PriceUnitEntity
+from .entity import ApplianceEntity, CarEntity, EnergyManagerEntity, PriceUnitEntity
 
 
 async def async_setup_entry(
@@ -102,6 +113,23 @@ async def async_setup_entry(
             ],
             config_subentry_id=subentry_id,
         )
+
+    # Per-appliance tuning entities (one set per appliance subentry)
+    appliance_coordinator = entry.runtime_data.appliance_coordinator
+    if appliance_coordinator is not None:
+        for subentry_id, subentry in entry.subentries.items():
+            if subentry.subentry_type != SUBENTRY_TYPE_APPLIANCE:
+                continue
+            async_add_entities(
+                [
+                    AppliancePriority(appliance_coordinator, entry, subentry),
+                    ApplianceOnThreshold(appliance_coordinator, entry, subentry),
+                    ApplianceOffThreshold(appliance_coordinator, entry, subentry),
+                    ApplianceOnSustain(appliance_coordinator, entry, subentry),
+                    ApplianceOffSustain(appliance_coordinator, entry, subentry),
+                ],
+                config_subentry_id=subentry_id,
+            )
 
 
 class BatteryChargeThreshold(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
@@ -762,3 +790,136 @@ class BatteryMaxSocTarget(EnergyManagerEntity, RestoreNumber):
         self.async_write_ha_state()
         self.coordinator.max_soc_pct = value
         await self.coordinator.async_request_refresh()
+
+
+class ApplianceTuningNumber(ApplianceEntity, RestoreNumber):
+    """Base for per-appliance tuning numbers (APPL-05 knobs).
+
+    Restores the last value, falling back to the subentry-data seed the
+    add-appliance wizard wrote. Every change is pushed onto the shared
+    ApplianceCoordinator via set_appliance_tuning() and applies on the
+    next 30s tick -- no config-entry reload.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+
+    # Set by subclasses.
+    _conf_key: str
+    _tuning_field: str
+    _default_value: int
+    # Multiplier applied when pushing to the coordinator (minutes -> s).
+    _scale: int = 1
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+        subentry,
+    ) -> None:
+        """Initialize the tuning entity.
+
+        Args:
+            coordinator: The ApplianceCoordinator shared by all appliances.
+            entry: The config entry this entity belongs to.
+            subentry: The appliance subentry with appliance-specific
+                configuration (seed source).
+        """
+        super().__init__(coordinator, entry, subentry)
+        self._seed = int(subentry.data.get(self._conf_key, self._default_value))
+        self._attr_unique_id = f"{subentry.subentry_id}_{self._conf_key}"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the subentry seed."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = round(last_data.native_value)
+        else:
+            self._attr_native_value = self._seed
+        self._push_value()
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the tuning value and apply it on the next tick.
+
+        Args:
+            value: New value in the entity's native unit (whole numbers).
+        """
+        self._attr_native_value = round(value)
+        self.async_write_ha_state()
+        self._push_value()
+        await self.coordinator.async_request_refresh()
+
+    def _push_value(self) -> None:
+        self.coordinator.set_appliance_tuning(
+            self._subentry_id,
+            **{self._tuning_field: int(self._attr_native_value) * self._scale},
+        )
+
+
+class AppliancePriority(ApplianceTuningNumber):
+    """Allocation priority for the surplus pool (1 = highest)."""
+
+    _attr_translation_key = "appliance_priority"
+    _attr_native_min_value = 1
+    _attr_native_max_value = 10
+    _attr_native_step = 1
+    _conf_key = CONF_APPLIANCE_PRIORITY
+    _tuning_field = "priority"
+    _default_value = DEFAULT_APPLIANCE_PRIORITY
+
+
+class ApplianceOnThreshold(ApplianceTuningNumber):
+    """Turn ON when the surplus pool reaches this share of rated power."""
+
+    _attr_translation_key = "appliance_on_threshold"
+    _attr_native_min_value = 50
+    _attr_native_max_value = 300
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "%"
+    _conf_key = CONF_APPLIANCE_ON_THRESHOLD_PCT
+    _tuning_field = "on_threshold_pct"
+    _default_value = DEFAULT_APPLIANCE_ON_THRESHOLD_PCT
+
+
+class ApplianceOffThreshold(ApplianceTuningNumber):
+    """Turn OFF when the surplus pool drops below this share of rated power."""
+
+    _attr_translation_key = "appliance_off_threshold"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 150
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "%"
+    _conf_key = CONF_APPLIANCE_OFF_THRESHOLD_PCT
+    _tuning_field = "off_threshold_pct"
+    _default_value = DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT
+
+
+class ApplianceOnSustain(ApplianceTuningNumber):
+    """Surplus must persist this long before turning ON."""
+
+    _attr_translation_key = "appliance_on_sustain"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 720
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "min"
+    _conf_key = CONF_APPLIANCE_ON_SUSTAIN_MINUTES
+    _tuning_field = "on_sustain_s"
+    _default_value = DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES
+    _scale = 60
+
+
+class ApplianceOffSustain(ApplianceTuningNumber):
+    """Deficit must persist this long before turning OFF."""
+
+    _attr_translation_key = "appliance_off_sustain"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 720
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "min"
+    _conf_key = CONF_APPLIANCE_OFF_SUSTAIN_MINUTES
+    _tuning_field = "off_sustain_s"
+    _default_value = DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES
+    _scale = 60

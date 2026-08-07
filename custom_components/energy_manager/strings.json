@@ -258,11 +258,6 @@
             "rated_power_w": "Rated power (W)",
             "phases": "Phases",
             "power_sensor_entity": "Power sensor",
-            "priority": "Priority",
-            "on_threshold_pct": "On threshold (% of rated power)",
-            "off_threshold_pct": "Off threshold (% of rated power)",
-            "on_sustain_minutes": "On sustain time (min)",
-            "off_sustain_minutes": "Off sustain time (min)",
             "min_on_minutes": "Minimum on time (min)",
             "min_off_minutes": "Minimum off time (min)"
           },
@@ -272,11 +267,6 @@
             "rated_power_w": "Expected power draw of the appliance when running, in watts.",
             "phases": "Number of phases the appliance draws on (1 or 3). Used to convert rated power to per-phase current for the fuse admission check.",
             "power_sensor_entity": "Optional: sensor measuring the appliance's actual power draw. If set, the measured draw is used instead of the rated power when crediting the appliance's consumption back to the surplus pool.",
-            "priority": "Allocation priority when several appliances compete for the surplus (1 = highest). Ties are broken by the order the appliances were added.",
-            "on_threshold_pct": "Turn on when the available surplus reaches this percentage of the rated power, sustained.",
-            "off_threshold_pct": "Turn off when the available surplus stays below this percentage of the rated power, sustained.",
-            "on_sustain_minutes": "How long the surplus must persist before the appliance is turned on (filters passing clouds).",
-            "off_sustain_minutes": "How long the surplus must be gone before the appliance is turned off.",
             "min_on_minutes": "Once turned on, the appliance stays on at least this long (anti-short-cycling).",
             "min_off_minutes": "Once turned off, the appliance stays off at least this long (anti-short-cycling)."
           }
@@ -522,7 +512,12 @@
       },
       "battery_max_soc_target": {
         "name": "Battery max SoC target"
-      }
+      },
+      "appliance_priority": {"name": "Priority"},
+      "appliance_on_threshold": {"name": "On threshold"},
+      "appliance_off_threshold": {"name": "Off threshold"},
+      "appliance_on_sustain": {"name": "On sustain time"},
+      "appliance_off_sustain": {"name": "Off sustain time"}
     },
     "time": {
       "departure_time": {

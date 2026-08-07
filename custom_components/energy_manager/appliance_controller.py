@@ -56,7 +56,7 @@ actor releases the switch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # Nominal per-phase grid voltage for the rated-amps fuse admission check:
 # rated_amps = rated_power_w / (230 V * phases).
@@ -116,6 +116,21 @@ class ApplianceConfig:
     min_on_s: int
     min_off_s: int
     power_sensor_entity: str | None = None
+
+
+def clamp_hysteresis(config: ApplianceConfig) -> ApplianceConfig:
+    """Return config with the off threshold forced below the on threshold.
+
+    An inverted hysteresis band (off >= on) guarantees perpetual on/off
+    cycling -- exactly what APPL-05 exists to prevent. The subentry add
+    flow validates this, but the per-appliance number entities set each
+    threshold independently, so the invariant is enforced again here at
+    the consume side (same approach as the amp-delay clamp in
+    EaseeCoordinator).
+    """
+    if config.off_threshold_pct >= config.on_threshold_pct:
+        return replace(config, off_threshold_pct=config.on_threshold_pct - 1)
+    return config
 
 
 @dataclass

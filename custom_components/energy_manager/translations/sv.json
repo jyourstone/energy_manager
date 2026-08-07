@@ -258,11 +258,6 @@
             "rated_power_w": "Märkeffekt (W)",
             "phases": "Faser",
             "power_sensor_entity": "Effektsensor",
-            "priority": "Prioritet",
-            "on_threshold_pct": "Tröskel för tillslag (% av märkeffekt)",
-            "off_threshold_pct": "Tröskel för frånslag (% av märkeffekt)",
-            "on_sustain_minutes": "Varaktighet före tillslag (min)",
-            "off_sustain_minutes": "Varaktighet före frånslag (min)",
             "min_on_minutes": "Minsta tillslagstid (min)",
             "min_off_minutes": "Minsta frånslagstid (min)"
           },
@@ -272,11 +267,6 @@
             "rated_power_w": "Apparatens förväntade effektuttag när den är igång, i watt.",
             "phases": "Antal faser apparaten belastar (1 eller 3). Används för att räkna om märkeffekten till ström per fas vid säkringskontrollen.",
             "power_sensor_entity": "Valfritt: sensor som mäter apparatens faktiska effektuttag. Om den anges används det uppmätta värdet i stället för märkeffekten när apparatens förbrukning räknas tillbaka till överskottspoolen.",
-            "priority": "Fördelningsprioritet när flera apparater konkurrerar om överskottet (1 = högst). Vid lika prioritet gäller den ordning apparaterna lades till.",
-            "on_threshold_pct": "Slå på när det tillgängliga överskottet når denna procentandel av märkeffekten, ihållande.",
-            "off_threshold_pct": "Slå av när det tillgängliga överskottet håller sig under denna procentandel av märkeffekten, ihållande.",
-            "on_sustain_minutes": "Hur länge överskottet måste finnas innan apparaten slås på (filtrerar bort förbipasserande moln).",
-            "off_sustain_minutes": "Hur länge överskottet måste saknas innan apparaten slås av.",
             "min_on_minutes": "När apparaten väl slagits på förblir den på minst så här länge (skydd mot korta cykler).",
             "min_off_minutes": "När apparaten väl slagits av förblir den av minst så här länge (skydd mot korta cykler)."
           }
@@ -522,7 +512,12 @@
       },
       "battery_max_soc_target": {
         "name": "Batteriets max laddningsnivå"
-      }
+      },
+      "appliance_priority": {"name": "Prioritet"},
+      "appliance_on_threshold": {"name": "Tillslagströskel"},
+      "appliance_off_threshold": {"name": "Frånslagströskel"},
+      "appliance_on_sustain": {"name": "Uthållighet före tillslag"},
+      "appliance_off_sustain": {"name": "Uthållighet före frånslag"}
     },
     "time": {
       "departure_time": {

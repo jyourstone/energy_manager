@@ -192,6 +192,9 @@ def _get_enabled_platforms(entry: EnergyManagerConfigEntry) -> list[Platform]:
             platforms.append(Platform.NUMBER)
         platforms.append(Platform.TIME)
 
+    if entry.options.get(CONF_APPLIANCES_ENABLED) and Platform.NUMBER not in platforms:
+        platforms.append(Platform.NUMBER)
+
     return platforms
 
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 
@@ -44,6 +44,7 @@ from .appliance_controller import (
     ApplianceDecision,
     ApplianceInputs,
     ApplianceTracker,
+    clamp_hysteresis,
     compute_raw_surplus_kw,
     decide_appliances,
 )
@@ -3825,6 +3826,32 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
 
         # One-time log guard: no grid sensors means no export signal at all.
         self._export_signal_warned = False
+
+    def set_appliance_tuning(self, subentry_id: str, **updates: int) -> None:
+        """Apply a live tuning override from a per-appliance number entity.
+
+        Replaces the matching frozen ApplianceConfig snapshot in place --
+        list position is preserved, so priority ties keep their insertion
+        order. The hysteresis band is re-clamped after every update
+        because the number entities set the on/off thresholds
+        independently of each other.
+        """
+        for index, config in enumerate(self._configs):
+            if config.subentry_id != subentry_id:
+                continue
+            updated = replace(config, **updates)
+            clamped = clamp_hysteresis(updated)
+            if clamped is not updated:
+                _LOGGER.warning(
+                    "Appliance %s: off threshold (%s%%) must stay below on"
+                    " threshold (%s%%); clamping off threshold to %s%%",
+                    config.name,
+                    updated.off_threshold_pct,
+                    updated.on_threshold_pct,
+                    clamped.off_threshold_pct,
+                )
+            self._configs[index] = clamped
+            return
 
     async def async_set_em_control(self, subentry_id: str, enabled: bool) -> None:
         """Update one appliance's "EM control" switch state (APPL-07).
