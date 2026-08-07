@@ -16,6 +16,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from custom_components.energy_manager.charger_state_machine import (
+    POWER_ACTIVE_THRESHOLD_KW,
+)
 from custom_components.energy_manager.const import EMS_MODE_MAP
 from custom_components.energy_manager.ems_controller import (
     CommandDecision,
@@ -952,6 +955,18 @@ class TestCarChargingActiveHold:
         assert result.override_reason == "car_charging_priority"
         assert result.charge_limit_kw == 0.0
 
+    def test_active_car_reason_wins_over_closed_gate(self):
+        """Both holds apply -- the car branch is checked first, so its
+        reason is the one surfaced to sensors and automations."""
+        result = _hold_state(
+            car_charging_active=True,
+            discharge_allowed=False,
+            discharge_gate_reason="below_threshold",
+        )
+        assert result.target_mode == "standby"
+        assert result.override_reason == "car_charging_priority"
+        assert result.charge_limit_kw == 0.0
+
     def test_command_charging_coexists_with_car_session(self):
         """No schedule slot (car_scheduled False) -- battery cheap-night
         grid charge legitimately coexists with a car session (charger draw
@@ -1016,11 +1031,11 @@ class TestCarActivelyCharging:
         assert car_actively_charging("charging", None) is True
 
     def test_power_above_threshold_is_active(self):
-        assert car_actively_charging(None, 0.6) is True
+        assert car_actively_charging(None, POWER_ACTIVE_THRESHOLD_KW + 0.1) is True
 
     def test_power_at_threshold_not_active(self):
         """Strict > -- mirrors the charger state machine comparison."""
-        assert car_actively_charging(None, 0.5) is False
+        assert car_actively_charging(None, POWER_ACTIVE_THRESHOLD_KW) is False
 
     @pytest.mark.parametrize("status", ["paused", "awaiting_start", None])
     @pytest.mark.parametrize("power", [None, 0.0])
