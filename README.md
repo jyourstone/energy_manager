@@ -28,7 +28,7 @@
 
 ## What it does
 
-Electricity prices swing a lot from hour to hour. Energy Manager reads the day-ahead Nordpool prices and plans around them: it charges your home battery and your car during the cheapest hours, runs the house on battery power during the expensive ones, and puts solar surplus to work. Then it executes those plans — natively on SigenStor inverters and Easee chargers, or through your own automations on any other hardware.
+Electricity prices swing a lot from hour to hour. Energy Manager reads the day-ahead Nordpool prices and plans around them: it charges your home battery and/or your car during the cheapest hours, runs the house on battery power during the expensive ones, and puts solar surplus to work. Then it executes those plans — natively on SigenStor inverters and Easee chargers, or through your own automations on any other hardware.
 
 Three independent modules — enable any combination:
 
