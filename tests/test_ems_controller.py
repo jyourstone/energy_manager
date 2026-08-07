@@ -60,6 +60,7 @@ class TestModeSelection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert isinstance(result, EMSDecision)
         assert result.target_mode == "command_charging"
@@ -80,6 +81,7 @@ class TestModeSelection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "max_self_consumption"
         assert result.override_reason is None
@@ -99,6 +101,7 @@ class TestModeSelection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "standby"
         assert result.override_reason is None
@@ -119,6 +122,7 @@ class TestModeSelection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "max_self_consumption"
 
@@ -147,6 +151,7 @@ class TestFuseProtection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.fuse_headroom_amps == pytest.approx(6.0)
 
@@ -166,6 +171,7 @@ class TestFuseProtection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.fuse_headroom_amps == 0.0
 
@@ -187,6 +193,7 @@ class TestFuseProtection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         expected_kw = (3.0 * 230.0) / 1000.0  # 0.69 kW
         assert result.charge_limit_kw == pytest.approx(expected_kw)
@@ -207,6 +214,7 @@ class TestFuseProtection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.charge_limit_kw == 0.0
 
@@ -227,6 +235,7 @@ class TestFuseProtection:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.charge_limit_kw == pytest.approx(5.0)
 
@@ -255,6 +264,7 @@ class TestCarPriorityOverride:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "standby"
         assert result.override_reason == "car_charging_priority"
@@ -274,6 +284,7 @@ class TestCarPriorityOverride:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason is None
@@ -293,6 +304,7 @@ class TestCarPriorityOverride:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason is None
@@ -313,6 +325,7 @@ class TestCarPriorityOverride:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "max_self_consumption"
         assert result.override_reason is None
@@ -372,6 +385,7 @@ class TestPVOpportunisticCharging:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason == "pv_opportunistic"
@@ -392,6 +406,7 @@ class TestPVOpportunisticCharging:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "standby"
         assert result.override_reason is None
@@ -413,6 +428,7 @@ class TestPVOpportunisticCharging:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason == "pv_opportunistic"
@@ -433,6 +449,7 @@ class TestPVOpportunisticCharging:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         assert result.charge_limit_kw == pytest.approx(2.0)
@@ -452,10 +469,81 @@ class TestPVOpportunisticCharging:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         # Should NOT have pv_opportunistic override -- it was already charging
         assert result.override_reason is None
+
+    def test_pv_charging_capped_at_surplus_not_gross(self):
+        """pv=3000W, house_consumption=1.0kW => charge_limit is the 2.0kW
+        surplus (PV minus house load), not the gross 3.0kW PV figure --
+        commanding gross PV would push house load onto the grid as an
+        import under the SigenStor's PV-First charging behavior."""
+        result = compute_ems_state(
+            target_ems_mode="standby",
+            current_l_amps=5.0,
+            fuse_rating_amps=63.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=3000.0,
+            pv_hysteresis_active=True,
+            max_soc_pct=95.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
+            house_consumption_kw=1.0,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.charge_limit_kw == pytest.approx(2.0)
+
+    def test_pv_charging_not_promoted_when_surplus_is_zero(self):
+        """pv=800W, house_consumption=1.2kW => no surplus. The branch is
+        skipped entirely, so with the discharge gate closed for an
+        economic reason control falls through to the standby hold exactly
+        as if PV were inactive."""
+        result = compute_ems_state(
+            target_ems_mode="max_self_consumption",
+            current_l_amps=5.0,
+            fuse_rating_amps=25.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=800.0,
+            pv_hysteresis_active=True,
+            max_soc_pct=95.0,
+            discharge_allowed=False,
+            discharge_gate_reason="below_threshold",
+            car_charging_active=False,
+            house_consumption_kw=1.2,
+        )
+        assert result.target_mode == "standby"
+        assert result.override_reason == "discharge_gate_closed"
+
+    def test_pv_charging_house_zero_matches_gross_behavior(self):
+        """house_consumption=0.0 => surplus equals gross PV, matching
+        behavior when no house-consumption entity is configured."""
+        result = compute_ems_state(
+            target_ems_mode="standby",
+            current_l_amps=5.0,
+            fuse_rating_amps=25.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=50.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=800.0,
+            pv_hysteresis_active=True,
+            max_soc_pct=95.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
+            house_consumption_kw=0.0,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.charge_limit_kw == pytest.approx(0.8)
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +571,7 @@ class TestMaxSocCeiling:
             "discharge_allowed": True,
             "discharge_gate_reason": "charging_slot",
             "car_charging_active": False,
+            "house_consumption_kw": 0.0,
         }
         defaults.update(overrides)
         return compute_ems_state(**defaults)  # type: ignore[arg-type]
@@ -622,6 +711,7 @@ class TestSignedFuseCurrent:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         result_zero = compute_ems_state(
             target_ems_mode="command_charging",
@@ -637,6 +727,7 @@ class TestSignedFuseCurrent:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result_export.fuse_headroom_amps > result_zero.fuse_headroom_amps
         assert result_export.fuse_headroom_amps == pytest.approx(29.0)  # 20 -(-10) -1
@@ -662,6 +753,7 @@ class TestSignedFuseCurrent:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         # 30A already exceeds the 20A fuse rating -- headroom must be 0, not
         # the ~4.7A a balanced-average estimate (13.3A) would have produced.
@@ -715,6 +807,7 @@ class TestSensorFallback:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.fuse_headroom_amps == pytest.approx(9.0)  # 20 - 10 - 1
 
@@ -739,6 +832,7 @@ class TestSensorFallback:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.fuse_headroom_amps == 0.0
         assert result.charge_limit_kw == 0.0
@@ -903,6 +997,7 @@ class TestCarPriorityWiring:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_charging"
         assert result.override_reason is None
@@ -924,6 +1019,7 @@ class TestCarPriorityWiring:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "standby"
         assert result.override_reason == "car_charging_priority"
@@ -949,6 +1045,7 @@ def _hold_state(**overrides: object) -> EMSDecision:
         "discharge_allowed": True,
         "discharge_gate_reason": "scheduled_discharge",
         "car_charging_active": False,
+        "house_consumption_kw": 0.0,
     }
     defaults.update(overrides)
     return compute_ems_state(**defaults)  # type: ignore[arg-type]
@@ -1323,6 +1420,7 @@ class TestCommandDischargingPassthrough:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_discharging"
         assert result.charge_limit_kw == 0.0
@@ -1343,6 +1441,7 @@ class TestCommandDischargingPassthrough:
             discharge_allowed=True,
             discharge_gate_reason="scheduled_discharge",
             car_charging_active=False,
+            house_consumption_kw=0.0,
         )
         assert result.target_mode == "command_discharging"
         assert result.override_reason is None

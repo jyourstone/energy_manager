@@ -1855,6 +1855,11 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         pv_power_w = _read_power_kw(self.hass, self._pv_power_entity) * 1000.0
         battery_soc = self._read_float_state(self._soc_entity, 50.0)
         battery_own_amps = self._read_battery_own_amps()
+        # Net house consumption (CORE-11 exclusions applied) -- caps PV
+        # opportunistic charging at surplus instead of gross PV (EMS-08).
+        house_consumption_kw = _read_net_house_consumption_kw(
+            self.hass, self._house_consumption_entity, self._excluded_power_entities
+        )
 
         # 3. Determine car charging priority: any car with an active schedule
         # slot AND home+plugged demands priority (EMS-03). Schedules stay
@@ -1935,6 +1940,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             discharge_allowed=schedule_data.discharge_allowed,
             discharge_gate_reason=schedule_data.discharge_gate_reason,
             car_charging_active=car_active,
+            house_consumption_kw=house_consumption_kw,
         )
 
         # 7. Determine if mode or limit changed
