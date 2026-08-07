@@ -8,10 +8,14 @@ Tests cover all EMS decision paths:
 - EMS-08: PV opportunistic charging
 - PV hysteresis state machine
 - CORE-14: Observe-only command gating
+- Incident 2026-08-07: command-path resilience (write backoff, guarded
+  writes, select reconciliation, standby-discharge alarm)
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -25,6 +29,8 @@ from custom_components.energy_manager.ems_controller import (
     EMSDecision,
     ESSLimitRateLimiter,
     PVHysteresisTracker,
+    StandbyDischargeMonitor,
+    WriteRejectionBackoff,
     build_command_decision,
     car_actively_charging,
     car_demands_priority_charging,
@@ -32,6 +38,8 @@ from custom_components.energy_manager.ems_controller import (
     compute_available_ess_amps,
     compute_ems_state,
     compute_export_limit_kw,
+    ems_select_mismatch,
+    guarded_device_write,
     resolve_current_sensor_fallback,
     worst_case_signed_amps,
 )
@@ -1491,3 +1499,354 @@ class TestExportCommandsGated:
         )
         assert decision.should_send is False
         assert decision.dry_run_message.startswith("[dry-run]")
+
+
+# ---------------------------------------------------------------------------
+# Incident 2026-08-07: command-path resilience
+# ---------------------------------------------------------------------------
+
+
+class TestWriteRejectionBackoff:
+    """Backoff for persistently rejected device writes."""
+
+    def test_attempts_every_cycle_before_threshold(self):
+        """The first failures retry at full cadence -- no backoff yet."""
+        backoff = WriteRejectionBackoff()
+        for _ in range(2):
+            assert backoff.should_attempt() is True
+            backoff.record_failure()
+        assert backoff.should_attempt() is True
+
+    def test_record_failure_signals_entry_exactly_on_third(self):
+        """Only the failure that ENTERS backoff returns True (the caller's
+        one-time WARNING); repeats while in backoff stay silent."""
+        backoff = WriteRejectionBackoff()
+        assert backoff.record_failure() is False
+        assert backoff.record_failure() is False
+        assert backoff.record_failure() is True
+        assert backoff.record_failure() is False
+
+    def test_backoff_retries_only_every_tenth_cycle(self):
+        """In backoff, 9 wanted cycles skip, the 10th retries -- repeating."""
+        backoff = WriteRejectionBackoff()
+        for _ in range(3):
+            backoff.record_failure()
+        attempts = [backoff.should_attempt() for _ in range(20)]
+        assert attempts == [False] * 9 + [True] + [False] * 9 + [True]
+
+    def test_success_resets_to_full_cadence(self):
+        backoff = WriteRejectionBackoff()
+        for _ in range(3):
+            backoff.record_failure()
+        assert backoff.in_backoff is True
+        backoff.record_success()
+        assert backoff.in_backoff is False
+        assert backoff.should_attempt() is True
+
+    def test_success_mid_streak_resets_counter(self):
+        """The threshold counts CONSECUTIVE failures only."""
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+        backoff.record_success()
+        assert backoff.consecutive_failures == 0
+        assert backoff.record_failure() is False
+
+
+class TestEmsSelectMismatch:
+    """Reconciliation comparison between mode belief and the live select."""
+
+    def test_no_belief_is_never_a_mismatch(self):
+        assert ems_select_mismatch(None, "Standby", EMS_MODE_MAP) is False
+
+    def test_unavailable_select_is_never_a_mismatch(self):
+        """live_option None (unavailable/unknown) skips silently -- normal
+        for ~2 min after an HA restart."""
+        assert ems_select_mismatch("standby", None, EMS_MODE_MAP) is False
+
+    def test_matching_option_is_not_a_mismatch(self):
+        assert ems_select_mismatch("standby", "Standby", EMS_MODE_MAP) is False
+
+    def test_incident_shape_is_a_mismatch(self):
+        """Belief standby, plant in MSC -- the 2026-08-07 incident shape."""
+        assert (
+            ems_select_mismatch(
+                "standby", "Maximum Self Consumption", EMS_MODE_MAP
+            )
+            is True
+        )
+
+    def test_foreign_option_is_a_mismatch(self):
+        """An option EM never sends (e.g. manual Remote EMS) still means the
+        hardware is not in the commanded mode."""
+        assert ems_select_mismatch("standby", "Remote EMS", EMS_MODE_MAP) is True
+
+    def test_unknown_internal_mode_is_not_a_mismatch(self):
+        assert ems_select_mismatch("bogus", "Standby", EMS_MODE_MAP) is False
+
+
+class TestStandbyDischargeMonitor:
+    """Commanded-standby vs measured-discharge alarm condition."""
+
+    def test_fires_only_on_second_consecutive_cycle(self):
+        monitor = StandbyDischargeMonitor()
+        assert monitor.update(True, 12.0) is False
+        assert monitor.update(True, 12.0) is True
+
+    def test_keeps_firing_while_condition_persists(self):
+        """The caller rate-limits the log line, not the condition."""
+        monitor = StandbyDischargeMonitor()
+        monitor.update(True, 12.0)
+        assert monitor.update(True, 12.0) is True
+        assert monitor.update(True, 12.0) is True
+
+    def test_threshold_is_exclusive(self):
+        """Exactly 0.5 kW is not an alarm -- discharge must exceed it."""
+        monitor = StandbyDischargeMonitor()
+        assert monitor.update(True, 0.5) is False
+        assert monitor.update(True, 0.5) is False
+
+    def test_non_standby_resets_the_streak(self):
+        monitor = StandbyDischargeMonitor()
+        monitor.update(True, 12.0)
+        assert monitor.update(False, 12.0) is False
+        assert monitor.update(True, 12.0) is False
+
+    def test_unavailable_power_resets_the_streak(self):
+        monitor = StandbyDischargeMonitor()
+        monitor.update(True, 12.0)
+        assert monitor.update(True, None) is False
+        assert monitor.update(True, 12.0) is False
+
+    def test_low_discharge_resets_the_streak(self):
+        monitor = StandbyDischargeMonitor()
+        monitor.update(True, 12.0)
+        assert monitor.update(True, 0.2) is False
+        assert monitor.update(True, 12.0) is False
+
+
+class TestGuardedDeviceWrite:
+    """Exception isolation + backoff wiring for device writes."""
+
+    def test_success_passes_through(self):
+        backoff = WriteRejectionBackoff()
+
+        async def send() -> bool:
+            return True
+
+        assert asyncio.run(guarded_device_write("test", send, backoff)) is True
+        assert backoff.consecutive_failures == 0
+
+    def test_exception_is_caught_and_counted(self):
+        """A raising write returns False instead of propagating -- the rest
+        of the EMS cycle must keep running (incident 2026-08-07)."""
+        backoff = WriteRejectionBackoff()
+
+        async def send() -> bool:
+            raise RuntimeError("Modbus register rejected")
+
+        assert (
+            asyncio.run(guarded_device_write("test", send, backoff)) is False
+        )
+        assert backoff.consecutive_failures == 1
+
+    def test_skipped_send_leaves_counter_untouched(self):
+        """A suppressed/unavailable send (False, no exception) is neither a
+        failure nor a success."""
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+
+        async def send() -> bool:
+            return False
+
+        assert (
+            asyncio.run(guarded_device_write("test", send, backoff)) is False
+        )
+        assert backoff.consecutive_failures == 2
+
+    def test_backoff_skips_the_send_entirely(self):
+        backoff = WriteRejectionBackoff()
+        calls = 0
+
+        async def send() -> bool:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("rejected")
+
+        async def run() -> None:
+            nonlocal calls
+            for _ in range(3):
+                await guarded_device_write("test", send, backoff)
+            # In backoff: the next 9 wanted cycles never invoke send().
+            for _ in range(9):
+                await guarded_device_write("test", send, backoff)
+            assert calls == 3
+            # The 10th wanted cycle retries.
+            await guarded_device_write("test", send, backoff)
+            assert calls == 4
+
+        asyncio.run(run())
+
+    def test_warning_logged_once_on_backoff_entry(self, caplog):
+        backoff = WriteRejectionBackoff()
+
+        async def send() -> bool:
+            raise RuntimeError("rejected")
+
+        async def run() -> None:
+            for _ in range(3):
+                await guarded_device_write("test target", send, backoff)
+
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(run())
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "backing off" in warnings[0].getMessage()
+
+    def test_success_after_backoff_recovers_full_cadence(self):
+        backoff = WriteRejectionBackoff()
+        sent_calls = 0
+
+        async def failing() -> bool:
+            raise RuntimeError("rejected")
+
+        async def succeeding() -> bool:
+            nonlocal sent_calls
+            sent_calls += 1
+            return True
+
+        async def run() -> None:
+            for _ in range(3):
+                await guarded_device_write("test", failing, backoff)
+            for _ in range(9):
+                assert (
+                    await guarded_device_write("test", succeeding, backoff)
+                    is False
+                )
+            assert sent_calls == 0
+            assert (
+                await guarded_device_write("test", succeeding, backoff)
+                is True
+            )
+            # Recovered: the very next cycle attempts immediately again.
+            assert (
+                await guarded_device_write("test", succeeding, backoff)
+                is True
+            )
+
+        asyncio.run(run())
+
+
+class TestGuardedDeviceWriteBypassBackoff:
+    """bypass_backoff=True (incident 2026-08-07 follow-up): safety-critical
+    limit decreases must never be delayed by another target's backoff --
+    last night's incident proved rejection can be value-dependent (a
+    SigenStor accepted 0.0 but rejected a nonzero value on the same
+    register), so a decrease may need to succeed while the increases that
+    triggered backoff keep failing. The outcome is still recorded so a
+    persistently-rejected bypassed write still enters backoff for its own
+    future (non-bypassed) increases."""
+
+    def test_bypass_skips_the_gate_while_in_backoff(self):
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+        backoff.record_failure()
+        assert backoff.in_backoff is True
+        calls = 0
+
+        async def send() -> bool:
+            nonlocal calls
+            calls += 1
+            return True
+
+        assert (
+            asyncio.run(
+                guarded_device_write("test", send, backoff, bypass_backoff=True)
+            )
+            is True
+        )
+        assert calls == 1
+
+    def test_bypass_failure_is_still_counted(self):
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+        backoff.record_failure()
+        assert backoff.in_backoff is True
+
+        async def failing() -> bool:
+            raise RuntimeError("rejected")
+
+        async def run() -> None:
+            await guarded_device_write(
+                "test", failing, backoff, bypass_backoff=True
+            )
+
+        asyncio.run(run())
+        assert backoff.consecutive_failures == 4
+
+    def test_bypass_success_still_resets_the_counter(self):
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+        backoff.record_failure()
+        assert backoff.in_backoff is True
+
+        async def succeeding() -> bool:
+            return True
+
+        assert (
+            asyncio.run(
+                guarded_device_write(
+                    "test", succeeding, backoff, bypass_backoff=True
+                )
+            )
+            is True
+        )
+        assert backoff.consecutive_failures == 0
+
+    def test_increase_without_bypass_still_gated(self):
+        """bypass_backoff=False (the default, used for increases) is
+        unaffected -- backoff still gates exactly as before."""
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+        backoff.record_failure()
+        assert backoff.in_backoff is True
+        calls = 0
+
+        async def send() -> bool:
+            nonlocal calls
+            calls += 1
+            return True
+
+        assert asyncio.run(guarded_device_write("test", send, backoff)) is False
+        assert calls == 0
+
+    def test_none_belief_still_gated(self):
+        """An unknown belief (coordinator's _last_charge_limit /
+        _last_sent_discharge_limit is None) must never bypass -- the
+        coordinator only computes bypass_backoff=True for a *known*,
+        strictly-lower target. Explicit bypass_backoff=False reproduces
+        that None-belief case."""
+        backoff = WriteRejectionBackoff()
+        backoff.record_failure()
+        backoff.record_failure()
+        backoff.record_failure()
+        assert backoff.in_backoff is True
+        calls = 0
+
+        async def send() -> bool:
+            nonlocal calls
+            calls += 1
+            return True
+
+        assert (
+            asyncio.run(
+                guarded_device_write("test", send, backoff, bypass_backoff=False)
+            )
+            is False
+        )
+        assert calls == 0

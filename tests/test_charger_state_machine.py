@@ -19,6 +19,7 @@ Tests cover all Wave A behaviors from 05-EXECUTION.md:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1196,23 +1197,68 @@ class TestFuseLayer3AndPreStartGate:
 
 class TestUnauthorizedSuppression:
     def test_charging_status_with_no_authorized_mode_is_stopped(self):
+        """Suppression sends both the 0 A dynamic limit and "stop" -- "stop"
+        alone only deauthorizes, which an auth-free charger ignores
+        (2026-08-07 incident); the 0 A limit halts the draw regardless."""
         inputs = _inputs(cars=(), charger_status="charging", charger_power_kw=3.5)
         decision = ChargerController().decide(inputs)
         assert decision.mode == "idle"
-        assert decision.commands == (decision.commands[0],)
-        assert decision.commands[0].action == "stop"
+        assert decision.commands == (
+            ChargerCommand("set_dynamic_limit", 0.0),
+            ChargerCommand("stop"),
+        )
         assert decision.override_reason == "unauthorized_charge_suppressed"
 
     def test_power_cross_check_triggers_even_if_status_says_paused(self):
         inputs = _inputs(cars=(), charger_status="paused", charger_power_kw=1.0)
         decision = ChargerController().decide(inputs)
-        assert decision.commands[0].action == "stop"
+        assert [c.action for c in decision.commands] == ["set_dynamic_limit", "stop"]
+        assert decision.commands[0].value == 0.0
 
     def test_no_suppression_when_not_drawing(self):
         inputs = _inputs(cars=(), charger_status="awaiting_start", charger_power_kw=0.0)
         decision = ChargerController().decide(inputs)
         assert decision.commands == ()
         assert decision.override_reason is None
+
+    def test_suppressed_zero_limit_restored_by_later_scheduled_slot(self):
+        """The suppression 0 A must not fight a later authorized session --
+        the managed path writes the real target amps over the 0."""
+        controller = ChargerController()
+        suppressed = controller.decide(
+            _inputs(cars=(), charger_status="charging", charger_power_kw=3.5, now=T0)
+        )
+        assert ChargerCommand("set_dynamic_limit", 0.0) in suppressed.commands
+        # The 0 A landed and the draw stopped; a scheduled slot then starts
+        # a real session -- the limit goes back up immediately (16A differs
+        # from the 0.0 belief, so no heartbeat wait).
+        car = _car(active_slot=True, home_and_plugged=True)
+        scheduled = controller.decide(
+            _inputs(
+                cars=(car,),
+                charger_status="awaiting_start",
+                charger_power_kw=0.0,
+                now=T0 + timedelta(seconds=30),
+            )
+        )
+        assert scheduled.mode == "scheduled"
+        assert [c.action for c in scheduled.commands] == ["start", "set_dynamic_limit"]
+        assert scheduled.commands[1].value == 16.0
+
+    def test_suppression_zero_limit_reasserted_on_heartbeat(self):
+        """A suppression episode outliving the heartbeat interval re-writes
+        the 0 A -- a limit the charger silently dropped is re-asserted."""
+        controller = ChargerController()
+        drawing = {"cars": (), "charger_status": "charging", "charger_power_kw": 3.5}
+        first = controller.decide(_inputs(now=T0, **drawing))
+        assert ChargerCommand("set_dynamic_limit", 0.0) in first.commands
+        mid = controller.decide(_inputs(now=T0 + timedelta(seconds=300), **drawing))
+        assert [c.action for c in mid.commands] == ["stop"]
+        heartbeat = controller.decide(_inputs(now=T0 + timedelta(seconds=600), **drawing))
+        assert heartbeat.commands == (
+            ChargerCommand("set_dynamic_limit", 0.0),
+            ChargerCommand("stop"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1852,6 +1898,88 @@ class TestGenericStuckDetection:
         assert decision.commands[0].action == "stop"
 
 
+class TestStuckWarningLog:
+    """stuck=true logs ONE warning per stuck episode naming the charger
+    status and the ignored command -- the 2026-08-07 incident set the flag
+    silently while the charger ignored "stop" for 7 minutes."""
+
+    def _drawing(self, seconds):
+        return _inputs(
+            cars=(),
+            charger_status="charging",
+            charger_power_kw=3.5,
+            now=T0 + timedelta(seconds=seconds),
+        )
+
+    def test_stuck_warning_fires_once_per_episode(self, caplog):
+        controller = ChargerController()
+        controller.decide(self._drawing(0))
+        with caplog.at_level(logging.WARNING):
+            stuck = controller.decide(self._drawing(61))
+            assert stuck.stuck is True
+            still_stuck = controller.decide(self._drawing(91))
+            assert still_stuck.stuck is True
+        warnings = [
+            r for r in caplog.records if r.name.endswith("charger_state_machine")
+        ]
+        assert len(warnings) == 1
+        assert "'stop'" in warnings[0].getMessage()
+        assert "'charging'" in warnings[0].getMessage()
+
+    def test_new_episode_warns_again(self, caplog):
+        controller = ChargerController()
+        controller.decide(self._drawing(0))
+        with caplog.at_level(logging.WARNING):
+            controller.decide(self._drawing(61))  # episode 1: stop ignored
+            # Confirmation (draw stopped) ends the episode.
+            cleared = controller.decide(
+                _inputs(
+                    cars=(),
+                    charger_status="awaiting_start",
+                    charger_power_kw=0.0,
+                    now=T0 + timedelta(seconds=120),
+                )
+            )
+            assert cleared.stuck is False
+            # Episode 2: a scheduled start goes ignored.
+            car = _car(active_slot=True, home_and_plugged=True)
+            waiting = {
+                "cars": (car,),
+                "charger_status": "awaiting_start",
+                "charger_power_kw": 0.0,
+            }
+            controller.decide(_inputs(now=T0 + timedelta(seconds=150), **waiting))
+            second = controller.decide(
+                _inputs(now=T0 + timedelta(seconds=211), **waiting)
+            )
+            assert second.stuck is True
+        warnings = [
+            r for r in caplog.records if r.name.endswith("charger_state_machine")
+        ]
+        assert len(warnings) == 2
+        assert "'start'" in warnings[1].getMessage()
+
+    def test_stuck_warning_names_latest_command(self, caplog):
+        # "stop" then "pause" both expect no draw: the action must track the
+        # LATEST issued command while the timeout clock keeps its original
+        # start (repeated commands must not push the stuck timeout back).
+        controller = ChargerController()
+        controller._note_command_expectation(False, T0, "stop")
+        controller._note_command_expectation(
+            False, T0 + timedelta(seconds=30), "pause"
+        )
+        assert controller._last_command_at == T0
+        with caplog.at_level(logging.WARNING):
+            controller._resolve_command_tracking(
+                True, T0 + timedelta(seconds=61), 60.0, "charging"
+            )
+        warnings = [
+            r for r in caplog.records if r.name.endswith("charger_state_machine")
+        ]
+        assert len(warnings) == 1
+        assert "'pause'" in warnings[0].getMessage()
+
+
 # ---------------------------------------------------------------------------
 # Belief-gated command emission (Easee reconciler)
 # ---------------------------------------------------------------------------
@@ -2054,9 +2182,16 @@ class TestStartResumeBeliefGating:
 
 class TestUnauthorizedStopReassert:
     def test_stop_reasserted_every_tick(self):
-        """Safety property: the unauthorized-draw stop is NOT belief-gated."""
+        """Safety property: the unauthorized-draw stop is NOT belief-gated.
+
+        The companion 0 A dynamic limit IS belief-gated -- emitted on the
+        first suppression tick, then left to the heartbeat."""
         controller = ChargerController()
-        for seconds in (0, 30, 60):
+        first = controller.decide(
+            _inputs(cars=(), charger_status="charging", charger_power_kw=3.5, now=T0)
+        )
+        assert [c.action for c in first.commands] == ["set_dynamic_limit", "stop"]
+        for seconds in (30, 60):
             decision = controller.decide(
                 _inputs(
                     cars=(),
