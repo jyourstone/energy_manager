@@ -57,7 +57,7 @@ Configured in Step 3 of the [Setup Wizard](../getting-started/setup-wizard.md), 
 | EMS mode select entity | Your inverter's operating-mode select entity (auto-detected from a SigenStor integration). Leave empty for non-SigenStor hardware — see [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md) |
 | Charge/discharge limit entities | Your inverter's power-limit number entities (auto-detected from SigenStor). Leave empty to let your own automations follow the commanded-limit sensors instead |
 | Grid power / phase entities | Signed power sensors (positive = import, negative = export) that fuse protection reads every control cycle to compute live headroom |
-| PV power entity *(optional)* | Enables opportunistic solar charging: when there's PV surplus outside a scheduled charge slot, the battery can still charge from it |
+| PV power entity *(optional)* | Enables opportunistic solar charging: when there's PV surplus outside a scheduled charge slot, the battery can still charge from it. Stops at the **Battery max SoC target** number entity (default 100%) |
 
 ## Reading battery status
 

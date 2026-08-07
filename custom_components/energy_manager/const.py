@@ -90,7 +90,7 @@ MAX_PEAK_GAP_HOURS = 12.0
 
 # SOC constraints
 DEFAULT_MIN_SOC_PCT = 10.0
-DEFAULT_MAX_SOC_PCT = 95.0
+DEFAULT_MAX_SOC_PCT = 100.0
 
 # Default battery capacity if not configured
 DEFAULT_BATTERY_CAPACITY_KWH = 10.0

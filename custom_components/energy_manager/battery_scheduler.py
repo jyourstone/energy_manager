@@ -169,7 +169,7 @@ def build_battery_schedule(
     tomorrow_start: datetime | None = None,
     peak_gap_hours: float = 2.0,
     min_soc_pct: float = 10.0,
-    max_soc_pct: float = 95.0,
+    max_soc_pct: float = 100.0,
     export_spike_threshold: float | None = None,
     export_reserve_soc_pct: float = 20.0,
     export_power_kw: float = 0.0,

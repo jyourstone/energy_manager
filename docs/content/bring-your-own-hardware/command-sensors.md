@@ -41,7 +41,7 @@ Every command sensor carries extra attributes that explain the state — read th
 | Attribute | On which sensors | Meaning |
 |-----------|-------------------|---------|
 | `dry_run` | All five | `true` while the **Device control** switch is off — the state is still the value EM would have written, but nothing was sent to a device |
-| `override_reason` | EMS mode, commanded current | Why this tick's value differs from the plain schedule, e.g. `car_charging_priority`, `discharge_gate_closed`, `pv_opportunistic`, or a terminal-status reason |
+| `override_reason` | EMS mode, commanded current | Why this tick's value differs from the plain schedule, e.g. `car_charging_priority`, `discharge_gate_closed`, `max_soc_reached`, `pv_opportunistic`, or a terminal-status reason |
 | `charge_limit_delivered` | Commanded charge limit | Whether the value also reached a configured SigenStor charge-limit entity (`false` when the send was skipped or failed) |
 | `discharge_limit_delivered` | Commanded discharge limit | Whether the value also reached a configured SigenStor discharge-limit entity (`false` when the send was skipped or failed) |
 | `discharge_gate_reason` | Commanded discharge limit | Why discharge is currently allowed or blocked, e.g. `scheduled_discharge`, `no_schedule` |
