@@ -4,10 +4,16 @@ Provides user-adjustable threshold entities for battery scheduling:
 - Charge price threshold (SEK/kWh)
 - Discharge price threshold (SEK/kWh)
 - Max charging power (kW)
+- BATT-15 tuning knobs (charge buffer, production factor, estimated
+  charge power, minimum peak gap)
 
-When the EV module is enabled, also provides per-car number entities:
-- Target SOC (%)
-- Max charge power (kW)
+When the EV module is enabled, also provides per-car number entities
+(target SOC, solar target SOC, max charge power) and charger-level
+tuning entities (max grid charge power, solar start threshold,
+battery SOC gate).
+
+When the appliances module is enabled, provides per-appliance tuning
+entities (priority, on/off thresholds, on/off sustain times).
 
 Values persist across restarts via RestoreNumber. Each entity updates
 its corresponding attribute on the appropriate coordinator and
@@ -106,9 +112,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up Energy Manager number entities from a config entry.
 
-    Creates battery threshold entities if the battery module is enabled,
-    and per-car number entities (target SOC, max charge power) for each
-    car subentry when the EV module is enabled.
+    Creates battery threshold and tuning entities if the battery module
+    is enabled, charger-level EV tuning entities when the Easee
+    coordinator exists (EV module enabled), per-car number entities
+    (target SOC, max charge power) for each car subentry, and
+    per-appliance tuning entities for each appliance subentry when the
+    appliance coordinator exists.
 
     Args:
         hass: Home Assistant instance.

@@ -499,18 +499,42 @@
       "battery_max_soc_target": {
         "name": "Batteriets max laddningsnivå"
       },
-      "appliance_priority": {"name": "Prioritet"},
-      "appliance_on_threshold": {"name": "Tillslagströskel"},
-      "appliance_off_threshold": {"name": "Frånslagströskel"},
-      "appliance_on_sustain": {"name": "Uthållighet före tillslag"},
-      "appliance_off_sustain": {"name": "Uthållighet före frånslag"},
-      "battery_charge_buffer": {"name": "Laddbuffert"},
-      "battery_production_factor": {"name": "Produktionsfaktor sol"},
-      "battery_estimated_charge_power": {"name": "Beräknad laddeffekt"},
-      "battery_peak_gap_hours": {"name": "Minsta gap mellan pristoppar"},
-      "ev_max_grid_charge_power": {"name": "Max nätladdningseffekt"},
-      "ev_solar_start_threshold": {"name": "Tröskel för solladdning"},
-      "ev_battery_soc_gate": {"name": "Batterinivågräns för solladdning"}
+      "appliance_priority": {
+        "name": "Prioritet"
+      },
+      "appliance_on_threshold": {
+        "name": "Tillslagströskel"
+      },
+      "appliance_off_threshold": {
+        "name": "Frånslagströskel"
+      },
+      "appliance_on_sustain": {
+        "name": "Uthållighet före tillslag"
+      },
+      "appliance_off_sustain": {
+        "name": "Uthållighet före frånslag"
+      },
+      "battery_charge_buffer": {
+        "name": "Laddbuffert"
+      },
+      "battery_production_factor": {
+        "name": "Solprognosfaktor"
+      },
+      "battery_estimated_charge_power": {
+        "name": "Beräknad laddeffekt"
+      },
+      "battery_peak_gap_hours": {
+        "name": "Minsta gap mellan pristoppar"
+      },
+      "ev_max_grid_charge_power": {
+        "name": "Max nätladdningseffekt"
+      },
+      "ev_solar_start_threshold": {
+        "name": "Tröskel för solladdning"
+      },
+      "ev_battery_soc_gate": {
+        "name": "Batterinivågräns för solladdning"
+      }
     },
     "time": {
       "departure_time": {

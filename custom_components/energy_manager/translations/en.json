@@ -499,18 +499,42 @@
       "battery_max_soc_target": {
         "name": "Battery max SoC target"
       },
-      "appliance_priority": {"name": "Priority"},
-      "appliance_on_threshold": {"name": "On threshold"},
-      "appliance_off_threshold": {"name": "Off threshold"},
-      "appliance_on_sustain": {"name": "On sustain time"},
-      "appliance_off_sustain": {"name": "Off sustain time"},
-      "battery_charge_buffer": {"name": "Charge buffer"},
-      "battery_production_factor": {"name": "Solar production factor"},
-      "battery_estimated_charge_power": {"name": "Estimated charge power"},
-      "battery_peak_gap_hours": {"name": "Minimum peak gap"},
-      "ev_max_grid_charge_power": {"name": "Max grid charge power"},
-      "ev_solar_start_threshold": {"name": "Solar start threshold"},
-      "ev_battery_soc_gate": {"name": "Battery SOC gate"}
+      "appliance_priority": {
+        "name": "Priority"
+      },
+      "appliance_on_threshold": {
+        "name": "On threshold"
+      },
+      "appliance_off_threshold": {
+        "name": "Off threshold"
+      },
+      "appliance_on_sustain": {
+        "name": "On sustain time"
+      },
+      "appliance_off_sustain": {
+        "name": "Off sustain time"
+      },
+      "battery_charge_buffer": {
+        "name": "Charge buffer"
+      },
+      "battery_production_factor": {
+        "name": "Solar production factor"
+      },
+      "battery_estimated_charge_power": {
+        "name": "Estimated charge power"
+      },
+      "battery_peak_gap_hours": {
+        "name": "Minimum peak gap"
+      },
+      "ev_max_grid_charge_power": {
+        "name": "Max grid charge power"
+      },
+      "ev_solar_start_threshold": {
+        "name": "Solar start threshold"
+      },
+      "ev_battery_soc_gate": {
+        "name": "Battery SOC gate"
+      }
     },
     "time": {
       "departure_time": {
