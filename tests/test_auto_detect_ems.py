@@ -20,9 +20,12 @@ from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 from custom_components.energy_manager.auto_detect import (
+    find_house_consumption_entity,
     find_sigenstor_ems_entities,
+    find_sigenstor_entities,
 )
 from custom_components.energy_manager.const import (
+    CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_EMS_SELECT_ENTITY,
@@ -30,6 +33,7 @@ from custom_components.energy_manager.const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_PV_POWER_ENTITY,
 )
 
@@ -111,6 +115,43 @@ def _run_detect(
         ),
     ):
         return find_sigenstor_ems_entities(hass)
+
+
+def _run_all_detectors(
+    sigen_entities: list[FakeEntityEntry],
+    global_entities: list[FakeEntityEntry] | None = None,
+) -> dict[str, str]:
+    """Run the ems step's detector union against the same fake registry.
+
+    Merges find_sigenstor_ems_entities, find_sigenstor_entities and
+    find_house_consumption_entity in the same order config_flow.py's
+    async_step_ems builds its auto-detect prefill (setup :522, options
+    :1288-1290).
+    """
+    if global_entities is None:
+        global_entities = sigen_entities
+
+    sigen_entry = FakeConfigEntry(entry_id="sigen_entry_1", domain="sigenergy")
+    hass = _build_hass(
+        config_entries=[sigen_entry],
+        entity_entries=global_entities,
+    )
+    registry = FakeEntityRegistry(global_entities)
+
+    with (
+        patch(
+            "custom_components.energy_manager.auto_detect.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.energy_manager.auto_detect.er.async_entries_for_config_entry",
+            return_value=sigen_entities,
+        ),
+    ):
+        detected = find_sigenstor_ems_entities(hass)
+        detected.update(find_sigenstor_entities(hass))
+        detected.update(find_house_consumption_entity(hass))
+        return detected
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +495,108 @@ class TestPerPhaseGridPower:
         assert result[CONF_GRID_PHASE_B_ENTITY] == phase_b.entity_id
         assert CONF_GRID_PHASE_C_ENTITY in result
         assert result[CONF_GRID_PHASE_C_ENTITY] == phase_c.entity_id
+
+
+# ---------------------------------------------------------------------------
+# Test 9: ems step detector union
+# ---------------------------------------------------------------------------
+
+
+class TestEmsStepDetectorUnion:
+    """Pins the ems step's auto-detect prefill: the union of
+    find_sigenstor_ems_entities, find_sigenstor_entities and
+    find_house_consumption_entity, called together by async_step_ems in
+    both the setup and the options flow."""
+
+    def test_union_supplies_battery_power_for_the_ems_step(self):
+        """A sigen registry with a battery power sensor yields CONF_BATTERY_POWER_ENTITY."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_battery_power",
+            domain="sensor",
+            unique_id="sigen_battery_power",
+        )
+        result = _run_all_detectors([entity])
+        assert CONF_BATTERY_POWER_ENTITY in result
+        assert result[CONF_BATTERY_POWER_ENTITY] == entity.entity_id
+
+    def test_union_supplies_house_consumption_for_the_ems_step(self):
+        """A sigen registry with a plant consumed-power sensor yields CONF_HOUSE_CONSUMPTION_ENTITY."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_consumed_power",
+            domain="sensor",
+            unique_id="sigen_plant_consumed_power",
+        )
+        result = _run_all_detectors([entity])
+        assert CONF_HOUSE_CONSUMPTION_ENTITY in result
+        assert result[CONF_HOUSE_CONSUMPTION_ENTITY] == entity.entity_id
+
+    def test_union_covers_every_auto_detectable_ems_field(self):
+        """A fully-populated fake registry yields every field the ems step
+        can auto-detect: battery power, house consumption, PV power, grid
+        power, the three grid phases, EMS select, charge and discharge limit."""
+        entities = [
+            FakeEntityEntry(
+                entity_id="sensor.sigen_battery_power",
+                domain="sensor",
+                unique_id="sigen_battery_power",
+            ),
+            FakeEntityEntry(
+                entity_id="sensor.sigen_plant_consumed_power",
+                domain="sensor",
+                unique_id="sigen_plant_consumed_power",
+            ),
+            FakeEntityEntry(
+                entity_id="sensor.sigen_plant_pv_power",
+                domain="sensor",
+                unique_id="sigen_plant_pv_power",
+            ),
+            FakeEntityEntry(
+                entity_id="sensor.sigen_plant_grid_active_power",
+                domain="sensor",
+                unique_id="sigen_plant_grid_active_power",
+            ),
+            FakeEntityEntry(
+                entity_id="sensor.sigen_plant_grid_phase_a_active_power",
+                domain="sensor",
+                unique_id="sigen_plant_grid_phase_a_active_power",
+            ),
+            FakeEntityEntry(
+                entity_id="sensor.sigen_plant_grid_phase_b_active_power",
+                domain="sensor",
+                unique_id="sigen_plant_grid_phase_b_active_power",
+            ),
+            FakeEntityEntry(
+                entity_id="sensor.sigen_plant_grid_phase_c_active_power",
+                domain="sensor",
+                unique_id="sigen_plant_grid_phase_c_active_power",
+            ),
+            FakeEntityEntry(
+                entity_id="select.sigen_remote_ems_control",
+                domain="select",
+                unique_id="sigen_remote_ems_control",
+            ),
+            FakeEntityEntry(
+                entity_id="number.sigen_plant_ess_max_charging_limit",
+                domain="number",
+                unique_id="sigen_plant_ess_max_charging_limit",
+            ),
+            FakeEntityEntry(
+                entity_id="number.sigen_plant_ess_max_discharging_limit",
+                domain="number",
+                unique_id="sigen_plant_ess_max_discharging_limit",
+            ),
+        ]
+        result = _run_all_detectors(entities)
+        for key in (
+            CONF_BATTERY_POWER_ENTITY,
+            CONF_HOUSE_CONSUMPTION_ENTITY,
+            CONF_PV_POWER_ENTITY,
+            CONF_GRID_POWER_ENTITY,
+            CONF_GRID_PHASE_A_ENTITY,
+            CONF_GRID_PHASE_B_ENTITY,
+            CONF_GRID_PHASE_C_ENTITY,
+            CONF_EMS_SELECT_ENTITY,
+            CONF_CHARGE_LIMIT_ENTITY,
+            CONF_DISCHARGE_LIMIT_ENTITY,
+        ):
+            assert key in result

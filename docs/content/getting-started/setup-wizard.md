@@ -9,7 +9,7 @@ Energy Manager is configured through a guided config flow that auto-detects your
 Click the button above, or add it manually via **Settings** → **Devices & Services** → **Add Integration** → search for **Energy Manager**.
 
 !!! tip "Everything stays editable"
-    Nothing in the wizard is a one-shot decision. Wiring and safety settings — price source, modules, entities, fuse limits — can be changed later via **Configure** on the Energy Manager integration card, and the tuning values live on as number entities on the Energy Manager device page. There is no need to remove and re-add the integration to fix or tune something.
+    Nothing in the wizard is a one-shot decision. Wiring and safety settings — price source, modules, entities, fuse limits — can be changed later via **Configure** (which shows the same steps your enabled modules use) on the Energy Manager integration card, and the tuning values live on as number entities on the Energy Manager device page. There is no need to remove and re-add the integration to fix or tune something.
 
 ## Step 1 — Price Source
 
@@ -23,18 +23,17 @@ Choose which modules to enable:
 - **EV Charging**
 - **Solar Appliances**
 
-All three are optional and independent — enable any combination, including just one. The rest of the wizard only shows steps for the modules you turned on here.
+All three are optional and independent — enable any combination, including just one. The rest of the wizard only shows steps for the modules you turned on here, plus a shared Grid & Fuse Protection step, which every module needs.
 
 ## Step 3 — Home Battery *(if enabled)*
 
-This step configures the battery itself, solar-aware scheduling, and the EMS (Energy Management System) control entities, in one continuous flow.
+This step configures the battery itself and solar-aware scheduling.
 
 **Battery and solar forecast:**
 
 | Field | Notes |
 |-------|-------|
 | Battery SOC sensor | Auto-detected from a SigenStor integration if present |
-| Battery power sensor | Auto-detected from SigenStor |
 | Battery capacity (kWh) | Total usable capacity |
 | Solar forecast sensors | Optional one-or-more Forecast.Solar "remaining today" entities — pick multiple (e.g. separate east + west arrays) and their readings are summed. Matching "tomorrow" sensors are derived automatically, so 48h planning also accounts for tomorrow's sun |
 | Charge buffer (%) | Seeds the **Charge buffer** number entity: extra margin added on top of the calculated charge deficit |
@@ -44,19 +43,43 @@ This step configures the battery itself, solar-aware scheduling, and the EMS (En
 
 These four values just seed their corresponding number entities on first setup — every one stays adjustable afterward from the Energy Manager device page, without going back through the wizard.
 
-**EMS setup:**
+See the [Home Battery](../user-guide/home-battery.md) page for what each field means and how it drives scheduling.
+
+## Step 4 — Grid & Fuse Protection *(all modules)*
+
+Appears for every module combination — appliances-only installs see this step too, since appliance admission needs the same fuse headroom and grid export signal as the battery and charger. The fuse rating defaults to 20 A and is never auto-detected — confirm it matches the fuse in your meter cabinet before continuing.
+
+**Shared (always shown):**
 
 | Field | Notes |
 |-------|-------|
-| Fuse rating (A) | Your main fuse rating — the basis for every safe charging/discharging limit |
+| Fuse rating (A) | Your main fuse rating — the basis for every safe charging/discharging/admission limit |
+| Fuse safety buffer (A) | Extra margin subtracted from the fuse rating before any available headroom is calculated |
+| Grid power / phase entities | Signed power sensors (positive = import, negative = export) used for fuse protection — auto-detected from SigenStor where possible |
+| Battery power sensor | Signed power sensor (positive = charging, negative = discharging) — auto-detected from SigenStor. Configure it if you have a house battery, even when the Home Battery module is off; used for fuse headroom and to keep appliance surplus from counting battery discharge as solar |
+| If current sensors are unavailable | What to do when the grid current sensors are unavailable, unknown, or not configured: assume a fixed load, or block new load until they recover |
+| Assumed load (A) | Fallback load assumed when sensors are unavailable and the above is set to assume a fixed load |
+
+**Shown with Home Battery or EV Charging:**
+
+| Field | Notes |
+|-------|-------|
+| PV power sensor | Optional, enables opportunistic solar charging |
+| House consumption sensor | Sensor showing total house power consumption, used for solar-surplus charging — auto-detected from SigenStor |
+| Excluded power sensors | Optional: power sensors to subtract from house consumption (e.g. a separately-managed water heater) before computing solar surplus |
+
+**Home Battery only:**
+
+| Field | Notes |
+|-------|-------|
 | EMS mode select entity | Auto-detected from SigenStor; leave empty for non-SigenStor hardware (see [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md)) |
 | Max charging / discharging limit entities | Auto-detected from SigenStor |
-| Grid power / phase entities | Signed power sensors (positive = import, negative = export) used for fuse protection — auto-detected from SigenStor where possible |
-| PV power sensor | Optional, enables opportunistic solar charging |
+| Max battery charging current (A) | Hard safety cap on the battery's own charging current, independent of fuse headroom |
+| Charge limit increase delay (s) | How long a higher charge limit must stay stable before it is applied; decreases always apply immediately |
 
-See the [Home Battery](../user-guide/home-battery.md) page for what each field means and how it drives scheduling.
+## Step 5 — EV Charging *(if enabled)*
 
-## Step 4 — EV Charging *(if enabled)*
+Fuse rating, grid power sensors, house consumption and excluded power sensors are configured on the shared **Grid & Fuse Protection** step above (Step 4).
 
 | Field | Notes |
 |-------|-------|
@@ -66,12 +89,12 @@ See the [Home Battery](../user-guide/home-battery.md) page for what each field m
 | Maximum grid charging power (kW) | Seeds the **Max grid charge power** number entity: absolute grid charging power ceiling |
 | Phase-switch threshold (kW) | Available power below which the charger drops to single-phase |
 | Solar charging start threshold (kW) | Seeds the **Solar start threshold** number entity; activation/deactivation delays stay wizard-owned |
-| Battery SOC gate (advanced options) | Seeds the **Battery SOC gate** number entity: minimum house-battery SOC before solar EV charging starts |
+| Battery SOC gate (advanced options) | Seeds the **Battery SOC gate** number entity: minimum house-battery SOC before solar EV charging starts (only shown when the Home Battery module is enabled — the gate compares against the house battery's SOC) |
 | Notification service | Optional — for charger safety alerts (e.g. emergency overload pause) |
 
 All advanced options are pre-filled with tuned defaults and grouped at the end of the step. See the [EV Charging](../user-guide/ev-charging.md) page for what each field means. The three seeded fields above stay adjustable afterward from the Energy Manager device page, without going back through the wizard.
 
-## Step 5 — Economics *(if Home Battery enabled)*
+## Step 6 — Economics *(if Home Battery enabled)*
 
 | Field | Notes |
 |-------|-------|
@@ -82,9 +105,9 @@ All advanced options are pre-filled with tuned defaults and grouped at the end o
 
 These values just seed the corresponding tunable number entities on first setup — every one of them stays adjustable afterward from the Energy Manager device page, without going back through the wizard.
 
-## Step 6 — Done
+## Step 7 — Done
 
-A setup-complete summary with next steps: add your car(s) with the **Add car** button on the integration page (if EV Charging is enabled) to get scheduled charging, and turn on the **Device control** switch when you're ready to leave observe-only mode.
+A setup-complete summary with next steps: add your car(s) with the **Add car** button on the integration page (if EV Charging is enabled) to get scheduled charging, add each appliance with the **Add appliance** button (if Solar Appliances is enabled), and turn on the **Device control** switch when you're ready to leave observe-only mode.
 
 ## After Setup: Cars and Appliances
 

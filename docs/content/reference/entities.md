@@ -61,7 +61,7 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 | Max Charge Power *(per car)* | Maximum charge power for that car (kW) |
 | Max grid charge power | Absolute ceiling on grid-charging power (kW), converted to amps for the car currently charging (default 12 kW) |
 | Solar start threshold | Minimum net solar surplus (kW), sustained past the activation delay, before EV solar charging begins (default 1.5 kW) |
-| Battery SOC gate | Minimum house-battery SOC (%) before EV solar charging starts — the battery fills first, only the surplus left over goes to the car (default 100%) |
+| Battery SOC gate | Minimum house-battery SOC (%) before EV solar charging starts — the battery fills first, only the surplus left over goes to the car (default 100%). Only exists when the Home Battery module is enabled |
 | Priority *(per appliance)* | Allocation priority when appliances compete for the surplus pool (1 = highest); ties broken by the order appliances were added (default 5) |
 | On threshold *(per appliance)* | Turn on when the surplus pool reaches this percentage of rated power, sustained (default 110%) |
 | Off threshold *(per appliance)* | Turn off when the pool stays below this percentage of rated power, sustained; if set at or above the on threshold, scheduling uses an effective value clamped just below it (default 90%) |
@@ -76,6 +76,9 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 
 !!! note "Numbers persist"
     All number entities persist their value across Home Assistant restarts.
+
+!!! warning "Battery SOC gate needs the Home Battery module"
+    Installs running EV Charging without the Home Battery module used to get the **Battery SOC gate** entity as well. It is no longer created, and the gate is no longer applied to solar EV charging — the car now takes the surplus without waiting for a house battery that Energy Manager does not control. The leftover registry entry shows as unavailable and can be deleted from its entity page.
 
 !!! important "Spreads, not absolute prices"
     All price thresholds are spreads relative to the horizon — never absolute prices. See the [full explanation](../user-guide/home-battery.md#tuning-the-discharge-and-charge-thresholds) on the Home Battery page.

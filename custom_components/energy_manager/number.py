@@ -146,11 +146,16 @@ async def async_setup_entry(
     # EV charger tuning entities (when the EV module is enabled)
     easee_coordinator = entry.runtime_data.easee_coordinator
     if easee_coordinator is not None:
-        async_add_entities([
+        ev_numbers = [
             EvMaxGridChargePower(easee_coordinator, entry),
             EvSolarStartThreshold(easee_coordinator, entry),
-            EvBatterySocGate(easee_coordinator, entry),
-        ])
+        ]
+        # The SOC gate compares against the house battery SOC; without the
+        # battery module EaseeCoordinator reads no SOC (coordinator.py
+        # CONF_BATTERY_ENABLED guard) and the gate can never do anything.
+        if battery_coordinator is not None:
+            ev_numbers.append(EvBatterySocGate(easee_coordinator, entry))
+        async_add_entities(ev_numbers)
 
     # Car number entities (one set per car subentry)
     for subentry_id, coordinator in entry.runtime_data.car_coordinators.items():

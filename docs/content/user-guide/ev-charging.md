@@ -14,7 +14,7 @@ On top of the price schedule, **solar-surplus charging** can divert live PV surp
 
 ## Charger Setup
 
-Configured in Step 4 of the [Setup Wizard](../getting-started/setup-wizard.md):
+Configured in Step 5 of the [Setup Wizard](../getting-started/setup-wizard.md). Fuse rating, grid power sensors and house consumption live in the shared **Grid & Fuse Protection** step:
 
 | Field | Default | Description |
 |-------|---------|--------------|
@@ -26,13 +26,13 @@ Configured in Step 4 of the [Setup Wizard](../getting-started/setup-wizard.md):
 | Maximum grid charging power (kW) | 12 | Absolute ceiling on grid-charging power, converted to amps for the car currently charging |
 | 3-phase switch threshold (kW) | 4.1 | Available power below which the charger drops to single-phase |
 | Solar charging start threshold (kW) | 1.5 | Minimum net solar surplus, sustained past the activation delay, before solar charging begins |
-| Battery SOC gate (%) | 100 | Advanced option: minimum house-battery SOC before solar EV charging starts — the battery fills first, only the leftover surplus goes to the car |
+| Battery SOC gate (%) | 100 | Advanced option: minimum house-battery SOC before solar EV charging starts — the battery fills first, only the leftover surplus goes to the car. Requires the Home Battery module; the field and its number entity are hidden without it, and the gate is not applied |
 | Notification service | — | Optional `notify.*` service for safety alerts — fuse emergency overload pauses and the 0A safety stop |
 
 A handful of further tuning knobs (current increase/decrease delay, solar activation/deactivation delay, the emergency overload margin) live in the same step's advanced options, pre-filled with tuned defaults.
 
 !!! tip "No reload needed"
-    **Maximum grid charging power**, **Solar charging start threshold**, and the advanced-options **battery SOC gate** field only seed their number entities on first setup (see [Entities](../reference/entities.md)) — adjust them afterward from the Energy Manager device page and the new value applies on the next coordinator refresh (triggered immediately on change), no reload, and persists across restarts.
+    **Maximum grid charging power**, **Solar charging start threshold**, and, with the Home Battery module enabled, the advanced-options **battery SOC gate** field only seed their number entities on first setup (see [Entities](../reference/entities.md)) — adjust them afterward from the Energy Manager device page and the new value applies on the next coordinator refresh (triggered immediately on change), no reload, and persists across restarts. If you disable the Home Battery module for more than a week, the SOC gate number entity's restored value expires and it returns to the setup-wizard seed when you re-enable the module.
 
 ## Adding a Car
 
@@ -71,7 +71,7 @@ The **EV charger force charging** switch overrides both the schedule and the sol
 
 ## Fuse Protection
 
-Whatever mode wins, the amp target actually sent to the charger is capped by fuse headroom, computed independently every control cycle: the fuse rating minus the safety buffer, minus the worst-loaded phase's current draw, with the charger's own current draw added back so it never counts against its own headroom. That figure is combined with the grid charging power cap and the car's own max charge power — EM always requests the lowest of the three. This applies identically to Easee charging and to the commanded-current sensor a non-Easee automation follows.
+Whatever mode wins, the amp target actually sent to the charger is capped by fuse headroom, computed independently every control cycle: the fuse rating minus the safety buffer — both configured in the shared **Grid & Fuse Protection** step — minus the worst-loaded phase's current draw, with the charger's own current draw added back so it never counts against its own headroom. That figure is combined with the grid charging power cap and the car's own max charge power — EM always requests the lowest of the three. This applies identically to Easee charging and to the commanded-current sensor a non-Easee automation follows.
 
 ## Non-Easee Chargers
 

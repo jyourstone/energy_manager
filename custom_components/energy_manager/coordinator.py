@@ -85,6 +85,7 @@ from .const import (
     CONF_ASSUMED_LOAD_AMPS,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
@@ -139,6 +140,7 @@ from .const import (
     DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
     DEFAULT_APPLIANCE_PHASES,
     DEFAULT_APPLIANCE_PRIORITY,
+    DEFAULT_ASSUMED_CAR_SOC_PCT,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_CYCLE_COST,
@@ -1639,7 +1641,7 @@ class FuseSensorReader:
         if not self._sensor_warned:
             _LOGGER.warning(
                 "Fuse protection: %s unavailable -- applying '%s' fallback (%s). "
-                "Configure the grid sensors in the EMS options to restore "
+                "Configure the grid sensors in the Grid & Fuse Protection step to restore "
                 "accurate fuse protection.",
                 sensor_description,
                 self._sensor_fail_behavior,
@@ -1815,7 +1817,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         else:
             _LOGGER.warning(
                 "No grid power entities configured -- fuse headroom will assume 0A load. "
-                "Configure per-phase or total grid power sensors in the EMS settings for dynamic fuse protection."
+                "Configure per-phase or total grid power sensors in the Grid & Fuse Protection step for dynamic fuse protection."
             )
 
         # Event-driven: react immediately to charger status changes
@@ -2741,7 +2743,9 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # number, so unknown SOC assumes 50% for slot sizing; CarChargingData
         # keeps the raw None so solar eligibility stays fail-open.
         current_soc = self._read_car_soc()
-        scheduling_soc = current_soc if current_soc is not None else 50.0
+        scheduling_soc = (
+            current_soc if current_soc is not None else DEFAULT_ASSUMED_CAR_SOC_PCT
+        )
 
         # 3. Convert departure_time (local time-of-day) to UTC datetime
         departure_utc = self._departure_to_utc()
@@ -3185,6 +3189,22 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             CONF_CHARGER_DEVICE_ID, ""
         )
         self._soc_entity: str = entry.options.get(CONF_SOC_ENTITY, "")
+        # The SOC gate compares against the HOUSE battery. With the Home
+        # Battery module off there is no house battery under EM's control and
+        # the EvBatterySocGate number entity is not created (number.py), so a
+        # stored gate could never be lowered again. Read no SOC at all: the
+        # 100.0 fallback below satisfies any gate (MAX_BATTERY_SOC_GATE_PCT
+        # is also 100.0), keeping solar EV charging unblocked.
+        if not entry.options.get(CONF_BATTERY_ENABLED, False):
+            if self._soc_entity:
+                _LOGGER.warning(
+                    "EV solar SOC gate not applied -- %s is still configured but "
+                    "the Home Battery module is off, so solar EV charging is no "
+                    "longer held back by house-battery SOC. Enable the Home "
+                    "Battery module to restore the gate.",
+                    self._soc_entity,
+                )
+            self._soc_entity = ""
         self._notify_service: str = entry.options.get(CONF_NOTIFY_SERVICE, "")
 
         # -- Solar-surplus inputs (EV-09/EMS-13) --
@@ -4047,8 +4067,8 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
             _LOGGER.warning(
                 "No grid power entities configured -- appliance surplus control "
                 "has no export signal and will keep every appliance off. "
-                "Configure per-phase or total grid power sensors in the EMS "
-                "settings."
+                "Configure per-phase or total grid power sensors in the "
+                "Grid & Fuse Protection step."
             )
         return 0.0
 

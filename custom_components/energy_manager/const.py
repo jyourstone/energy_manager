@@ -238,6 +238,9 @@ CAR_CHARGE_POWER_STEP_KW = 0.1
 
 # Target SOC limits (%)
 DEFAULT_TARGET_SOC_PCT = 80.0
+# Assumed car SOC used only for slot sizing when the car reports no SOC.
+# CarChargingData keeps the raw None so solar eligibility stays fail-open.
+DEFAULT_ASSUMED_CAR_SOC_PCT = 50.0
 MIN_TARGET_SOC_PCT = 10.0
 MAX_TARGET_SOC_PCT = 100.0
 TARGET_SOC_STEP_PCT = 1.0
