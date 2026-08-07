@@ -1840,13 +1840,20 @@ class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
 
         errors: dict[str, str] = {}
         if user_input is not None:
+            # Merge over existing data so the promoted tuning seeds
+            # (priority, thresholds, sustain) survive reconfigure, but a
+            # cleared power-sensor field arrives as an ABSENT key -- drop
+            # it instead of resurrecting the stale entity from the merge.
+            new_data = {**existing_data, **user_input}
+            if CONF_APPLIANCE_POWER_SENSOR_ENTITY not in user_input:
+                new_data.pop(CONF_APPLIANCE_POWER_SENSOR_ENTITY, None)
             # async_create_entry here would ADD a duplicate subentry --
             # subentry reconfigure must update the existing one.
             return self.async_update_and_abort(
                 self._get_entry(),
                 subentry,
                 title=user_input[CONF_APPLIANCE_NAME],
-                data={**existing_data, **user_input},
+                data=new_data,
             )
 
         schema = vol.Schema(
