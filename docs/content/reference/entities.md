@@ -46,6 +46,7 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 | Battery charge spread threshold | Spread per kWh: a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
 | Battery discharge spread threshold | Spread per kWh: a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by Battery Cycle Cost when that is set above 0 — the entity shows as unavailable while overridden |
 | Battery max charging power | Maximum battery charge power (kW) |
+| Battery max SoC target | SOC ceiling (default 100%) that PV-opportunistic battery charging stops at |
 | Battery Cycle Cost | Cost per kWh of one battery charge/discharge cycle. When above 0, it replaces the manual discharge spread threshold with a derived value — see [Tuning the discharge and charge thresholds](../user-guide/home-battery.md#tuning-the-discharge-and-charge-thresholds) for the formula and its edge cases. Default 0 (disabled) |
 | Battery export spread threshold | Spread per kWh above the horizon's cheapest hour at or above which a slot may become an export slot; 0 = export arbitrage disabled (the default) — see [Battery to Grid Export Arbitrage](../user-guide/battery-export-arbitrage.md) |
 | Battery export reserve level | SOC floor (default 20%) below which the battery never sells energy during export slots — see [Battery to Grid Export Arbitrage](../user-guide/battery-export-arbitrage.md) |

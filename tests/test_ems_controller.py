@@ -393,6 +393,27 @@ class TestPVOpportunisticCharging:
         assert result.target_mode == "standby"
         assert result.override_reason is None
 
+    def test_pv_charging_eligible_at_95_with_default_max_soc(self):
+        """soc=95%, max_soc_pct=100 (new default) => 95 is no longer a
+        ceiling; charging is still eligible, unlike the old 95 default."""
+        result = compute_ems_state(
+            target_ems_mode="standby",
+            current_l_amps=5.0,
+            fuse_rating_amps=25.0,
+            max_charge_power_kw=5.0,
+            battery_soc_pct=95.0,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=800.0,
+            pv_hysteresis_active=True,
+            max_soc_pct=100.0,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason == "pv_opportunistic"
+
     def test_pv_charging_limited_to_available_solar(self):
         """pv_power=2000W, max_charge=5kW => charge_limit=min(2.0, safe_charge)."""
         result = compute_ems_state(

@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_POWER_KW,
+    DEFAULT_MAX_SOC_PCT,
     DEFAULT_TARGET_SOC_PCT,
     MAX_CAR_MAX_CHARGE_POWER_KW,
     MAX_CHARGE_POWER_KW,
@@ -87,6 +88,7 @@ async def async_setup_entry(
             ElectricityCompanyFee(battery_coordinator, entry),
             ExportSpikeThreshold(battery_coordinator, entry),
             ExportReserveSoc(battery_coordinator, entry),
+            BatteryMaxSocTarget(battery_coordinator, entry),
         ])
 
     # Car number entities (one set per car subentry)
@@ -709,4 +711,54 @@ class ExportReserveSoc(EnergyManagerEntity, RestoreNumber):
         self._attr_native_value = value
         self.async_write_ha_state()
         self.coordinator.export_reserve_soc_pct = value
+        await self.coordinator.async_request_refresh()
+
+
+class BatteryMaxSocTarget(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the battery's max SOC target for PV-opportunistic charging.
+
+    PV-opportunistic charging stops once the battery reaches this level.
+    Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "battery_max_soc_target"
+    _attr_native_min_value = 50.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 1.0
+    _attr_native_unit_of_measurement = "%"
+
+    _default_value = DEFAULT_MAX_SOC_PCT
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the max SOC target entity."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_battery_max_soc_target"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = self._default_value
+        self.coordinator.max_soc_pct = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the max SOC target and trigger schedule recalculation.
+
+        Args:
+            value: New maximum state of charge percentage.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.max_soc_pct = value
         await self.coordinator.async_request_refresh()

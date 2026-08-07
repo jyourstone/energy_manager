@@ -567,6 +567,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # knobs; 0 = feature off
         self.export_spike_threshold: float = 0.0
         self.export_reserve_soc_pct: float = DEFAULT_EXPORT_RESERVE_SOC_PCT
+        self.max_soc_pct: float = DEFAULT_MAX_SOC_PCT
 
         # BATT-14 economics -- updated by NumberEntity instances after setup
         self.battery_cycle_cost: float = DEFAULT_BATTERY_CYCLE_COST
@@ -813,7 +814,7 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             tomorrow_start=tomorrow_start,
             peak_gap_hours=peak_gap_hours,
             min_soc_pct=DEFAULT_MIN_SOC_PCT,
-            max_soc_pct=DEFAULT_MAX_SOC_PCT,
+            max_soc_pct=self.max_soc_pct,
             export_spike_threshold=export_spike_threshold,
             export_reserve_soc_pct=export_reserve_soc_pct,
             export_power_kw=export_power_kw,
@@ -1927,7 +1928,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
             car_plugged_in=car_priority,
             pv_power_w=pv_power_w,
             pv_hysteresis_active=pv_active,
-            max_soc_pct=DEFAULT_MAX_SOC_PCT,
+            max_soc_pct=self._battery_coordinator.max_soc_pct,
             safety_buffer_amps=self._safety_buffer_amps,
             sensor_blocked=sensor_blocked,
             available_ess_amps=applied_ess_ceiling,

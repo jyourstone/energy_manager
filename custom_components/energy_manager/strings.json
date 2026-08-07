@@ -519,6 +519,9 @@
       },
       "battery_export_reserve_soc": {
         "name": "Battery export reserve level"
+      },
+      "battery_max_soc_target": {
+        "name": "Battery max SoC target"
       }
     },
     "time": {
