@@ -1231,12 +1231,14 @@ class ChargerController:
         Only (re)starts the timeout clock when the expectation actually
         changes -- reissuing the same command every tick while waiting must
         not keep pushing the stuck timeout back. The action name is kept
-        for the stuck warning (the command the charger is ignoring).
+        for the stuck warning (the command the charger is ignoring) and
+        tracks the LATEST issued command even when the expectation is
+        unchanged (e.g. "stop" followed by "pause" both expect no draw).
         """
         if self._last_command_expect_active != expect_active:
             self._last_command_expect_active = expect_active
             self._last_command_at = now
-            self._last_command_action = action
+        self._last_command_action = action
 
     def _resolve_command_tracking(
         self, is_drawing: bool, now: datetime, timeout_s: float, charger_status: str

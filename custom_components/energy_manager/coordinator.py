@@ -2171,7 +2171,7 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
                 # Never raise the limit toward entity max while the plant
                 # may still be discharging. Retries next cycle.
                 _LOGGER.debug(
-                    "Holding discharge limit at %.1f kW until export-mode "
+                    "Holding discharge limit at %s kW until export-mode "
                     "exit is confirmed",
                     self._last_sent_discharge_limit,
                 )

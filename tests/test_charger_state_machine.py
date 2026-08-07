@@ -1959,6 +1959,26 @@ class TestStuckWarningLog:
         assert len(warnings) == 2
         assert "'start'" in warnings[1].getMessage()
 
+    def test_stuck_warning_names_latest_command(self, caplog):
+        # "stop" then "pause" both expect no draw: the action must track the
+        # LATEST issued command while the timeout clock keeps its original
+        # start (repeated commands must not push the stuck timeout back).
+        controller = ChargerController()
+        controller._note_command_expectation(False, T0, "stop")
+        controller._note_command_expectation(
+            False, T0 + timedelta(seconds=30), "pause"
+        )
+        assert controller._last_command_at == T0
+        with caplog.at_level(logging.WARNING):
+            controller._resolve_command_tracking(
+                True, T0 + timedelta(seconds=61), 60.0, "charging"
+            )
+        warnings = [
+            r for r in caplog.records if r.name.endswith("charger_state_machine")
+        ]
+        assert len(warnings) == 1
+        assert "'pause'" in warnings[0].getMessage()
+
 
 # ---------------------------------------------------------------------------
 # Belief-gated command emission (Easee reconciler)
