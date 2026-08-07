@@ -30,7 +30,6 @@
         "description": "Konfigurera ditt hembatterisystem. Entiteter identifieras automatiskt från SigenStor.",
         "data": {
           "soc_entity": "Sensor för batteriets laddningsnivå",
-          "battery_power_entity": "Sensor för batterieffekt",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
           "forecast_solar_entity": "Sensorer för solprognos",
           "charge_buffer_pct": "Laddningsbuffert (%)",
@@ -40,7 +39,6 @@
         },
         "data_description": {
           "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
-          "battery_power_entity": "Sensor som visar batteriets effekt (W).",
           "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
           "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns.",
           "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
@@ -50,8 +48,8 @@
         }
       },
       "ems": {
-        "title": "EMS-styrning",
-        "description": "Konfigurera säkringsskydd och entiteter för batteristyrning. Styrentiteter identifieras automatiskt från SigenStor.",
+        "title": "Elnät och säkringsskydd",
+        "description": "Konfigurera din huvudsäkring och de sensorer för elnätets effekt som Energy Manager använder för att hålla sig inom den. Entiteter för växelriktarstyrning (EMS-läge, ladd-/urladdningsgränser) identifieras automatiskt från SigenStor och visas endast när modulen Hembatteri är aktiverad.",
         "data": {
           "fuse_rating_amps": "Huvudsäkringens storlek (A)",
           "fuse_safety_buffer_amps": "Säkerhetsmarginal för säkring (A)",
@@ -66,11 +64,14 @@
           "sensor_fail_behavior": "Om strömsensorerna är otillgängliga",
           "assumed_load_amps": "Antagen last när sensorer är otillgängliga (A)",
           "max_ess_charge_amps": "Max laddningsström för batteri (A)",
-          "ess_increase_delay": "Fördröjning vid höjning av laddningsgräns (s)"
+          "ess_increase_delay": "Fördröjning vid höjning av laddningsgräns (s)",
+          "battery_power_entity": "Sensor för batterieffekt",
+          "house_consumption_entity": "Sensor för husets elförbrukning",
+          "excluded_power_entities": "Undantagna effektsensorer"
         },
         "data_description": {
-          "fuse_rating_amps": "Din huvudsäkrings storlek i ampere. Används för att beräkna säkra laddningsgränser.",
-          "fuse_safety_buffer_amps": "Avancerat: extra säkerhetsmarginal som dras från säkringens storlek innan tillgängligt laddningsutrymme beräknas.",
+          "fuse_rating_amps": "Din huvudsäkrings storlek i ampere. Energy Manager håller den totala lasten under den — kontrollera att den stämmer med säkringen i ditt elskåp, den identifieras inte automatiskt.",
+          "fuse_safety_buffer_amps": "Avancerat: extra säkerhetsmarginal som dras från säkringens storlek innan tillgängligt utrymme beräknas.",
           "ems_select_entity": "Väljarentitet som styr SigenStor EMS-läge.",
           "charge_limit_entity": "Nummerentitet för batteriets max laddningsgräns (kW).",
           "discharge_limit_entity": "Nummerentitet för batteriets max urladdningsgräns (kW).",
@@ -79,10 +80,13 @@
           "grid_phase_b_entity": "Fasvis sensor för elnätets effekt, fas B (kW eller W), med tecken (positivt = import, negativt = export).",
           "grid_phase_c_entity": "Fasvis sensor för elnätets effekt, fas C (kW eller W), med tecken (positivt = import, negativt = export).",
           "pv_power_entity": "Sensor som visar aktuell PV-/soleffekt (W).",
-          "sensor_fail_behavior": "Avancerat: vad som ska göras när elnätets strömsensorer är otillgängliga, okända eller inte konfigurerade. 'Anta en fast last' fortsätter laddningen med en uppskattad last; 'Blockera' pausar batteriladdningen helt tills sensorerna återhämtar sig.",
+          "sensor_fail_behavior": "Avancerat: vad som ska göras när elnätets strömsensorer är otillgängliga, okända eller inte konfigurerade. 'Anta en fast last' fortsätter med en uppskattad last; 'Blockera' hindrar Energy Manager från att tillåta ny last tills sensorerna återhämtar sig.",
           "assumed_load_amps": "Avancerat: last i ampere att anta när strömsensorerna är otillgängliga och ovanstående beteende är 'Anta en fast last'.",
           "max_ess_charge_amps": "Avancerat: absolut säkerhetsgräns för batteriets egen laddningsström, oberoende av säkringens utrymme.",
-          "ess_increase_delay": "Avancerat: hur länge en högre laddningsgräns måste vara stabil innan den tillämpas. Sänkningar tillämpas alltid omedelbart."
+          "ess_increase_delay": "Avancerat: hur länge en högre laddningsgräns måste vara stabil innan den tillämpas. Sänkningar tillämpas alltid omedelbart.",
+          "battery_power_entity": "Sensor för hembatteriets effekt med tecken (positivt = laddning, negativt = urladdning). Identifieras automatiskt från SigenStor. Används för säkringsutrymmet och för att solöverskottet till apparater inte ska räkna batteriurladdning som sol — konfigurera den om du har ett hembatteri, även när modulen Hembatteri är avstängd.",
+          "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
+          "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas."
         }
       },
       "ev": {
@@ -92,8 +96,6 @@
           "charger_status_entity": "Sensor för laddarens status",
           "charger_power_entity": "Sensor för laddarens effekt",
           "charger_device_id": "Laddarens enhets-ID",
-          "house_consumption_entity": "Sensor för husets elförbrukning",
-          "excluded_power_entities": "Undantagna effektsensorer",
           "notify_service": "Aviseringstjänst",
           "min_charge_amps": "Minsta laddström (A)",
           "max_charge_amps": "Högsta laddström (A)",
@@ -111,8 +113,6 @@
           "charger_status_entity": "Sensor som visar laddarens anslutningsstatus.",
           "charger_power_entity": "Sensor som visar laddarens effektuttag (W).",
           "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel -- eller lämna det tomt för en laddare som inte är från Easee: kommandon skickas då aldrig och du automatiserar istället via kommandosensorerna.",
-          "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
-          "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas.",
           "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
           "min_charge_amps": "Avancerat: den lägsta ström laddaren någonsin ställs in på (Easees minimum är 6A).",
           "max_charge_amps": "Avancerat: den högsta ström laddaren någonsin ställs in på.",
@@ -145,11 +145,11 @@
       },
       "finish": {
         "title": "Installationen är klar",
-        "description": "Energy Manager är redo. Två saker innan den gör något:\n\n- Lägg till din(a) bil(ar) med knappen 'Lägg till bil' på integrationssidan för att aktivera schemalagd elbilsladdning.\n\n- Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'."
+        "description": "Energy Manager är redo. Innan den gör något:\n\n- Lägg till din(a) bil(ar) med knappen 'Lägg till bil' på integrationssidan för att aktivera schemalagd elbilsladdning.\n\n- Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'.\n\n- Om du aktiverade Solstyrda apparater, lägg till varje apparat med knappen 'Lägg till apparat' på integrationssidan."
       },
       "finish_basic": {
         "title": "Installationen är klar",
-        "description": "Energy Manager är redo. Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'."
+        "description": "Energy Manager är redo. Enhetsstyrning är AV från start (observationsläge): integrationen loggar bara vad den skulle göra tills du slår på strömbrytaren 'Enhetsstyrning'.\n\n- Om du aktiverade Solstyrda apparater, lägg till varje apparat med knappen 'Lägg till apparat' på integrationssidan."
       }
     },
     "error": {
@@ -305,20 +305,18 @@
         "description": "Konfigurera ditt hembatterisystem. Entiteter identifieras automatiskt från SigenStor.",
         "data": {
           "soc_entity": "Sensor för batteriets laddningsnivå",
-          "battery_power_entity": "Sensor för batterieffekt",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
           "forecast_solar_entity": "Sensorer för solprognos"
         },
         "data_description": {
           "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
-          "battery_power_entity": "Sensor som visar batteriets effekt (W).",
           "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
           "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns."
         }
       },
       "ems": {
-        "title": "EMS-styrning",
-        "description": "Konfigurera säkringsskydd och entiteter för batteristyrning. Styrentiteter identifieras automatiskt från SigenStor.",
+        "title": "Elnät och säkringsskydd",
+        "description": "Konfigurera din huvudsäkring och de sensorer för elnätets effekt som Energy Manager använder för att hålla sig inom den. Entiteter för växelriktarstyrning (EMS-läge, ladd-/urladdningsgränser) identifieras automatiskt från SigenStor och visas endast när modulen Hembatteri är aktiverad.",
         "data": {
           "fuse_rating_amps": "Huvudsäkringens storlek (A)",
           "fuse_safety_buffer_amps": "Säkerhetsmarginal för säkring (A)",
@@ -333,11 +331,14 @@
           "sensor_fail_behavior": "Om strömsensorerna är otillgängliga",
           "assumed_load_amps": "Antagen last när sensorer är otillgängliga (A)",
           "max_ess_charge_amps": "Max laddningsström för batteri (A)",
-          "ess_increase_delay": "Fördröjning vid höjning av laddningsgräns (s)"
+          "ess_increase_delay": "Fördröjning vid höjning av laddningsgräns (s)",
+          "battery_power_entity": "Sensor för batterieffekt",
+          "house_consumption_entity": "Sensor för husets elförbrukning",
+          "excluded_power_entities": "Undantagna effektsensorer"
         },
         "data_description": {
-          "fuse_rating_amps": "Din huvudsäkrings storlek i ampere. Används för att beräkna säkra laddningsgränser.",
-          "fuse_safety_buffer_amps": "Avancerat: extra säkerhetsmarginal som dras från säkringens storlek innan tillgängligt laddningsutrymme beräknas.",
+          "fuse_rating_amps": "Din huvudsäkrings storlek i ampere. Energy Manager håller den totala lasten under den — kontrollera att den stämmer med säkringen i ditt elskåp, den identifieras inte automatiskt.",
+          "fuse_safety_buffer_amps": "Avancerat: extra säkerhetsmarginal som dras från säkringens storlek innan tillgängligt utrymme beräknas.",
           "ems_select_entity": "Väljarentitet som styr SigenStor EMS-läge.",
           "charge_limit_entity": "Nummerentitet för batteriets max laddningsgräns (kW).",
           "discharge_limit_entity": "Nummerentitet för batteriets max urladdningsgräns (kW).",
@@ -346,10 +347,13 @@
           "grid_phase_b_entity": "Fasvis sensor för elnätets effekt, fas B (kW eller W), med tecken (positivt = import, negativt = export).",
           "grid_phase_c_entity": "Fasvis sensor för elnätets effekt, fas C (kW eller W), med tecken (positivt = import, negativt = export).",
           "pv_power_entity": "Sensor som visar aktuell PV-/soleffekt (W).",
-          "sensor_fail_behavior": "Avancerat: vad som ska göras när elnätets strömsensorer är otillgängliga, okända eller inte konfigurerade. 'Anta en fast last' fortsätter laddningen med en uppskattad last; 'Blockera' pausar batteriladdningen helt tills sensorerna återhämtar sig.",
+          "sensor_fail_behavior": "Avancerat: vad som ska göras när elnätets strömsensorer är otillgängliga, okända eller inte konfigurerade. 'Anta en fast last' fortsätter med en uppskattad last; 'Blockera' hindrar Energy Manager från att tillåta ny last tills sensorerna återhämtar sig.",
           "assumed_load_amps": "Avancerat: last i ampere att anta när strömsensorerna är otillgängliga och ovanstående beteende är 'Anta en fast last'.",
           "max_ess_charge_amps": "Avancerat: absolut säkerhetsgräns för batteriets egen laddningsström, oberoende av säkringens utrymme.",
-          "ess_increase_delay": "Avancerat: hur länge en högre laddningsgräns måste vara stabil innan den tillämpas. Sänkningar tillämpas alltid omedelbart."
+          "ess_increase_delay": "Avancerat: hur länge en högre laddningsgräns måste vara stabil innan den tillämpas. Sänkningar tillämpas alltid omedelbart.",
+          "battery_power_entity": "Sensor för hembatteriets effekt med tecken (positivt = laddning, negativt = urladdning). Identifieras automatiskt från SigenStor. Används för säkringsutrymmet och för att solöverskottet till apparater inte ska räkna batteriurladdning som sol — konfigurera den om du har ett hembatteri, även när modulen Hembatteri är avstängd.",
+          "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
+          "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas."
         }
       },
       "ev": {
@@ -359,8 +363,6 @@
           "charger_status_entity": "Sensor för laddarens status",
           "charger_power_entity": "Sensor för laddarens effekt",
           "charger_device_id": "Laddarens enhets-ID",
-          "house_consumption_entity": "Sensor för husets elförbrukning",
-          "excluded_power_entities": "Undantagna effektsensorer",
           "notify_service": "Aviseringstjänst",
           "min_charge_amps": "Minsta laddström (A)",
           "max_charge_amps": "Högsta laddström (A)",
@@ -375,8 +377,6 @@
           "charger_status_entity": "Sensor som visar laddarens anslutningsstatus.",
           "charger_power_entity": "Sensor som visar laddarens effektuttag (W).",
           "charger_device_id": "Automatiskt identifierat HA-enhets-ID för Easee-laddaren, används för att adressera easee.*-styrtjänsterna. Behåll det automatiskt identifierade värdet om det inte är fel -- eller lämna det tomt för en laddare som inte är från Easee: kommandon skickas då aldrig och du automatiserar istället via kommandosensorerna.",
-          "house_consumption_entity": "Sensor som visar husets totala eleffektförbrukning, används för solöverskottsladdning. Identifieras automatiskt från SigenStor.",
-          "excluded_power_entities": "Valfritt: effektsensorer att dra av från husets förbrukning (t.ex. en separat styrd varmvattenberedare) innan solöverskottet beräknas.",
           "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
           "min_charge_amps": "Avancerat: den lägsta ström laddaren någonsin ställs in på (Easees minimum är 6A).",
           "max_charge_amps": "Avancerat: den högsta ström laddaren någonsin ställs in på.",
@@ -397,7 +397,7 @@
     "sensor_fail_behavior": {
       "options": {
         "assume_load": "Anta en fast last (rekommenderas)",
-        "block": "Blockera laddning tills sensorerna återhämtar sig"
+        "block": "Blockera ny last tills sensorerna återhämtar sig"
       }
     },
     "phase_capability": {
@@ -556,15 +556,15 @@
   "issues": {
     "fuse_sensor_fallback": {
       "title": "Säkringsskyddet använder reservläge",
-      "description": "Säkringsskyddet har saknat aktuella nätströmsvärden ({sensor}) i mer än 5 minuter och använder det konfigurerade reservbeteendet {behavior}. Kontrollera nätsensorerna eller uppdatera dem i Energy Managers EMS-inställningar."
+      "description": "Säkringsskyddet har saknat aktuella nätströmsvärden ({sensor}) i mer än 5 minuter och använder det konfigurerade reservbeteendet {behavior}. Kontrollera nätsensorerna eller uppdatera dem i Energy Managers inställningar för Elnät och säkringsskydd."
     },
     "charge_limit_wrong_domain": {
       "title": "Entiteten för laddningsgräns är ingen number-entitet",
-      "description": "Den konfigurerade entiteten för laddningsgräns {entity_id} tillhör inte domänen 'number', så laddningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers EMS-inställningar."
+      "description": "Den konfigurerade entiteten för laddningsgräns {entity_id} tillhör inte domänen 'number', så laddningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers inställningar för Elnät och säkringsskydd."
     },
     "discharge_limit_wrong_domain": {
       "title": "Entiteten för urladdningsgräns är ingen number-entitet",
-      "description": "Den konfigurerade entiteten för urladdningsgräns {entity_id} tillhör inte domänen 'number', så urladdningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers EMS-inställningar."
+      "description": "Den konfigurerade entiteten för urladdningsgräns {entity_id} tillhör inte domänen 'number', så urladdningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers inställningar för Elnät och säkringsskydd."
     }
   }
 }

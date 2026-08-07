@@ -4,7 +4,9 @@ Multi-step wizard:
   Step 1 (user)    — Nordpool sensor selection with auto-detection
   Step 2 (modules) — Enable/disable Home Battery, EV Charging and Appliances modules
   Step 3 (battery) — Home Battery entity config (conditional, auto-detected SigenStor)
-  Step 3b (ems)    — EMS control config: fuse rating + control entities (after battery)
+  Step 3b (ems)    — Grid & fuse protection: the shared fuse/grid-sensor config
+                     every module needs, plus the inverter control entities when
+                     the Home Battery module is enabled
   Step 4 (ev)      — EV Charging entity config (conditional, auto-detected Easee)
 
 Plus:
@@ -202,7 +204,11 @@ from .const import (
     SUBENTRY_TYPE_CAR,
 )
 from .nordpool_adapter import detect_nordpool_type, find_all_nordpool_sensors
-from .options_flow_support import merge_detected_with_current
+from .options_flow_support import (
+    apply_step_input,
+    ems_step_fields,
+    merge_detected_with_current,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -333,9 +339,9 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if self._data[CONF_BATTERY_ENABLED]:
                 return await self.async_step_battery()
-            if self._data[CONF_EV_ENABLED]:
-                # EV control also needs the shared fuse/grid-sensor config
-                # from the EMS step, not just the battery module.
+            if self._data[CONF_EV_ENABLED] or self._data[CONF_APPLIANCES_ENABLED]:
+                # EV control and appliance admission both need the shared
+                # fuse/grid-sensor config, not just the battery module.
                 return await self.async_step_ems()
             return await self.async_step_economics()
 
@@ -362,9 +368,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 3: Home Battery Config — conditional, with auto-detected SigenStor entities."""
         if user_input is not None:
             self._data[CONF_SOC_ENTITY] = user_input.get(CONF_SOC_ENTITY, "")
-            self._data[CONF_BATTERY_POWER_ENTITY] = user_input.get(
-                CONF_BATTERY_POWER_ENTITY, ""
-            )
             self._data[CONF_BATTERY_CAPACITY_KWH] = user_input.get(
                 CONF_BATTERY_CAPACITY_KWH, 10.0
             )
@@ -395,9 +398,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Optional(CONF_SOC_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_BATTERY_POWER_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Optional(CONF_BATTERY_CAPACITY_KWH): NumberSelector(
@@ -463,153 +463,130 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_ems(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 3b: EMS Control Config — fuse rating and control entity selection.
+        """Step 3b: Grid & Fuse Protection — shared fuse, grid and control config.
 
-        Appears whenever battery or EV control is enabled (fuse rating,
-        safety buffer and grid sensors feed the shared fuse-headroom
-        arbitration used by both), before the EV step. Auto-detects
-        SigenStor EMS control entities.
+        Appears for every non-empty module combination: the fuse rating,
+        safety buffer and grid sensors feed the fuse-headroom arbitration
+        all three coordinators use. The inverter control entities are only
+        shown when the battery module is enabled. Auto-detects the SigenStor
+        entities the step can pre-fill.
         """
+        fields = ems_step_fields(
+            bool(self._data.get(CONF_BATTERY_ENABLED)),
+            bool(self._data.get(CONF_EV_ENABLED)),
+        )
+
         if user_input is not None:
-            self._data[CONF_FUSE_RATING_AMPS] = user_input.get(
-                CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
-            )
-            self._data[CONF_FUSE_SAFETY_BUFFER_AMPS] = user_input.get(
-                CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
-            )
-            self._data[CONF_EMS_SELECT_ENTITY] = user_input.get(
-                CONF_EMS_SELECT_ENTITY, ""
-            )
-            self._data[CONF_CHARGE_LIMIT_ENTITY] = user_input.get(
-                CONF_CHARGE_LIMIT_ENTITY, ""
-            )
-            self._data[CONF_DISCHARGE_LIMIT_ENTITY] = user_input.get(
-                CONF_DISCHARGE_LIMIT_ENTITY, ""
-            )
-            self._data[CONF_GRID_POWER_ENTITY] = user_input.get(
-                CONF_GRID_POWER_ENTITY, ""
-            )
-            self._data[CONF_GRID_PHASE_A_ENTITY] = user_input.get(
-                CONF_GRID_PHASE_A_ENTITY, ""
-            )
-            self._data[CONF_GRID_PHASE_B_ENTITY] = user_input.get(
-                CONF_GRID_PHASE_B_ENTITY, ""
-            )
-            self._data[CONF_GRID_PHASE_C_ENTITY] = user_input.get(
-                CONF_GRID_PHASE_C_ENTITY, ""
-            )
-            self._data[CONF_PV_POWER_ENTITY] = user_input.get(
-                CONF_PV_POWER_ENTITY, ""
-            )
-            self._data[CONF_SENSOR_FAIL_BEHAVIOR] = user_input.get(
-                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
-            )
-            self._data[CONF_ASSUMED_LOAD_AMPS] = user_input.get(
-                CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
-            )
-            self._data[CONF_MAX_ESS_CHARGE_AMPS] = user_input.get(
-                CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
-            )
-            self._data[CONF_ESS_INCREASE_DELAY] = user_input.get(
-                CONF_ESS_INCREASE_DELAY, DEFAULT_ESS_INCREASE_DELAY_SECONDS
-            )
+            apply_step_input(self._data, user_input, fields)
 
             if self._data.get(CONF_EV_ENABLED):
                 return await self.async_step_ev()
             return await self.async_step_economics()
 
-        # Auto-detect SigenStor EMS entities
+        # Auto-detect the SigenStor entities this step can pre-fill
         detected = find_sigenstor_ems_entities(self.hass)
+        detected.update(find_sigenstor_entities(self.hass))
+        detected.update(find_house_consumption_entity(self.hass))
 
+        schema_dict = {
+            vol.Required(
+                CONF_FUSE_RATING_AMPS, default=DEFAULT_FUSE_RATING_AMPS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_FUSE_RATING_AMPS,
+                    max=MAX_FUSE_RATING_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_FUSE_SAFETY_BUFFER_AMPS, default=DEFAULT_SAFETY_BUFFER_AMPS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_SAFETY_BUFFER_AMPS,
+                    max=MAX_SAFETY_BUFFER_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(CONF_EMS_SELECT_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="select")
+            ),
+            vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="number")
+            ),
+            vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="number")
+            ),
+            vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_GRID_PHASE_A_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_GRID_PHASE_B_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_GRID_PHASE_C_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_BATTERY_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_HOUSE_CONSUMPTION_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_EXCLUDED_POWER_ENTITIES): EntitySelector(
+                EntitySelectorConfig(domain="sensor", multiple=True)
+            ),
+            vol.Optional(
+                CONF_SENSOR_FAIL_BEHAVIOR, default=DEFAULT_SENSOR_FAIL_BEHAVIOR
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+                        SENSOR_FAIL_BEHAVIOR_BLOCK,
+                    ],
+                    translation_key="sensor_fail_behavior",
+                )
+            ),
+            vol.Optional(
+                CONF_ASSUMED_LOAD_AMPS, default=DEFAULT_ASSUMED_LOAD_AMPS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_ASSUMED_LOAD_AMPS,
+                    max=MAX_ASSUMED_LOAD_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_MAX_ESS_CHARGE_AMPS, default=DEFAULT_MAX_ESS_CHARGE_AMPS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_MAX_ESS_CHARGE_AMPS,
+                    max=MAX_MAX_ESS_CHARGE_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_ESS_INCREASE_DELAY,
+                default=DEFAULT_ESS_INCREASE_DELAY_SECONDS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_ESS_INCREASE_DELAY_SECONDS,
+                    max=MAX_ESS_INCREASE_DELAY_SECONDS,
+                    step=1,
+                    unit_of_measurement="s",
+                )
+            ),
+        }
         schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_FUSE_RATING_AMPS, default=DEFAULT_FUSE_RATING_AMPS
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_FUSE_RATING_AMPS,
-                        max=MAX_FUSE_RATING_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
-                    CONF_FUSE_SAFETY_BUFFER_AMPS, default=DEFAULT_SAFETY_BUFFER_AMPS
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SAFETY_BUFFER_AMPS,
-                        max=MAX_SAFETY_BUFFER_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(CONF_EMS_SELECT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="select")
-                ),
-                vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="number")
-                ),
-                vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="number")
-                ),
-                vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_GRID_PHASE_A_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_GRID_PHASE_B_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_GRID_PHASE_C_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(
-                    CONF_SENSOR_FAIL_BEHAVIOR, default=DEFAULT_SENSOR_FAIL_BEHAVIOR
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[
-                            SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
-                            SENSOR_FAIL_BEHAVIOR_BLOCK,
-                        ],
-                        translation_key="sensor_fail_behavior",
-                    )
-                ),
-                vol.Optional(
-                    CONF_ASSUMED_LOAD_AMPS, default=DEFAULT_ASSUMED_LOAD_AMPS
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_ASSUMED_LOAD_AMPS,
-                        max=MAX_ASSUMED_LOAD_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
-                    CONF_MAX_ESS_CHARGE_AMPS, default=DEFAULT_MAX_ESS_CHARGE_AMPS
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MAX_ESS_CHARGE_AMPS,
-                        max=MAX_MAX_ESS_CHARGE_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
-                    CONF_ESS_INCREASE_DELAY,
-                    default=DEFAULT_ESS_INCREASE_DELAY_SECONDS,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_ESS_INCREASE_DELAY_SECONDS,
-                        max=MAX_ESS_INCREASE_DELAY_SECONDS,
-                        step=1,
-                        unit_of_measurement="s",
-                    )
-                ),
-            }
+            {key: val for key, val in schema_dict.items() if key.schema in fields}
         )
 
         # Pre-fill with auto-detected values
@@ -634,12 +611,6 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._data[CONF_CHARGER_DEVICE_ID] = user_input.get(
                 CONF_CHARGER_DEVICE_ID, ""
-            )
-            self._data[CONF_HOUSE_CONSUMPTION_ENTITY] = user_input.get(
-                CONF_HOUSE_CONSUMPTION_ENTITY, ""
-            )
-            self._data[CONF_EXCLUDED_POWER_ENTITIES] = user_input.get(
-                CONF_EXCLUDED_POWER_ENTITIES, []
             )
             self._data[CONF_NOTIFY_SERVICE] = user_input.get(
                 CONF_NOTIFY_SERVICE, ""
@@ -679,9 +650,8 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             return await self.async_step_economics()
 
-        # Auto-detect Easee entities + charger device_id + house consumption
+        # Auto-detect Easee entities + charger device_id
         detected = find_easee_entities(self.hass)
-        detected.update(find_house_consumption_entity(self.hass))
         if detected.get(CONF_CHARGER_STATUS_ENTITY):
             charger_device_id = find_easee_charger_device_id(
                 self.hass, detected[CONF_CHARGER_STATUS_ENTITY]
@@ -689,144 +659,147 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             if charger_device_id:
                 detected[CONF_CHARGER_DEVICE_ID] = charger_device_id
 
-        schema = vol.Schema(
-            {
-                vol.Optional(CONF_CHARGER_STATUS_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_CHARGER_POWER_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_CHARGER_DEVICE_ID): TextSelector(),
-                vol.Optional(CONF_HOUSE_CONSUMPTION_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_EXCLUDED_POWER_ENTITIES): EntitySelector(
-                    EntitySelectorConfig(domain="sensor", multiple=True)
-                ),
-                vol.Optional(CONF_NOTIFY_SERVICE): TextSelector(),
-                vol.Optional(
-                    CONF_MIN_CHARGE_AMPS, default=DEFAULT_MIN_CHARGE_AMPS
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MIN_CHARGE_AMPS,
-                        max=MAX_MIN_CHARGE_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
-                    CONF_MAX_CHARGE_AMPS, default=DEFAULT_MAX_CHARGE_AMPS
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MAX_CHARGE_AMPS,
-                        max=MAX_MAX_CHARGE_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
-                    CONF_MAX_GRID_CHARGE_POWER_KW,
-                    default=DEFAULT_MAX_GRID_CHARGE_POWER_KW,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MAX_GRID_CHARGE_POWER_KW,
-                        max=MAX_MAX_GRID_CHARGE_POWER_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                # -- Advanced (mirrors the EMS step's grouping) --
-                vol.Optional(
-                    CONF_AMP_INCREASE_DELAY,
-                    default=DEFAULT_AMP_INCREASE_DELAY_SECONDS,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_AMP_DELAY_SECONDS,
-                        max=MAX_AMP_INCREASE_DELAY_SECONDS,
-                        step=1,
-                        unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_AMP_DECREASE_DELAY,
-                    default=DEFAULT_AMP_DECREASE_DELAY_SECONDS,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_AMP_DELAY_SECONDS,
-                        max=MAX_AMP_DECREASE_DELAY_SECONDS,
-                        step=1,
-                        unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_PHASE_SWITCH_THRESHOLD_KW,
-                    default=DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_PHASE_SWITCH_THRESHOLD_KW,
-                        max=MAX_PHASE_SWITCH_THRESHOLD_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
-                    CONF_SOLAR_START_THRESHOLD_KW,
-                    default=DEFAULT_SOLAR_START_THRESHOLD_KW,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SOLAR_START_THRESHOLD_KW,
-                        max=MAX_SOLAR_START_THRESHOLD_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
-                    CONF_SOLAR_ACTIVATION_DELAY,
-                    default=DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SOLAR_DELAY_SECONDS,
-                        max=MAX_SOLAR_DELAY_SECONDS,
-                        step=1,
-                        unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_SOLAR_DEACTIVATION_DELAY,
-                    default=DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SOLAR_DELAY_SECONDS,
-                        max=MAX_SOLAR_DELAY_SECONDS,
-                        step=1,
-                        unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_BATTERY_SOC_GATE_PCT,
-                    default=DEFAULT_BATTERY_SOC_GATE_PCT,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_BATTERY_SOC_GATE_PCT,
-                        max=MAX_BATTERY_SOC_GATE_PCT,
-                        step=1,
-                        unit_of_measurement="%",
-                    )
-                ),
-                vol.Optional(
-                    CONF_EMERGENCY_MARGIN_AMPS,
-                    default=DEFAULT_EMERGENCY_MARGIN_AMPS,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_EMERGENCY_MARGIN_AMPS,
-                        max=MAX_EMERGENCY_MARGIN_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
+        schema_dict = {
+            vol.Optional(CONF_CHARGER_STATUS_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CHARGER_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CHARGER_DEVICE_ID): TextSelector(),
+            vol.Optional(CONF_NOTIFY_SERVICE): TextSelector(),
+            vol.Optional(
+                CONF_MIN_CHARGE_AMPS, default=DEFAULT_MIN_CHARGE_AMPS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_MIN_CHARGE_AMPS,
+                    max=MAX_MIN_CHARGE_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_MAX_CHARGE_AMPS, default=DEFAULT_MAX_CHARGE_AMPS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_MAX_CHARGE_AMPS,
+                    max=MAX_MAX_CHARGE_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_MAX_GRID_CHARGE_POWER_KW,
+                default=DEFAULT_MAX_GRID_CHARGE_POWER_KW,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_MAX_GRID_CHARGE_POWER_KW,
+                    max=MAX_MAX_GRID_CHARGE_POWER_KW,
+                    step=0.1,
+                    unit_of_measurement="kW",
+                )
+            ),
+            # -- Advanced (mirrors the EMS step's grouping) --
+            vol.Optional(
+                CONF_AMP_INCREASE_DELAY,
+                default=DEFAULT_AMP_INCREASE_DELAY_SECONDS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_AMP_DELAY_SECONDS,
+                    max=MAX_AMP_INCREASE_DELAY_SECONDS,
+                    step=1,
+                    unit_of_measurement="s",
+                )
+            ),
+            vol.Optional(
+                CONF_AMP_DECREASE_DELAY,
+                default=DEFAULT_AMP_DECREASE_DELAY_SECONDS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_AMP_DELAY_SECONDS,
+                    max=MAX_AMP_DECREASE_DELAY_SECONDS,
+                    step=1,
+                    unit_of_measurement="s",
+                )
+            ),
+            vol.Optional(
+                CONF_PHASE_SWITCH_THRESHOLD_KW,
+                default=DEFAULT_PHASE_SWITCH_THRESHOLD_KW,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_PHASE_SWITCH_THRESHOLD_KW,
+                    max=MAX_PHASE_SWITCH_THRESHOLD_KW,
+                    step=0.1,
+                    unit_of_measurement="kW",
+                )
+            ),
+            vol.Optional(
+                CONF_SOLAR_START_THRESHOLD_KW,
+                default=DEFAULT_SOLAR_START_THRESHOLD_KW,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_SOLAR_START_THRESHOLD_KW,
+                    max=MAX_SOLAR_START_THRESHOLD_KW,
+                    step=0.1,
+                    unit_of_measurement="kW",
+                )
+            ),
+            vol.Optional(
+                CONF_SOLAR_ACTIVATION_DELAY,
+                default=DEFAULT_SOLAR_ACTIVATION_DELAY_SECONDS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_SOLAR_DELAY_SECONDS,
+                    max=MAX_SOLAR_DELAY_SECONDS,
+                    step=1,
+                    unit_of_measurement="s",
+                )
+            ),
+            vol.Optional(
+                CONF_SOLAR_DEACTIVATION_DELAY,
+                default=DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_SOLAR_DELAY_SECONDS,
+                    max=MAX_SOLAR_DELAY_SECONDS,
+                    step=1,
+                    unit_of_measurement="s",
+                )
+            ),
+            vol.Optional(
+                CONF_BATTERY_SOC_GATE_PCT,
+                default=DEFAULT_BATTERY_SOC_GATE_PCT,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_BATTERY_SOC_GATE_PCT,
+                    max=MAX_BATTERY_SOC_GATE_PCT,
+                    step=1,
+                    unit_of_measurement="%",
+                )
+            ),
+            vol.Optional(
+                CONF_EMERGENCY_MARGIN_AMPS,
+                default=DEFAULT_EMERGENCY_MARGIN_AMPS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_EMERGENCY_MARGIN_AMPS,
+                    max=MAX_EMERGENCY_MARGIN_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+        }
+        if not self._data.get(CONF_BATTERY_ENABLED):
+            # The gate compares against the house battery SOC; without the
+            # Home Battery module EaseeCoordinator reads no SOC at all
+            # (CONF_BATTERY_ENABLED guard in coordinator.py) and the number
+            # entity is not created (number.py), so the field is inert.
+            schema_dict = {
+                key: val
+                for key, val in schema_dict.items()
+                if key.schema != CONF_BATTERY_SOC_GATE_PCT
             }
-        )
+        schema = vol.Schema(schema_dict)
 
         # Pre-fill with auto-detected values
         if detected:
@@ -1144,9 +1117,9 @@ class EnergyManagerOptionsFlow(OptionsFlow):
 
             if self._options[CONF_BATTERY_ENABLED]:
                 return await self.async_step_battery()
-            if self._options[CONF_EV_ENABLED]:
-                # EV control also needs the shared fuse/grid-sensor config
-                # from the EMS step, not just the battery module.
+            if self._options[CONF_EV_ENABLED] or self._options[CONF_APPLIANCES_ENABLED]:
+                # EV control and appliance admission both need the shared
+                # fuse/grid-sensor config, not just the battery module.
                 return await self.async_step_ems()
             return self.async_create_entry(data=self._options)
 
@@ -1178,9 +1151,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
         """Step 3: Home Battery Config — conditional, auto-detected SigenStor entities."""
         if user_input is not None:
             self._options[CONF_SOC_ENTITY] = user_input.get(CONF_SOC_ENTITY, "")
-            self._options[CONF_BATTERY_POWER_ENTITY] = user_input.get(
-                CONF_BATTERY_POWER_ENTITY, ""
-            )
             self._options[CONF_BATTERY_CAPACITY_KWH] = user_input.get(
                 CONF_BATTERY_CAPACITY_KWH, 10.0
             )
@@ -1200,9 +1170,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Optional(CONF_SOC_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_BATTERY_POWER_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Optional(
@@ -1230,172 +1197,149 @@ class EnergyManagerOptionsFlow(OptionsFlow):
     async def async_step_ems(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 3b: EMS Control Config — fuse rating and control entity selection.
+        """Step 3b: Grid & Fuse Protection — shared fuse, grid and control config.
 
-        Appears whenever battery or EV control is enabled (fuse rating,
-        safety buffer and grid sensors feed the shared fuse-headroom
-        arbitration used by both). Auto-detects SigenStor EMS control
-        entities for fields that are not already configured.
+        Appears for every non-empty module combination: the fuse rating,
+        safety buffer and grid sensors feed the fuse-headroom arbitration
+        all three coordinators use. The inverter control entities are only
+        shown when the battery module is enabled. Auto-detects the SigenStor
+        entities the step can pre-fill, for fields that are not already
+        configured.
         """
+        fields = ems_step_fields(
+            bool(self._options.get(CONF_BATTERY_ENABLED)),
+            bool(self._options.get(CONF_EV_ENABLED)),
+        )
+
         if user_input is not None:
-            self._options[CONF_FUSE_RATING_AMPS] = user_input.get(
-                CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
-            )
-            self._options[CONF_FUSE_SAFETY_BUFFER_AMPS] = user_input.get(
-                CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
-            )
-            self._options[CONF_EMS_SELECT_ENTITY] = user_input.get(
-                CONF_EMS_SELECT_ENTITY, ""
-            )
-            self._options[CONF_CHARGE_LIMIT_ENTITY] = user_input.get(
-                CONF_CHARGE_LIMIT_ENTITY, ""
-            )
-            self._options[CONF_DISCHARGE_LIMIT_ENTITY] = user_input.get(
-                CONF_DISCHARGE_LIMIT_ENTITY, ""
-            )
-            self._options[CONF_GRID_POWER_ENTITY] = user_input.get(
-                CONF_GRID_POWER_ENTITY, ""
-            )
-            self._options[CONF_GRID_PHASE_A_ENTITY] = user_input.get(
-                CONF_GRID_PHASE_A_ENTITY, ""
-            )
-            self._options[CONF_GRID_PHASE_B_ENTITY] = user_input.get(
-                CONF_GRID_PHASE_B_ENTITY, ""
-            )
-            self._options[CONF_GRID_PHASE_C_ENTITY] = user_input.get(
-                CONF_GRID_PHASE_C_ENTITY, ""
-            )
-            self._options[CONF_PV_POWER_ENTITY] = user_input.get(
-                CONF_PV_POWER_ENTITY, ""
-            )
-            self._options[CONF_SENSOR_FAIL_BEHAVIOR] = user_input.get(
-                CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
-            )
-            self._options[CONF_ASSUMED_LOAD_AMPS] = user_input.get(
-                CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
-            )
-            self._options[CONF_MAX_ESS_CHARGE_AMPS] = user_input.get(
-                CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
-            )
-            self._options[CONF_ESS_INCREASE_DELAY] = user_input.get(
-                CONF_ESS_INCREASE_DELAY, DEFAULT_ESS_INCREASE_DELAY_SECONDS
-            )
+            apply_step_input(self._options, user_input, fields)
 
             if self._options.get(CONF_EV_ENABLED):
                 return await self.async_step_ev()
             return self.async_create_entry(data=self._options)
 
-        detected = merge_detected_with_current(
-            find_sigenstor_ems_entities(self.hass), self._options
-        )
+        auto = find_sigenstor_ems_entities(self.hass)
+        auto.update(find_sigenstor_entities(self.hass))
+        auto.update(find_house_consumption_entity(self.hass))
+        detected = merge_detected_with_current(auto, self._options)
 
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_FUSE_RATING_AMPS,
-                    default=self._options.get(
-                        CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_FUSE_RATING_AMPS,
-                        max=MAX_FUSE_RATING_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
+        schema_dict = {
+            vol.Required(
+                CONF_FUSE_RATING_AMPS,
+                default=self._options.get(
+                    CONF_FUSE_RATING_AMPS, DEFAULT_FUSE_RATING_AMPS
                 ),
-                vol.Optional(
-                    CONF_FUSE_SAFETY_BUFFER_AMPS,
-                    default=self._options.get(
-                        CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SAFETY_BUFFER_AMPS,
-                        max=MAX_SAFETY_BUFFER_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_FUSE_RATING_AMPS,
+                    max=MAX_FUSE_RATING_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_FUSE_SAFETY_BUFFER_AMPS,
+                default=self._options.get(
+                    CONF_FUSE_SAFETY_BUFFER_AMPS, DEFAULT_SAFETY_BUFFER_AMPS
                 ),
-                vol.Optional(CONF_EMS_SELECT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="select")
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_SAFETY_BUFFER_AMPS,
+                    max=MAX_SAFETY_BUFFER_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(CONF_EMS_SELECT_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="select")
+            ),
+            vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="number")
+            ),
+            vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="number")
+            ),
+            vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_GRID_PHASE_A_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_GRID_PHASE_B_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_GRID_PHASE_C_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_BATTERY_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_HOUSE_CONSUMPTION_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_EXCLUDED_POWER_ENTITIES): EntitySelector(
+                EntitySelectorConfig(domain="sensor", multiple=True)
+            ),
+            vol.Optional(
+                CONF_SENSOR_FAIL_BEHAVIOR,
+                default=self._options.get(
+                    CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
                 ),
-                vol.Optional(CONF_CHARGE_LIMIT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="number")
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
+                        SENSOR_FAIL_BEHAVIOR_BLOCK,
+                    ],
+                    translation_key="sensor_fail_behavior",
+                )
+            ),
+            vol.Optional(
+                CONF_ASSUMED_LOAD_AMPS,
+                default=self._options.get(
+                    CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
                 ),
-                vol.Optional(CONF_DISCHARGE_LIMIT_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="number")
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_ASSUMED_LOAD_AMPS,
+                    max=MAX_ASSUMED_LOAD_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_MAX_ESS_CHARGE_AMPS,
+                default=self._options.get(
+                    CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
                 ),
-                vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_GRID_PHASE_A_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_GRID_PHASE_B_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_GRID_PHASE_C_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_PV_POWER_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(
-                    CONF_SENSOR_FAIL_BEHAVIOR,
-                    default=self._options.get(
-                        CONF_SENSOR_FAIL_BEHAVIOR, DEFAULT_SENSOR_FAIL_BEHAVIOR
-                    ),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[
-                            SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
-                            SENSOR_FAIL_BEHAVIOR_BLOCK,
-                        ],
-                        translation_key="sensor_fail_behavior",
-                    )
-                ),
-                vol.Optional(
-                    CONF_ASSUMED_LOAD_AMPS,
-                    default=self._options.get(
-                        CONF_ASSUMED_LOAD_AMPS, DEFAULT_ASSUMED_LOAD_AMPS
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_ASSUMED_LOAD_AMPS,
-                        max=MAX_ASSUMED_LOAD_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
-                    CONF_MAX_ESS_CHARGE_AMPS,
-                    default=self._options.get(
-                        CONF_MAX_ESS_CHARGE_AMPS, DEFAULT_MAX_ESS_CHARGE_AMPS
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MAX_ESS_CHARGE_AMPS,
-                        max=MAX_MAX_ESS_CHARGE_AMPS,
-                        step=1,
-                        unit_of_measurement="A",
-                    )
-                ),
-                vol.Optional(
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_MAX_ESS_CHARGE_AMPS,
+                    max=MAX_MAX_ESS_CHARGE_AMPS,
+                    step=1,
+                    unit_of_measurement="A",
+                )
+            ),
+            vol.Optional(
+                CONF_ESS_INCREASE_DELAY,
+                default=self._options.get(
                     CONF_ESS_INCREASE_DELAY,
-                    default=self._options.get(
-                        CONF_ESS_INCREASE_DELAY,
-                        DEFAULT_ESS_INCREASE_DELAY_SECONDS,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_ESS_INCREASE_DELAY_SECONDS,
-                        max=MAX_ESS_INCREASE_DELAY_SECONDS,
-                        step=1,
-                        unit_of_measurement="s",
-                    )
+                    DEFAULT_ESS_INCREASE_DELAY_SECONDS,
                 ),
-            }
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=MIN_ESS_INCREASE_DELAY_SECONDS,
+                    max=MAX_ESS_INCREASE_DELAY_SECONDS,
+                    step=1,
+                    unit_of_measurement="s",
+                )
+            ),
+        }
+        schema = vol.Schema(
+            {key: val for key, val in schema_dict.items() if key.schema in fields}
         )
 
         if detected:
@@ -1419,12 +1363,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             )
             self._options[CONF_CHARGER_DEVICE_ID] = user_input.get(
                 CONF_CHARGER_DEVICE_ID, ""
-            )
-            self._options[CONF_HOUSE_CONSUMPTION_ENTITY] = user_input.get(
-                CONF_HOUSE_CONSUMPTION_ENTITY, ""
-            )
-            self._options[CONF_EXCLUDED_POWER_ENTITIES] = user_input.get(
-                CONF_EXCLUDED_POWER_ENTITIES, []
             )
             self._options[CONF_NOTIFY_SERVICE] = user_input.get(
                 CONF_NOTIFY_SERVICE, ""
@@ -1456,10 +1394,9 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             )
             return self.async_create_entry(data=self._options)
 
-        # Auto-detect Easee entities + charger device_id + house consumption;
-        # only fills fields that are not already configured
+        # Auto-detect Easee entities + charger device_id; only fills fields
+        # that are not already configured
         detected = find_easee_entities(self.hass)
-        detected.update(find_house_consumption_entity(self.hass))
         if detected.get(CONF_CHARGER_STATUS_ENTITY):
             charger_device_id = find_easee_charger_device_id(
                 self.hass, detected[CONF_CHARGER_STATUS_ENTITY]
@@ -1477,12 +1414,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                     EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Optional(CONF_CHARGER_DEVICE_ID): TextSelector(),
-                vol.Optional(CONF_HOUSE_CONSUMPTION_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_EXCLUDED_POWER_ENTITIES): EntitySelector(
-                    EntitySelectorConfig(domain="sensor", multiple=True)
-                ),
                 vol.Optional(CONF_NOTIFY_SERVICE): TextSelector(),
                 vol.Optional(
                     CONF_MIN_CHARGE_AMPS,

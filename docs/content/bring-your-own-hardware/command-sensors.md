@@ -8,7 +8,7 @@ Think of Energy Manager as the planning brain, not the hands. It reads prices, S
 
 ## How to go hardware-neutral
 
-- **Battery:** leave the *EMS mode select entity* and the *charge/discharge limit entities* empty in the Home Battery step.
+- **Battery:** leave the *EMS mode select entity* and the *charge/discharge limit entities* empty in the **Grid & Fuse Protection** step.
 - **EV:** leave the *Charger device ID* empty in the EV Charging step — Easee commands are then never sent.
 - Point the input pickers (SOC, powers, charger status) at your own hardware's sensors as usual.
 
@@ -52,7 +52,7 @@ Every command sensor carries extra attributes that explain the state — read th
 The commanded charging current sensor also carries `charger_mode` and `charger_status` (EM's internal decision mode and the raw charger status this tick) — useful context if you're debugging why a current value changed, but not part of the contract your automation needs to act on.
 
 !!! note "Export arbitrage doesn't need any SigenStor entities"
-    [Export arbitrage](../user-guide/battery-export-arbitrage.md) works without any SigenStor entities: during export slots the commanded EMS mode shows `command_discharging` and the commanded discharge limit carries the fuse-capped export power, computed from the fuse rating and safety buffer you configure in Energy Manager's options. The demotion to `max_self_consumption` only happens on real SigenStor hardware (EMS select entity configured) that is missing its discharge-limit entity, where the command would otherwise run uncapped.
+    [Export arbitrage](../user-guide/battery-export-arbitrage.md) works without any SigenStor entities: during export slots the commanded EMS mode shows `command_discharging` and the commanded discharge limit carries the fuse-capped export power, computed from the fuse rating and safety buffer you configure in Energy Manager's **Grid & Fuse Protection** options. The demotion to `max_self_consumption` only happens on real SigenStor hardware (EMS select entity configured) that is missing its discharge-limit entity, where the command would otherwise run uncapped.
 
 ## Update cadence
 

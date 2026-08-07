@@ -50,9 +50,11 @@ Two number entities feed into the economics without changing the charge/discharg
 
 **Actual Electricity Price** reports spot price plus both fees — a diagnostic sensor useful for dashboards, with no long-term statistics recorded.
 
-## EMS setup fields
+## Grid & Fuse Protection fields
 
-Configured in Step 3 of the [Setup Wizard](../getting-started/setup-wizard.md), these fields feed the EMS (Energy Management System) control layer that actually drives the battery:
+Configured in Step 4 of the [Setup Wizard](../getting-started/setup-wizard.md) — a step shared with EV Charging and Solar Appliances, not exclusive to the battery. The EMS mode select and charge/discharge limit entities below are the ones that actually drive the battery; fuse rating, the grid power / phase entities, the battery power sensor, the sensor-fail behaviour, and the assumed load are on the same step but shared with the other two modules.
+
+Battery-only installs could not reach the **House consumption sensor** before this step existed, so charge planning fell back to a fixed 0.5 kW consumption assumption. Opening **Configure** once auto-detects and stores that sensor, after which the charge deficit is planned from your measured 48-hour mean instead — which can change how many charge slots get scheduled.
 
 | Field | What it's for |
 |-------|-----------------|

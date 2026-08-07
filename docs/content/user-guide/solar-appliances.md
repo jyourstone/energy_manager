@@ -26,9 +26,19 @@ Two independent guards stop a load from chattering on and off as surplus flicker
 - **Sustain delays** — the pool must clear the on threshold continuously for the on-sustain time before turning on (filters passing clouds), and stay below the off threshold continuously for the (deliberately longer) off-sustain time before turning off.
 - **Hard minimum times** — once on, an appliance stays on for at least its minimum on time regardless of surplus; once off, it stays off for at least its minimum off time. These are absolute floors, checked independently of the sustain delays.
 
+## Grid Sensors
+
+Appliance control needs a signed grid power signal to see export, and the fuse rating to admit load. Both are configured in the shared **Grid & Fuse Protection** step of the setup wizard, and via **Configure** afterwards — it is shown even when Home Battery and EV Charging are both off.
+
+Turning the Solar Appliances module on via **Configure** continues to the Grid & Fuse Protection screen — the toggle is only saved when you submit that screen, not before.
+
+If you set this integration up before that step existed, your fuse rating is still the 20 A default. Check it on your first visit: once grid sensors are configured it becomes a live admission limit.
+
+With no grid sensors configured there is no export signal and every appliance stays off; a warning is logged once.
+
 ## Fuse Admission
 
-An appliance only turns on if its rated amps fit the live measured fuse headroom minus the safety buffer. Rated power is converted to per-phase current using the appliance's configured phase count: `rated_amps = rated_power_w / (230V × phases)`. Only *new* turn-ons are checked this way — a load already running is already part of the measured grid current, so it's never re-checked against headroom while it stays on.
+Fuse headroom is computed from the fuse rating and grid sensors described in [Grid Sensors](#grid-sensors) above. An appliance only turns on if its rated amps fit the live measured fuse headroom minus the safety buffer. Rated power is converted to per-phase current using the appliance's configured phase count: `rated_amps = rated_power_w / (230V × phases)`. Only *new* turn-ons are checked this way — a load already running is already part of the measured grid current, so it's never re-checked against headroom while it stays on.
 
 ## Observe-Only Gating
 
