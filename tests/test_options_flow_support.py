@@ -170,6 +170,10 @@ class TestPromotedTuningTranslationKeys:
         ("number", "appliance_off_threshold"),
         ("number", "appliance_on_sustain"),
         ("number", "appliance_off_sustain"),
+        ("number", "battery_charge_buffer"),
+        ("number", "battery_production_factor"),
+        ("number", "battery_estimated_charge_power"),
+        ("number", "battery_peak_gap_hours"),
     )
     _RETIRED_APPLIANCE_RECONFIGURE_KEYS = (
         "priority",
@@ -177,6 +181,12 @@ class TestPromotedTuningTranslationKeys:
         "off_threshold_pct",
         "on_sustain_minutes",
         "off_sustain_minutes",
+    )
+    _RETIRED_OPTIONS_BATTERY_KEYS = (
+        "charge_buffer_pct",
+        "production_factor",
+        "estimated_charge_power_kw",
+        "peak_gap_hours",
     )
 
     @pytest.mark.parametrize(
@@ -221,3 +231,23 @@ class TestPromotedTuningTranslationKeys:
         step = content["config_subentries"]["appliance"]["step"]["user"]
         for key in self._RETIRED_APPLIANCE_RECONFIGURE_KEYS:
             assert key in step["data"], f"{key} seed missing in {filename}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_options_battery_fields_retired(self, filename: str) -> None:
+        """Battery tuning fields stay out of the options-flow battery form."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        step = content["options"]["step"]["battery"]
+        for section in ("data", "data_description"):
+            for key in self._RETIRED_OPTIONS_BATTERY_KEYS:
+                assert key not in step.get(section, {}), (
+                    f"{key} should be retired from {filename}"
+                )
+        # The config-flow wizard step keeps them as seeds.
+        wizard = content["config"]["step"]["battery"]
+        for key in self._RETIRED_OPTIONS_BATTERY_KEYS:
+            assert key in wizard["data"], f"{key} seed missing in {filename}"

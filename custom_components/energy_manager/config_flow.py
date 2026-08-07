@@ -1187,18 +1187,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             self._options[CONF_FORECAST_SOLAR_ENTITY] = user_input.get(
                 CONF_FORECAST_SOLAR_ENTITY, []
             )
-            self._options[CONF_CHARGE_BUFFER_PCT] = user_input.get(
-                CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
-            )
-            self._options[CONF_PRODUCTION_FACTOR] = user_input.get(
-                CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
-            )
-            self._options[CONF_ESTIMATED_CHARGE_POWER_KW] = user_input.get(
-                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
-            )
-            self._options[CONF_PEAK_GAP_HOURS] = user_input.get(
-                CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
-            )
 
             # Route to EMS step (battery is enabled, so EMS config is relevant)
             return await self.async_step_ems()
@@ -1227,58 +1215,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                 ),
                 vol.Optional(CONF_FORECAST_SOLAR_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor", multiple=True)
-                ),
-                vol.Optional(
-                    CONF_CHARGE_BUFFER_PCT,
-                    default=self._options.get(
-                        CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_CHARGE_BUFFER_PCT,
-                        max=MAX_CHARGE_BUFFER_PCT,
-                        step=1,
-                        unit_of_measurement="%",
-                    )
-                ),
-                vol.Optional(
-                    CONF_PRODUCTION_FACTOR,
-                    default=self._options.get(
-                        CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_PRODUCTION_FACTOR,
-                        max=MAX_PRODUCTION_FACTOR,
-                        step=0.05,
-                    )
-                ),
-                vol.Optional(
-                    CONF_ESTIMATED_CHARGE_POWER_KW,
-                    default=self._options.get(
-                        CONF_ESTIMATED_CHARGE_POWER_KW,
-                        DEFAULT_ESTIMATED_CHARGE_POWER_KW,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_ESTIMATED_CHARGE_POWER_KW,
-                        max=MAX_ESTIMATED_CHARGE_POWER_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
-                    CONF_PEAK_GAP_HOURS,
-                    default=self._options.get(
-                        CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_PEAK_GAP_HOURS,
-                        max=MAX_PEAK_GAP_HOURS,
-                        step=0.5,
-                        unit_of_measurement="h",
-                    )
                 ),
             }
         )

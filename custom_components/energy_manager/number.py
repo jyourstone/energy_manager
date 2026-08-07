@@ -33,11 +33,15 @@ from .const import (
     CONF_APPLIANCE_ON_THRESHOLD_PCT,
     CONF_APPLIANCE_PRIORITY,
     CONF_BATTERY_CYCLE_COST,
+    CONF_CHARGE_BUFFER_PCT,
     CONF_ELECTRICITY_COMPANY_FEE,
+    CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EXPORT_RESERVE_SOC_PCT,
     CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_GRID_TRANSFER_FEE,
     CONF_MAX_CHARGE_POWER,
+    CONF_PEAK_GAP_HOURS,
+    CONF_PRODUCTION_FACTOR,
     DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
     DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
     DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
@@ -46,22 +50,34 @@ from .const import (
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
+    DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_DISCHARGE_THRESHOLD,
     DEFAULT_ELECTRICITY_COMPANY_FEE,
+    DEFAULT_ESTIMATED_CHARGE_POWER_KW,
     DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_SOC_PCT,
+    DEFAULT_PEAK_GAP_HOURS,
+    DEFAULT_PRODUCTION_FACTOR,
     DEFAULT_TARGET_SOC_PCT,
     MAX_CAR_MAX_CHARGE_POWER_KW,
+    MAX_CHARGE_BUFFER_PCT,
     MAX_CHARGE_POWER_KW,
+    MAX_ESTIMATED_CHARGE_POWER_KW,
     MAX_EXPORT_SPIKE_THRESHOLD,
+    MAX_PEAK_GAP_HOURS,
     MAX_PRICE_THRESHOLD,
+    MAX_PRODUCTION_FACTOR,
     MAX_TARGET_SOC_PCT,
     MIN_CAR_MAX_CHARGE_POWER_KW,
+    MIN_CHARGE_BUFFER_PCT,
     MIN_CHARGE_POWER_KW,
+    MIN_ESTIMATED_CHARGE_POWER_KW,
+    MIN_PEAK_GAP_HOURS,
     MIN_PRICE_THRESHOLD,
+    MIN_PRODUCTION_FACTOR,
     MIN_TARGET_SOC_PCT,
     PRICE_THRESHOLD_STEP,
     SUBENTRY_TYPE_APPLIANCE,
@@ -100,6 +116,10 @@ async def async_setup_entry(
             ExportSpikeThreshold(battery_coordinator, entry),
             ExportReserveSoc(battery_coordinator, entry),
             BatteryMaxSocTarget(battery_coordinator, entry),
+            BatteryChargeBuffer(battery_coordinator, entry),
+            BatteryProductionFactor(battery_coordinator, entry),
+            BatteryEstimatedChargePower(battery_coordinator, entry),
+            BatteryPeakGapHours(battery_coordinator, entry),
         ])
 
     # Car number entities (one set per car subentry)
@@ -923,3 +943,222 @@ class ApplianceOffSustain(ApplianceTuningNumber):
     _tuning_field = "off_sustain_s"
     _default_value = DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES
     _scale = 60
+
+
+class BatteryChargeBuffer(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the BATT-15 charge buffer percentage.
+
+    Extra energy planned on top of the forecast deficit when sizing
+    cheap-hour grid charging. Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "battery_charge_buffer"
+    _attr_native_min_value = MIN_CHARGE_BUFFER_PCT
+    _attr_native_max_value = MAX_CHARGE_BUFFER_PCT
+    _attr_native_step = 1.0
+    _attr_native_unit_of_measurement = "%"
+
+    _default_value = DEFAULT_CHARGE_BUFFER_PCT
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the charge buffer entity."""
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_charge_buffer_pct"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_CHARGE_BUFFER_PCT, self._default_value
+                )
+            )
+        self.coordinator.charge_buffer_pct = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the charge buffer and trigger schedule recalculation.
+
+        Args:
+            value: New charge buffer in percent.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.charge_buffer_pct = value
+        await self.coordinator.async_request_refresh()
+
+
+class BatteryProductionFactor(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the BATT-15 solar production factor.
+
+    Multiplier applied to the raw solar forecast before planning. Value
+    persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "battery_production_factor"
+    _attr_native_min_value = MIN_PRODUCTION_FACTOR
+    _attr_native_max_value = MAX_PRODUCTION_FACTOR
+    _attr_native_step = 0.05
+
+    _default_value = DEFAULT_PRODUCTION_FACTOR
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the production factor entity."""
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_production_factor"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_PRODUCTION_FACTOR, self._default_value
+                )
+            )
+        self.coordinator.production_factor = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the production factor and trigger schedule recalculation.
+
+        Args:
+            value: New solar production factor multiplier.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.production_factor = value
+        await self.coordinator.async_request_refresh()
+
+
+class BatteryEstimatedChargePower(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the BATT-15 estimated charge power.
+
+    Assumed charge power when converting energy need to slot count.
+    Value persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "battery_estimated_charge_power"
+    _attr_native_min_value = MIN_ESTIMATED_CHARGE_POWER_KW
+    _attr_native_max_value = MAX_ESTIMATED_CHARGE_POWER_KW
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "kW"
+
+    _default_value = DEFAULT_ESTIMATED_CHARGE_POWER_KW
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the estimated charge power entity."""
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_estimated_charge_power_kw"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_ESTIMATED_CHARGE_POWER_KW, self._default_value
+                )
+            )
+        self.coordinator.estimated_charge_power_kw = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the estimated charge power and trigger schedule recalculation.
+
+        Args:
+            value: New estimated charge power in kW.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.estimated_charge_power_kw = value
+        await self.coordinator.async_request_refresh()
+
+
+class BatteryPeakGapHours(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the BATT-15 minimum peak gap.
+
+    Minimum gap between price peaks treated as separate peaks. Value
+    persists across restarts.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "battery_peak_gap_hours"
+    _attr_native_min_value = MIN_PEAK_GAP_HOURS
+    _attr_native_max_value = MAX_PEAK_GAP_HOURS
+    _attr_native_step = 0.5
+    _attr_native_unit_of_measurement = "h"
+
+    _default_value = DEFAULT_PEAK_GAP_HOURS
+
+    def __init__(
+        self,
+        coordinator: BatteryScheduleCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the peak gap hours entity."""
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_peak_gap_hours"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_PEAK_GAP_HOURS, self._default_value
+                )
+            )
+        self.coordinator.peak_gap_hours = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the peak gap hours and trigger schedule recalculation.
+
+        Args:
+            value: New minimum peak gap in hours.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.peak_gap_hours = value
+        await self.coordinator.async_request_refresh()

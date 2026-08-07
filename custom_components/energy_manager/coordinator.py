@@ -89,7 +89,6 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
     CONF_CAR_NAME,
-    CONF_CHARGE_BUFFER_PCT,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_DEVICE_ID,
@@ -99,7 +98,6 @@ from .const import (
     CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
-    CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EXCLUDED_POWER_ENTITIES,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
@@ -117,10 +115,8 @@ from .const import (
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_NOTIFY_SERVICE,
-    CONF_PEAK_GAP_HOURS,
     CONF_PHASE_CAPABILITY,
     CONF_PHASE_SWITCH_THRESHOLD_KW,
-    CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
@@ -568,6 +564,12 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # knobs; 0 = feature off
         self.export_spike_threshold: float = 0.0
         self.export_reserve_soc_pct: float = DEFAULT_EXPORT_RESERVE_SOC_PCT
+        # BATT-15 tuning knobs -- set by number entities (seeded from the
+        # wizard's options on first add), read on every refresh below.
+        self.charge_buffer_pct: float = DEFAULT_CHARGE_BUFFER_PCT
+        self.production_factor: float = DEFAULT_PRODUCTION_FACTOR
+        self.estimated_charge_power_kw: float = DEFAULT_ESTIMATED_CHARGE_POWER_KW
+        self.peak_gap_hours: float = DEFAULT_PEAK_GAP_HOURS
         self.max_soc_pct: float = DEFAULT_MAX_SOC_PCT
 
         # BATT-14 economics -- updated by NumberEntity instances after setup
@@ -712,22 +714,15 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         solar_forecast_remaining_wh = self._get_solar_forecast_remaining_wh()
         solar_forecast_tomorrow_wh = self._get_solar_forecast_tomorrow_wh()
 
-        # 5. Read battery capacity and BATT-15 tuning options from entry options
+        # 5. Read battery capacity from entry options and BATT-15 tuning
+        #    from the number-entity knobs
         battery_capacity_kwh = self.config_entry.options.get(
             CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH
         )
-        charge_buffer_pct = self.config_entry.options.get(
-            CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
-        )
-        production_factor = self.config_entry.options.get(
-            CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
-        )
-        estimated_charge_power_kw = self.config_entry.options.get(
-            CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
-        )
-        peak_gap_hours = self.config_entry.options.get(
-            CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
-        )
+        charge_buffer_pct = self.charge_buffer_pct
+        production_factor = self.production_factor
+        estimated_charge_power_kw = self.estimated_charge_power_kw
+        peak_gap_hours = self.peak_gap_hours
 
         # 5b. BATT-17 export arbitrage inputs -- number-entity knobs like
         #     the sibling thresholds; 0 means the feature is OFF

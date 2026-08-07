@@ -307,21 +307,13 @@
           "soc_entity": "Sensor för batteriets laddningsnivå",
           "battery_power_entity": "Sensor för batterieffekt",
           "battery_capacity_kwh": "Batterikapacitet (kWh)",
-          "forecast_solar_entity": "Sensorer för solprognos",
-          "charge_buffer_pct": "Laddningsbuffert (%)",
-          "production_factor": "Solprognosfaktor",
-          "estimated_charge_power_kw": "Uppskattad laddningseffekt (kW)",
-          "peak_gap_hours": "Gap mellan toppar (h)"
+          "forecast_solar_entity": "Sensorer för solprognos"
         },
         "data_description": {
           "soc_entity": "Sensor som visar batteriets laddningsnivå (%).",
           "battery_power_entity": "Sensor som visar batteriets effekt (W).",
           "battery_capacity_kwh": "Total användbar batterikapacitet i kWh.",
-          "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns.",
-          "charge_buffer_pct": "Extra procentandel som läggs till beräknat laddningsbehov innan laddningstillfällen schemaläggs.",
-          "production_factor": "Multiplikator som appliceras på solprognosens värde för att kompensera för optimistiska prognoser (1.0 = lita helt på prognosen).",
-          "estimated_charge_power_kw": "Antagen laddningshastighet som används för att beräkna hur många tillfällen som behövs för att täcka ett laddningsbehov (begränsas av entiteten för max laddningseffekt).",
-          "peak_gap_hours": "Maximalt gap mellan dyra timmar för att fortfarande räknas som samma urladdningstopp."
+          "forecast_solar_entity": "Valfria Forecast.Solar-sensorer för återstående produktion idag, för solprognosbaserad schemaläggning -- välj en eller flera (t.ex. öst- och västarrayer); deras värden summeras. Lämna tomt om de inte finns."
         }
       },
       "ems": {
@@ -517,7 +509,11 @@
       "appliance_on_threshold": {"name": "Tillslagströskel"},
       "appliance_off_threshold": {"name": "Frånslagströskel"},
       "appliance_on_sustain": {"name": "Uthållighet före tillslag"},
-      "appliance_off_sustain": {"name": "Uthållighet före frånslag"}
+      "appliance_off_sustain": {"name": "Uthållighet före frånslag"},
+      "battery_charge_buffer": {"name": "Laddbuffert"},
+      "battery_production_factor": {"name": "Produktionsfaktor sol"},
+      "battery_estimated_charge_power": {"name": "Beräknad laddeffekt"},
+      "battery_peak_gap_hours": {"name": "Minsta gap mellan pristoppar"}
     },
     "time": {
       "departure_time": {
