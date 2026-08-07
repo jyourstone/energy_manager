@@ -89,6 +89,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
     CONF_CAR_NAME,
+    CONF_CHARGE_BUFFER_PCT,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_DEVICE_ID,
@@ -98,6 +99,7 @@ from .const import (
     CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
+    CONF_ESTIMATED_CHARGE_POWER_KW,
     CONF_EXCLUDED_POWER_ENTITIES,
     CONF_FORECAST_SOLAR_ENTITY,
     CONF_FUSE_RATING_AMPS,
@@ -115,8 +117,10 @@ from .const import (
     CONF_NORDPOOL_SENSOR,
     CONF_NORDPOOL_TYPE,
     CONF_NOTIFY_SERVICE,
+    CONF_PEAK_GAP_HOURS,
     CONF_PHASE_CAPABILITY,
     CONF_PHASE_SWITCH_THRESHOLD_KW,
+    CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
@@ -564,12 +568,25 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # knobs; 0 = feature off
         self.export_spike_threshold: float = 0.0
         self.export_reserve_soc_pct: float = DEFAULT_EXPORT_RESERVE_SOC_PCT
-        # BATT-15 tuning knobs -- set by number entities (seeded from the
-        # wizard's options on first add), read on every refresh below.
-        self.charge_buffer_pct: float = DEFAULT_CHARGE_BUFFER_PCT
-        self.production_factor: float = DEFAULT_PRODUCTION_FACTOR
-        self.estimated_charge_power_kw: float = DEFAULT_ESTIMATED_CHARGE_POWER_KW
-        self.peak_gap_hours: float = DEFAULT_PEAK_GAP_HOURS
+        # BATT-15 tuning knobs -- owned by number entities after setup, but
+        # initialized from the options seed so the first refresh after a
+        # restart (which runs BEFORE the number platform restores) plans
+        # with the configured values rather than defaults -- the same
+        # window EaseeCoordinator covers with its options reads.
+        self.charge_buffer_pct: float = float(
+            entry.options.get(CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT)
+        )
+        self.production_factor: float = float(
+            entry.options.get(CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR)
+        )
+        self.estimated_charge_power_kw: float = float(
+            entry.options.get(
+                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
+            )
+        )
+        self.peak_gap_hours: float = float(
+            entry.options.get(CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS)
+        )
         self.max_soc_pct: float = DEFAULT_MAX_SOC_PCT
 
         # BATT-14 economics -- updated by NumberEntity instances after setup
@@ -3822,30 +3839,25 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
         # One-time log guard: no grid sensors means no export signal at all.
         self._export_signal_warned = False
 
+        # Appliances currently running with a clamped hysteresis band --
+        # warn once on entry into the clamped state, reset when the
+        # thresholds become valid again (avoids a warning every 30s tick).
+        self._clamped_warned: set[str] = set()
+
     def set_appliance_tuning(self, subentry_id: str, **updates: int) -> None:
         """Apply a live tuning override from a per-appliance number entity.
 
         Replaces the matching frozen ApplianceConfig snapshot in place --
         list position is preserved, so priority ties keep their insertion
-        order. The hysteresis band is re-clamped after every update
-        because the number entities set the on/off thresholds
-        independently of each other.
+        order. Values are stored RAW: the hysteresis band is clamped at
+        consume time each tick (not here), so the stored config always
+        matches the entity states and a later on-threshold change
+        re-validates the pair automatically.
         """
         for index, config in enumerate(self._configs):
             if config.subentry_id != subentry_id:
                 continue
-            updated = replace(config, **updates)
-            clamped = clamp_hysteresis(updated)
-            if clamped is not updated:
-                _LOGGER.warning(
-                    "Appliance %s: off threshold (%s%%) must stay below on"
-                    " threshold (%s%%); clamping off threshold to %s%%",
-                    config.name,
-                    updated.off_threshold_pct,
-                    updated.on_threshold_pct,
-                    clamped.off_threshold_pct,
-                )
-            self._configs[index] = clamped
+            self._configs[index] = replace(config, **updates)
             return
 
     async def async_set_em_control(self, subentry_id: str, enabled: bool) -> None:
@@ -3888,7 +3900,25 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
         headroom_amps = self._compute_headroom_amps()
 
         items: list[tuple[ApplianceConfig, ApplianceInputs, ApplianceTracker]] = []
-        for config in self._configs:
+        for raw_config in self._configs:
+            # Hysteresis clamp at consume time: stored configs keep the raw
+            # entity values, so the pair self-heals when either threshold
+            # is corrected (APPL-05 invariant lives in clamp_hysteresis).
+            config = clamp_hysteresis(raw_config)
+            if config is not raw_config:
+                if raw_config.subentry_id not in self._clamped_warned:
+                    self._clamped_warned.add(raw_config.subentry_id)
+                    _LOGGER.warning(
+                        "Appliance %s: off threshold (%s%%) must stay below"
+                        " on threshold (%s%%); using %s%% until the"
+                        " thresholds are corrected",
+                        raw_config.name,
+                        raw_config.off_threshold_pct,
+                        raw_config.on_threshold_pct,
+                        config.off_threshold_pct,
+                    )
+            else:
+                self._clamped_warned.discard(raw_config.subentry_id)
             inputs = self._read_appliance_inputs(config)
             tracker = self._trackers.get(config.subentry_id)
             if tracker is None:
