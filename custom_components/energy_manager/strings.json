@@ -364,14 +364,11 @@
           "notify_service": "Notification service",
           "min_charge_amps": "Minimum charging current (A)",
           "max_charge_amps": "Maximum charging current (A)",
-          "max_grid_charge_power_kw": "Maximum grid charging power (kW)",
           "amp_increase_delay": "Charging current increase delay (s)",
           "amp_decrease_delay": "Charging current decrease delay (s)",
           "phase_switch_threshold_kw": "3-phase switch threshold (kW)",
-          "solar_start_threshold_kw": "Solar charging start threshold (kW)",
           "solar_activation_delay": "Solar charging activation delay (s)",
           "solar_deactivation_delay": "Solar charging deactivation delay (s)",
-          "battery_soc_gate_pct": "Battery SOC gate for solar charging (%)",
           "emergency_margin_amps": "Emergency overload margin (A)"
         },
         "data_description": {
@@ -383,14 +380,11 @@
           "notify_service": "Optional notify service (e.g. 'notify.mobile_app_x') for safety notifications. Leave empty to disable notifications.",
           "min_charge_amps": "Advanced: the lowest current the charger will ever be set to (Easee minimum is 6A).",
           "max_charge_amps": "Advanced: the highest current the charger will ever be set to.",
-          "max_grid_charge_power_kw": "Advanced: absolute grid charging power ceiling.",
           "amp_increase_delay": "Advanced: how long a higher charging current must stay stable before it is applied.",
           "amp_decrease_delay": "Advanced: how long a lower charging current must stay stable before it is applied. Always much shorter than the increase delay -- this is a safety property.",
           "phase_switch_threshold_kw": "Advanced: available power below which the charger switches to single-phase charging.",
-          "solar_start_threshold_kw": "Advanced: minimum net solar surplus to start opportunistic solar charging.",
           "solar_activation_delay": "Advanced: how long solar surplus must be continuously available before solar charging activates.",
           "solar_deactivation_delay": "Advanced: how long solar surplus must be continuously unavailable before solar charging deactivates.",
-          "battery_soc_gate_pct": "Advanced: minimum house battery charge level before solar charging is allowed to divert surplus to the car.",
           "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
         }
       }
@@ -513,7 +507,10 @@
       "battery_charge_buffer": {"name": "Charge buffer"},
       "battery_production_factor": {"name": "Solar production factor"},
       "battery_estimated_charge_power": {"name": "Estimated charge power"},
-      "battery_peak_gap_hours": {"name": "Minimum peak gap"}
+      "battery_peak_gap_hours": {"name": "Minimum peak gap"},
+      "ev_max_grid_charge_power": {"name": "Max grid charge power"},
+      "ev_solar_start_threshold": {"name": "Solar start threshold"},
+      "ev_battery_soc_gate": {"name": "Battery SOC gate"}
     },
     "time": {
       "departure_time": {

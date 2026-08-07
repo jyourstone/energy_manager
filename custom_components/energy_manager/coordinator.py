@@ -3211,7 +3211,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         self._max_amps: float = float(
             entry.options.get(CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS)
         )
-        self._grid_power_cap_kw: float = float(
+        self.grid_power_cap_kw: float = float(
             entry.options.get(
                 CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
             )
@@ -3244,7 +3244,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
             )
         )
-        self._solar_start_threshold_kw: float = float(
+        self.solar_start_threshold_kw: float = float(
             entry.options.get(
                 CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
             )
@@ -3259,7 +3259,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 CONF_SOLAR_DEACTIVATION_DELAY, DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS
             )
         )
-        self._battery_soc_gate_pct: float = float(
+        self.battery_soc_gate_pct: float = float(
             entry.options.get(
                 CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
             )
@@ -3378,14 +3378,14 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             conversion_factor_1phase=DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
             conversion_factor_2phase=DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
             conversion_factor_3phase=DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
-            grid_power_cap_kw=self._grid_power_cap_kw,
+            grid_power_cap_kw=self.grid_power_cap_kw,
             grid_power_safety_buffer_kw=DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
             phase_switch_threshold_kw=self._phase_switch_threshold_kw,
-            solar_start_threshold_kw=self._solar_start_threshold_kw,
+            solar_start_threshold_kw=self.solar_start_threshold_kw,
             solar_safety_buffer_kw=DEFAULT_SOLAR_SAFETY_BUFFER_KW,
             solar_activation_delay_s=self._solar_activation_delay_s,
             solar_deactivation_delay_s=self._solar_deactivation_delay_s,
-            battery_soc_gate_pct=self._battery_soc_gate_pct,
+            battery_soc_gate_pct=self.battery_soc_gate_pct,
             soc_round_up=DEFAULT_SOC_ROUND_UP,
             emergency_margin_amps=self._emergency_margin_amps,
             amp_increase_delay_s=self._amp_increase_delay_s,

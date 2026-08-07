@@ -364,14 +364,11 @@
           "notify_service": "Aviseringstjänst",
           "min_charge_amps": "Minsta laddström (A)",
           "max_charge_amps": "Högsta laddström (A)",
-          "max_grid_charge_power_kw": "Max laddeffekt från elnätet (kW)",
           "amp_increase_delay": "Fördröjning vid höjning av laddström (s)",
           "amp_decrease_delay": "Fördröjning vid sänkning av laddström (s)",
           "phase_switch_threshold_kw": "Tröskel för växling till 3-fas (kW)",
-          "solar_start_threshold_kw": "Tröskel för start av solladdning (kW)",
           "solar_activation_delay": "Fördröjning vid aktivering av solladdning (s)",
           "solar_deactivation_delay": "Fördröjning vid avaktivering av solladdning (s)",
-          "battery_soc_gate_pct": "Batterinivå som krävs för solladdning (%)",
           "emergency_margin_amps": "Marginal för nödstopp vid överlast (A)"
         },
         "data_description": {
@@ -383,14 +380,11 @@
           "notify_service": "Valfri aviseringstjänst (t.ex. 'notify.mobile_app_x') för säkerhetsaviseringar. Lämna tomt för att inaktivera aviseringar.",
           "min_charge_amps": "Avancerat: den lägsta ström laddaren någonsin ställs in på (Easees minimum är 6A).",
           "max_charge_amps": "Avancerat: den högsta ström laddaren någonsin ställs in på.",
-          "max_grid_charge_power_kw": "Avancerat: absolut gräns för laddeffekt från elnätet.",
           "amp_increase_delay": "Avancerat: hur länge en högre laddström måste vara stabil innan den tillämpas.",
           "amp_decrease_delay": "Avancerat: hur länge en lägre laddström måste vara stabil innan den tillämpas. Alltid mycket kortare än höjningsfördröjningen -- detta är en säkerhetsegenskap.",
           "phase_switch_threshold_kw": "Avancerat: tillgänglig effekt under vilken laddaren växlar till enfasladdning.",
-          "solar_start_threshold_kw": "Avancerat: minsta nettosolöverskott för att starta solladdning.",
           "solar_activation_delay": "Avancerat: hur länge solöverskott måste finnas kontinuerligt innan solladdning aktiveras.",
           "solar_deactivation_delay": "Avancerat: hur länge solöverskott måste saknas kontinuerligt innan solladdning avaktiveras.",
-          "battery_soc_gate_pct": "Avancerat: lägsta batterinivå i hembatteriet innan solladdning tillåts avleda överskott till bilen.",
           "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser nödpaus och avisering."
         }
       }
@@ -513,7 +507,10 @@
       "battery_charge_buffer": {"name": "Laddbuffert"},
       "battery_production_factor": {"name": "Produktionsfaktor sol"},
       "battery_estimated_charge_power": {"name": "Beräknad laddeffekt"},
-      "battery_peak_gap_hours": {"name": "Minsta gap mellan pristoppar"}
+      "battery_peak_gap_hours": {"name": "Minsta gap mellan pristoppar"},
+      "ev_max_grid_charge_power": {"name": "Max nätladdningseffekt"},
+      "ev_solar_start_threshold": {"name": "Tröskel för solladdning"},
+      "ev_battery_soc_gate": {"name": "Batterinivågräns för solladdning"}
     },
     "time": {
       "departure_time": {

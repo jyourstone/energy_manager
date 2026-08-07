@@ -33,6 +33,7 @@ from .const import (
     CONF_APPLIANCE_ON_THRESHOLD_PCT,
     CONF_APPLIANCE_PRIORITY,
     CONF_BATTERY_CYCLE_COST,
+    CONF_BATTERY_SOC_GATE_PCT,
     CONF_CHARGE_BUFFER_PCT,
     CONF_ELECTRICITY_COMPANY_FEE,
     CONF_ESTIMATED_CHARGE_POWER_KW,
@@ -40,14 +41,17 @@ from .const import (
     CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_GRID_TRANSFER_FEE,
     CONF_MAX_CHARGE_POWER,
+    CONF_MAX_GRID_CHARGE_POWER_KW,
     CONF_PEAK_GAP_HOURS,
     CONF_PRODUCTION_FACTOR,
+    CONF_SOLAR_START_THRESHOLD_KW,
     DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
     DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
     DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
     DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
     DEFAULT_APPLIANCE_PRIORITY,
     DEFAULT_BATTERY_CYCLE_COST,
+    DEFAULT_BATTERY_SOC_GATE_PCT,
     DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
     DEFAULT_CHARGE_BUFFER_PCT,
@@ -58,26 +62,34 @@ from .const import (
     DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_GRID_TRANSFER_FEE,
     DEFAULT_MAX_CHARGE_POWER_KW,
+    DEFAULT_MAX_GRID_CHARGE_POWER_KW,
     DEFAULT_MAX_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
     DEFAULT_PRODUCTION_FACTOR,
+    DEFAULT_SOLAR_START_THRESHOLD_KW,
     DEFAULT_TARGET_SOC_PCT,
+    MAX_BATTERY_SOC_GATE_PCT,
     MAX_CAR_MAX_CHARGE_POWER_KW,
     MAX_CHARGE_BUFFER_PCT,
     MAX_CHARGE_POWER_KW,
     MAX_ESTIMATED_CHARGE_POWER_KW,
     MAX_EXPORT_SPIKE_THRESHOLD,
+    MAX_MAX_GRID_CHARGE_POWER_KW,
     MAX_PEAK_GAP_HOURS,
     MAX_PRICE_THRESHOLD,
     MAX_PRODUCTION_FACTOR,
+    MAX_SOLAR_START_THRESHOLD_KW,
     MAX_TARGET_SOC_PCT,
+    MIN_BATTERY_SOC_GATE_PCT,
     MIN_CAR_MAX_CHARGE_POWER_KW,
     MIN_CHARGE_BUFFER_PCT,
     MIN_CHARGE_POWER_KW,
     MIN_ESTIMATED_CHARGE_POWER_KW,
+    MIN_MAX_GRID_CHARGE_POWER_KW,
     MIN_PEAK_GAP_HOURS,
     MIN_PRICE_THRESHOLD,
     MIN_PRODUCTION_FACTOR,
+    MIN_SOLAR_START_THRESHOLD_KW,
     MIN_TARGET_SOC_PCT,
     PRICE_THRESHOLD_STEP,
     SUBENTRY_TYPE_APPLIANCE,
@@ -120,6 +132,15 @@ async def async_setup_entry(
             BatteryProductionFactor(battery_coordinator, entry),
             BatteryEstimatedChargePower(battery_coordinator, entry),
             BatteryPeakGapHours(battery_coordinator, entry),
+        ])
+
+    # EV charger tuning entities (when the EV module is enabled)
+    easee_coordinator = entry.runtime_data.easee_coordinator
+    if easee_coordinator is not None:
+        async_add_entities([
+            EvMaxGridChargePower(easee_coordinator, entry),
+            EvSolarStartThreshold(easee_coordinator, entry),
+            EvBatterySocGate(easee_coordinator, entry),
         ])
 
     # Car number entities (one set per car subentry)
@@ -1161,4 +1182,188 @@ class BatteryPeakGapHours(EnergyManagerEntity, RestoreNumber):
         self._attr_native_value = value
         self.async_write_ha_state()
         self.coordinator.peak_gap_hours = value
+        await self.coordinator.async_request_refresh()
+
+
+class EvMaxGridChargePower(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the EV grid-charging power cap.
+
+    Ceiling on total grid power the charger may draw during scheduled
+    (price-based) charging. Value persists across restarts and applies
+    on the next charger tick -- no reload, so an active session's state
+    machine is never torn down.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "ev_max_grid_charge_power"
+    _attr_native_min_value = MIN_MAX_GRID_CHARGE_POWER_KW
+    _attr_native_max_value = MAX_MAX_GRID_CHARGE_POWER_KW
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "kW"
+
+    _default_value = DEFAULT_MAX_GRID_CHARGE_POWER_KW
+
+    def __init__(
+        self,
+        coordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the grid charge power cap entity.
+
+        Args:
+            coordinator: The EaseeCoordinator running the charger loop.
+            entry: The config entry this entity belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_max_grid_charge_power_kw"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_MAX_GRID_CHARGE_POWER_KW, self._default_value
+                )
+            )
+        self.coordinator.grid_power_cap_kw = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the power cap; applies on the next charger tick.
+
+        Args:
+            value: New grid charging power cap in kW.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.grid_power_cap_kw = value
+        await self.coordinator.async_request_refresh()
+
+
+class EvSolarStartThreshold(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the EV solar charging start threshold.
+
+    Minimum net solar surplus before solar charging starts. Value
+    persists across restarts and applies on the next charger tick -- no
+    reload, so an active session's state machine is never torn down.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "ev_solar_start_threshold"
+    _attr_native_min_value = MIN_SOLAR_START_THRESHOLD_KW
+    _attr_native_max_value = MAX_SOLAR_START_THRESHOLD_KW
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "kW"
+
+    _default_value = DEFAULT_SOLAR_START_THRESHOLD_KW
+
+    def __init__(
+        self,
+        coordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the solar start threshold entity.
+
+        Args:
+            coordinator: The EaseeCoordinator running the charger loop.
+            entry: The config entry this entity belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_solar_start_threshold_kw"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_SOLAR_START_THRESHOLD_KW, self._default_value
+                )
+            )
+        self.coordinator.solar_start_threshold_kw = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the solar start threshold; applies on the next charger tick.
+
+        Args:
+            value: New minimum net solar surplus in kW.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.solar_start_threshold_kw = value
+        await self.coordinator.async_request_refresh()
+
+
+class EvBatterySocGate(EnergyManagerEntity, RestoreNumber):
+    """Number entity for the EV battery SOC gate.
+
+    Minimum house-battery SOC before solar EV charging starts. Value
+    persists across restarts and applies on the next charger tick -- no
+    reload, so an active session's state machine is never torn down.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
+    _attr_translation_key = "ev_battery_soc_gate"
+    _attr_native_min_value = MIN_BATTERY_SOC_GATE_PCT
+    _attr_native_max_value = MAX_BATTERY_SOC_GATE_PCT
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "%"
+
+    _default_value = DEFAULT_BATTERY_SOC_GATE_PCT
+
+    def __init__(
+        self,
+        coordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize the battery SOC gate entity.
+
+        Args:
+            coordinator: The EaseeCoordinator running the charger loop.
+            entry: The config entry this entity belongs to.
+        """
+        super().__init__(coordinator, entry)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_battery_soc_gate_pct"
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value on startup, or use the options seed/default."""
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
+        else:
+            self._attr_native_value = float(
+                self._entry.options.get(
+                    CONF_BATTERY_SOC_GATE_PCT, self._default_value
+                )
+            )
+        self.coordinator.battery_soc_gate_pct = self._attr_native_value
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the battery SOC gate; applies on the next charger tick.
+
+        Args:
+            value: New minimum house-battery SOC in percent.
+        """
+        self._attr_native_value = value
+        self.async_write_ha_state()
+        self.coordinator.battery_soc_gate_pct = value
         await self.coordinator.async_request_refresh()

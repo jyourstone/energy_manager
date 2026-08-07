@@ -1435,17 +1435,8 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             self._options[CONF_MAX_CHARGE_AMPS] = user_input.get(
                 CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS
             )
-            self._options[CONF_MAX_GRID_CHARGE_POWER_KW] = user_input.get(
-                CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
-            )
             self._options[CONF_PHASE_SWITCH_THRESHOLD_KW] = user_input.get(
                 CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
-            )
-            self._options[CONF_SOLAR_START_THRESHOLD_KW] = user_input.get(
-                CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
-            )
-            self._options[CONF_BATTERY_SOC_GATE_PCT] = user_input.get(
-                CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
             )
             self._options[CONF_AMP_INCREASE_DELAY] = user_input.get(
                 CONF_AMP_INCREASE_DELAY, DEFAULT_AMP_INCREASE_DELAY_SECONDS
@@ -1519,20 +1510,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                         unit_of_measurement="A",
                     )
                 ),
-                vol.Optional(
-                    CONF_MAX_GRID_CHARGE_POWER_KW,
-                    default=self._options.get(
-                        CONF_MAX_GRID_CHARGE_POWER_KW,
-                        DEFAULT_MAX_GRID_CHARGE_POWER_KW,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MAX_GRID_CHARGE_POWER_KW,
-                        max=MAX_MAX_GRID_CHARGE_POWER_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
                 # -- Advanced (mirrors the EMS step's grouping) --
                 vol.Optional(
                     CONF_AMP_INCREASE_DELAY,
@@ -1577,20 +1554,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Optional(
-                    CONF_SOLAR_START_THRESHOLD_KW,
-                    default=self._options.get(
-                        CONF_SOLAR_START_THRESHOLD_KW,
-                        DEFAULT_SOLAR_START_THRESHOLD_KW,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SOLAR_START_THRESHOLD_KW,
-                        max=MAX_SOLAR_START_THRESHOLD_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
                     CONF_SOLAR_ACTIVATION_DELAY,
                     default=self._options.get(
                         CONF_SOLAR_ACTIVATION_DELAY,
@@ -1616,19 +1579,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                         max=MAX_SOLAR_DELAY_SECONDS,
                         step=1,
                         unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_BATTERY_SOC_GATE_PCT,
-                    default=self._options.get(
-                        CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_BATTERY_SOC_GATE_PCT,
-                        max=MAX_BATTERY_SOC_GATE_PCT,
-                        step=1,
-                        unit_of_measurement="%",
                     )
                 ),
                 vol.Optional(

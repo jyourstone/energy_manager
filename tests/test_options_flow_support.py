@@ -174,6 +174,9 @@ class TestPromotedTuningTranslationKeys:
         ("number", "battery_production_factor"),
         ("number", "battery_estimated_charge_power"),
         ("number", "battery_peak_gap_hours"),
+        ("number", "ev_max_grid_charge_power"),
+        ("number", "ev_solar_start_threshold"),
+        ("number", "ev_battery_soc_gate"),
     )
     _RETIRED_APPLIANCE_RECONFIGURE_KEYS = (
         "priority",
@@ -187,6 +190,11 @@ class TestPromotedTuningTranslationKeys:
         "production_factor",
         "estimated_charge_power_kw",
         "peak_gap_hours",
+    )
+    _RETIRED_OPTIONS_EV_KEYS = (
+        "max_grid_charge_power_kw",
+        "solar_start_threshold_kw",
+        "battery_soc_gate_pct",
     )
 
     @pytest.mark.parametrize(
@@ -250,4 +258,24 @@ class TestPromotedTuningTranslationKeys:
         # The config-flow wizard step keeps them as seeds.
         wizard = content["config"]["step"]["battery"]
         for key in self._RETIRED_OPTIONS_BATTERY_KEYS:
+            assert key in wizard["data"], f"{key} seed missing in {filename}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_options_ev_fields_retired(self, filename: str) -> None:
+        """EV tuning fields stay out of the options-flow EV form."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        step = content["options"]["step"]["ev"]
+        for section in ("data", "data_description"):
+            for key in self._RETIRED_OPTIONS_EV_KEYS:
+                assert key not in step.get(section, {}), (
+                    f"{key} should be retired from {filename}"
+                )
+        # The config-flow wizard step keeps them as seeds.
+        wizard = content["config"]["step"]["ev"]
+        for key in self._RETIRED_OPTIONS_EV_KEYS:
             assert key in wizard["data"], f"{key} seed missing in {filename}"
