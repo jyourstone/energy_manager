@@ -38,6 +38,9 @@ Commands are only sent when **both** the master **Device control** switch and th
 
 Each appliance is added as its own **subentry** — click **Add appliance** on the integration page. Every threshold and timing field is configurable per appliance, pre-filled with these defaults:
 
+!!! tip "Tuning fields live as number entities afterward"
+    Priority, the on/off thresholds, and the on/off sustain times only seed their number entities when you add the appliance (see [Per-Appliance Entities](#per-appliance-entities) below). Editing the appliance afterward no longer offers these five fields — adjust them via their number entities instead, which apply on the next coordinator refresh (triggered immediately on change), no reload, and persist across restarts. Rated power, phases, the power sensor, and the minimum on/off times remain editable through the appliance's edit form.
+
 | Field | Default | Description |
 |-------|---------|--------------|
 | Appliance name | — | Friendly name, e.g. "Water heater" |
@@ -55,9 +58,10 @@ Each appliance is added as its own **subentry** — click **Add appliance** on t
 
 ## Per-Appliance Entities
 
-Each appliance gets its own device with exactly two entities:
+Each appliance gets its own device with a switch, a status sensor, and five tuning number entities:
 
 - **EM control** — the per-appliance hand-over valve described above. Default OFF, restored across restarts, so appliances stay opt-in one at a time rather than all activating the moment the module is enabled.
+- **Priority**, **On threshold**, **Off threshold**, **On sustain time**, **Off sustain time** — the five fields from the table above, live-adjustable per appliance without a reload; see [Entities](../reference/entities.md) for their exact ranges and defaults. If you set the off threshold at or above the on threshold, the entity keeps your raw value but scheduling uses an effective off threshold clamped just below the on threshold until you correct the pair.
 - **Status** — state is the current decision status; attributes explain exactly why:
 
 | Status | Meaning |

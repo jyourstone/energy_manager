@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 
@@ -44,6 +44,7 @@ from .appliance_controller import (
     ApplianceDecision,
     ApplianceInputs,
     ApplianceTracker,
+    clamp_hysteresis,
     compute_raw_surplus_kw,
     decide_appliances,
 )
@@ -567,6 +568,25 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         # knobs; 0 = feature off
         self.export_spike_threshold: float = 0.0
         self.export_reserve_soc_pct: float = DEFAULT_EXPORT_RESERVE_SOC_PCT
+        # BATT-15 tuning knobs -- owned by number entities after setup, but
+        # initialized from the options seed so the first refresh after a
+        # restart (which runs BEFORE the number platform restores) plans
+        # with the configured values rather than defaults -- the same
+        # window EaseeCoordinator covers with its options reads.
+        self.charge_buffer_pct: float = float(
+            entry.options.get(CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT)
+        )
+        self.production_factor: float = float(
+            entry.options.get(CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR)
+        )
+        self.estimated_charge_power_kw: float = float(
+            entry.options.get(
+                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
+            )
+        )
+        self.peak_gap_hours: float = float(
+            entry.options.get(CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS)
+        )
         self.max_soc_pct: float = DEFAULT_MAX_SOC_PCT
 
         # BATT-14 economics -- updated by NumberEntity instances after setup
@@ -711,22 +731,15 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         solar_forecast_remaining_wh = self._get_solar_forecast_remaining_wh()
         solar_forecast_tomorrow_wh = self._get_solar_forecast_tomorrow_wh()
 
-        # 5. Read battery capacity and BATT-15 tuning options from entry options
+        # 5. Read battery capacity from entry options and BATT-15 tuning
+        #    from the number-entity knobs
         battery_capacity_kwh = self.config_entry.options.get(
             CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH
         )
-        charge_buffer_pct = self.config_entry.options.get(
-            CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
-        )
-        production_factor = self.config_entry.options.get(
-            CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
-        )
-        estimated_charge_power_kw = self.config_entry.options.get(
-            CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
-        )
-        peak_gap_hours = self.config_entry.options.get(
-            CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
-        )
+        charge_buffer_pct = self.charge_buffer_pct
+        production_factor = self.production_factor
+        estimated_charge_power_kw = self.estimated_charge_power_kw
+        peak_gap_hours = self.peak_gap_hours
 
         # 5b. BATT-17 export arbitrage inputs -- number-entity knobs like
         #     the sibling thresholds; 0 means the feature is OFF
@@ -3215,7 +3228,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         self._max_amps: float = float(
             entry.options.get(CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS)
         )
-        self._grid_power_cap_kw: float = float(
+        self.grid_power_cap_kw: float = float(
             entry.options.get(
                 CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
             )
@@ -3248,7 +3261,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
             )
         )
-        self._solar_start_threshold_kw: float = float(
+        self.solar_start_threshold_kw: float = float(
             entry.options.get(
                 CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
             )
@@ -3263,7 +3276,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 CONF_SOLAR_DEACTIVATION_DELAY, DEFAULT_SOLAR_DEACTIVATION_DELAY_SECONDS
             )
         )
-        self._battery_soc_gate_pct: float = float(
+        self.battery_soc_gate_pct: float = float(
             entry.options.get(
                 CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
             )
@@ -3382,14 +3395,14 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             conversion_factor_1phase=DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
             conversion_factor_2phase=DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
             conversion_factor_3phase=DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
-            grid_power_cap_kw=self._grid_power_cap_kw,
+            grid_power_cap_kw=self.grid_power_cap_kw,
             grid_power_safety_buffer_kw=DEFAULT_GRID_POWER_SAFETY_BUFFER_KW,
             phase_switch_threshold_kw=self._phase_switch_threshold_kw,
-            solar_start_threshold_kw=self._solar_start_threshold_kw,
+            solar_start_threshold_kw=self.solar_start_threshold_kw,
             solar_safety_buffer_kw=DEFAULT_SOLAR_SAFETY_BUFFER_KW,
             solar_activation_delay_s=self._solar_activation_delay_s,
             solar_deactivation_delay_s=self._solar_deactivation_delay_s,
-            battery_soc_gate_pct=self._battery_soc_gate_pct,
+            battery_soc_gate_pct=self.battery_soc_gate_pct,
             soc_round_up=DEFAULT_SOC_ROUND_UP,
             emergency_margin_amps=self._emergency_margin_amps,
             amp_increase_delay_s=self._amp_increase_delay_s,
@@ -3826,6 +3839,27 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
         # One-time log guard: no grid sensors means no export signal at all.
         self._export_signal_warned = False
 
+        # Appliances currently running with a clamped hysteresis band --
+        # warn once on entry into the clamped state, reset when the
+        # thresholds become valid again (avoids a warning every 30s tick).
+        self._clamped_warned: set[str] = set()
+
+    def set_appliance_tuning(self, subentry_id: str, **updates: int) -> None:
+        """Apply a live tuning override from a per-appliance number entity.
+
+        Replaces the matching frozen ApplianceConfig snapshot in place --
+        list position is preserved, so priority ties keep their insertion
+        order. Values are stored RAW: the hysteresis band is clamped at
+        consume time each tick (not here), so the stored config always
+        matches the entity states and a later on-threshold change
+        re-validates the pair automatically.
+        """
+        for index, config in enumerate(self._configs):
+            if config.subentry_id != subentry_id:
+                continue
+            self._configs[index] = replace(config, **updates)
+            return
+
     async def async_set_em_control(self, subentry_id: str, enabled: bool) -> None:
         """Update one appliance's "EM control" switch state (APPL-07).
 
@@ -3866,7 +3900,25 @@ class ApplianceCoordinator(DataUpdateCoordinator[ApplianceModuleData]):
         headroom_amps = self._compute_headroom_amps()
 
         items: list[tuple[ApplianceConfig, ApplianceInputs, ApplianceTracker]] = []
-        for config in self._configs:
+        for raw_config in self._configs:
+            # Hysteresis clamp at consume time: stored configs keep the raw
+            # entity values, so the pair self-heals when either threshold
+            # is corrected (APPL-05 invariant lives in clamp_hysteresis).
+            config = clamp_hysteresis(raw_config)
+            if config is not raw_config:
+                if raw_config.subentry_id not in self._clamped_warned:
+                    self._clamped_warned.add(raw_config.subentry_id)
+                    _LOGGER.warning(
+                        "Appliance %s: off threshold (%s%%) must stay below"
+                        " on threshold (%s%%); using %s%% until the"
+                        " thresholds are corrected",
+                        raw_config.name,
+                        raw_config.off_threshold_pct,
+                        raw_config.on_threshold_pct,
+                        config.off_threshold_pct,
+                    )
+            else:
+                self._clamped_warned.discard(raw_config.subentry_id)
             inputs = self._read_appliance_inputs(config)
             tracker = self._trackers.get(config.subentry_id)
             if tracker is None:

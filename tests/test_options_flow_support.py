@@ -147,3 +147,135 @@ class TestExportTranslationKeys:
                     assert key not in step.get(section, {}), (
                         f"{key} should be retired from {filename}"
                     )
+
+
+class TestPromotedTuningTranslationKeys:
+    """Tuning settings promoted from flow forms to number entities.
+
+    Mirrors TestExportTranslationKeys: the promoted entities stay
+    translated in every file, and the retired form fields never come
+    back. The config-flow WIZARD steps deliberately keep these fields as
+    one-time seeds -- only the options flow and the appliance
+    reconfigure form retire them.
+    """
+
+    _COMPONENT_DIR = (
+        Path(__file__).resolve().parent.parent
+        / "custom_components"
+        / "energy_manager"
+    )
+    _ENTITY_KEYS = (
+        ("number", "appliance_priority"),
+        ("number", "appliance_on_threshold"),
+        ("number", "appliance_off_threshold"),
+        ("number", "appliance_on_sustain"),
+        ("number", "appliance_off_sustain"),
+        ("number", "battery_charge_buffer"),
+        ("number", "battery_production_factor"),
+        ("number", "battery_estimated_charge_power"),
+        ("number", "battery_peak_gap_hours"),
+        ("number", "ev_max_grid_charge_power"),
+        ("number", "ev_solar_start_threshold"),
+        ("number", "ev_battery_soc_gate"),
+    )
+    _RETIRED_APPLIANCE_RECONFIGURE_KEYS = (
+        "priority",
+        "on_threshold_pct",
+        "off_threshold_pct",
+        "on_sustain_minutes",
+        "off_sustain_minutes",
+    )
+    _RETIRED_OPTIONS_BATTERY_KEYS = (
+        "charge_buffer_pct",
+        "production_factor",
+        "estimated_charge_power_kw",
+        "peak_gap_hours",
+    )
+    _RETIRED_OPTIONS_EV_KEYS = (
+        "max_grid_charge_power_kw",
+        "solar_start_threshold_kw",
+        "battery_soc_gate_pct",
+    )
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_promoted_entity_names_translated(self, filename: str) -> None:
+        """Every promoted entity has a translated name in each file."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        for domain, key in self._ENTITY_KEYS:
+            block = content["entity"][domain]
+            assert key in block, f"{key} missing in {filename} entity.{domain}"
+            assert block[key].get("name"), f"{key} name empty in {filename}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_appliance_reconfigure_fields_retired(self, filename: str) -> None:
+        """Tuning fields stay out of the appliance reconfigure form."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        step = content["config_subentries"]["appliance"]["step"]["reconfigure"]
+        for section in ("data", "data_description"):
+            for key in self._RETIRED_APPLIANCE_RECONFIGURE_KEYS:
+                assert key not in step.get(section, {}), (
+                    f"{key} should be retired from {filename}"
+                )
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_appliance_add_wizard_keeps_seed_fields(self, filename: str) -> None:
+        """The add-appliance wizard keeps the tuning fields as seeds."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        step = content["config_subentries"]["appliance"]["step"]["user"]
+        for key in self._RETIRED_APPLIANCE_RECONFIGURE_KEYS:
+            assert key in step["data"], f"{key} seed missing in {filename}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_options_battery_fields_retired(self, filename: str) -> None:
+        """Battery tuning fields stay out of the options-flow battery form."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        step = content["options"]["step"]["battery"]
+        for section in ("data", "data_description"):
+            for key in self._RETIRED_OPTIONS_BATTERY_KEYS:
+                assert key not in step.get(section, {}), (
+                    f"{key} should be retired from {filename}"
+                )
+        # The config-flow wizard step keeps them as seeds.
+        wizard = content["config"]["step"]["battery"]
+        for key in self._RETIRED_OPTIONS_BATTERY_KEYS:
+            assert key in wizard["data"], f"{key} seed missing in {filename}"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["strings.json", "translations/en.json", "translations/sv.json"],
+    )
+    def test_options_ev_fields_retired(self, filename: str) -> None:
+        """EV tuning fields stay out of the options-flow EV form."""
+        content = json.loads(
+            (self._COMPONENT_DIR / filename).read_text(encoding="utf-8")
+        )
+        step = content["options"]["step"]["ev"]
+        for section in ("data", "data_description"):
+            for key in self._RETIRED_OPTIONS_EV_KEYS:
+                assert key not in step.get(section, {}), (
+                    f"{key} should be retired from {filename}"
+                )
+        # The config-flow wizard step keeps them as seeds.
+        wizard = content["config"]["step"]["ev"]
+        for key in self._RETIRED_OPTIONS_EV_KEYS:
+            assert key in wizard["data"], f"{key} seed missing in {filename}"

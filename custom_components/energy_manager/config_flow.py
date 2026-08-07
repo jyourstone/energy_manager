@@ -1187,18 +1187,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             self._options[CONF_FORECAST_SOLAR_ENTITY] = user_input.get(
                 CONF_FORECAST_SOLAR_ENTITY, []
             )
-            self._options[CONF_CHARGE_BUFFER_PCT] = user_input.get(
-                CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
-            )
-            self._options[CONF_PRODUCTION_FACTOR] = user_input.get(
-                CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
-            )
-            self._options[CONF_ESTIMATED_CHARGE_POWER_KW] = user_input.get(
-                CONF_ESTIMATED_CHARGE_POWER_KW, DEFAULT_ESTIMATED_CHARGE_POWER_KW
-            )
-            self._options[CONF_PEAK_GAP_HOURS] = user_input.get(
-                CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
-            )
 
             # Route to EMS step (battery is enabled, so EMS config is relevant)
             return await self.async_step_ems()
@@ -1227,58 +1215,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                 ),
                 vol.Optional(CONF_FORECAST_SOLAR_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor", multiple=True)
-                ),
-                vol.Optional(
-                    CONF_CHARGE_BUFFER_PCT,
-                    default=self._options.get(
-                        CONF_CHARGE_BUFFER_PCT, DEFAULT_CHARGE_BUFFER_PCT
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_CHARGE_BUFFER_PCT,
-                        max=MAX_CHARGE_BUFFER_PCT,
-                        step=1,
-                        unit_of_measurement="%",
-                    )
-                ),
-                vol.Optional(
-                    CONF_PRODUCTION_FACTOR,
-                    default=self._options.get(
-                        CONF_PRODUCTION_FACTOR, DEFAULT_PRODUCTION_FACTOR
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_PRODUCTION_FACTOR,
-                        max=MAX_PRODUCTION_FACTOR,
-                        step=0.05,
-                    )
-                ),
-                vol.Optional(
-                    CONF_ESTIMATED_CHARGE_POWER_KW,
-                    default=self._options.get(
-                        CONF_ESTIMATED_CHARGE_POWER_KW,
-                        DEFAULT_ESTIMATED_CHARGE_POWER_KW,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_ESTIMATED_CHARGE_POWER_KW,
-                        max=MAX_ESTIMATED_CHARGE_POWER_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
-                    CONF_PEAK_GAP_HOURS,
-                    default=self._options.get(
-                        CONF_PEAK_GAP_HOURS, DEFAULT_PEAK_GAP_HOURS
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_PEAK_GAP_HOURS,
-                        max=MAX_PEAK_GAP_HOURS,
-                        step=0.5,
-                        unit_of_measurement="h",
-                    )
                 ),
             }
         )
@@ -1499,17 +1435,8 @@ class EnergyManagerOptionsFlow(OptionsFlow):
             self._options[CONF_MAX_CHARGE_AMPS] = user_input.get(
                 CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS
             )
-            self._options[CONF_MAX_GRID_CHARGE_POWER_KW] = user_input.get(
-                CONF_MAX_GRID_CHARGE_POWER_KW, DEFAULT_MAX_GRID_CHARGE_POWER_KW
-            )
             self._options[CONF_PHASE_SWITCH_THRESHOLD_KW] = user_input.get(
                 CONF_PHASE_SWITCH_THRESHOLD_KW, DEFAULT_PHASE_SWITCH_THRESHOLD_KW
-            )
-            self._options[CONF_SOLAR_START_THRESHOLD_KW] = user_input.get(
-                CONF_SOLAR_START_THRESHOLD_KW, DEFAULT_SOLAR_START_THRESHOLD_KW
-            )
-            self._options[CONF_BATTERY_SOC_GATE_PCT] = user_input.get(
-                CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
             )
             self._options[CONF_AMP_INCREASE_DELAY] = user_input.get(
                 CONF_AMP_INCREASE_DELAY, DEFAULT_AMP_INCREASE_DELAY_SECONDS
@@ -1583,20 +1510,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                         unit_of_measurement="A",
                     )
                 ),
-                vol.Optional(
-                    CONF_MAX_GRID_CHARGE_POWER_KW,
-                    default=self._options.get(
-                        CONF_MAX_GRID_CHARGE_POWER_KW,
-                        DEFAULT_MAX_GRID_CHARGE_POWER_KW,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_MAX_GRID_CHARGE_POWER_KW,
-                        max=MAX_MAX_GRID_CHARGE_POWER_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
                 # -- Advanced (mirrors the EMS step's grouping) --
                 vol.Optional(
                     CONF_AMP_INCREASE_DELAY,
@@ -1641,20 +1554,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Optional(
-                    CONF_SOLAR_START_THRESHOLD_KW,
-                    default=self._options.get(
-                        CONF_SOLAR_START_THRESHOLD_KW,
-                        DEFAULT_SOLAR_START_THRESHOLD_KW,
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_SOLAR_START_THRESHOLD_KW,
-                        max=MAX_SOLAR_START_THRESHOLD_KW,
-                        step=0.1,
-                        unit_of_measurement="kW",
-                    )
-                ),
-                vol.Optional(
                     CONF_SOLAR_ACTIVATION_DELAY,
                     default=self._options.get(
                         CONF_SOLAR_ACTIVATION_DELAY,
@@ -1680,19 +1579,6 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                         max=MAX_SOLAR_DELAY_SECONDS,
                         step=1,
                         unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_BATTERY_SOC_GATE_PCT,
-                    default=self._options.get(
-                        CONF_BATTERY_SOC_GATE_PCT, DEFAULT_BATTERY_SOC_GATE_PCT
-                    ),
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_BATTERY_SOC_GATE_PCT,
-                        max=MAX_BATTERY_SOC_GATE_PCT,
-                        step=1,
-                        unit_of_measurement="%",
                     )
                 ),
                 vol.Optional(
@@ -1954,22 +1840,21 @@ class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
 
         errors: dict[str, str] = {}
         if user_input is not None:
-            # An inverted hysteresis band (off >= on) guarantees perpetual
-            # on/off cycling -- exactly what APPL-05 exists to prevent.
-            if (
-                user_input[CONF_APPLIANCE_OFF_THRESHOLD_PCT]
-                >= user_input[CONF_APPLIANCE_ON_THRESHOLD_PCT]
-            ):
-                errors[CONF_APPLIANCE_OFF_THRESHOLD_PCT] = "off_must_be_below_on"
-            else:
-                # async_create_entry here would ADD a duplicate subentry --
-                # subentry reconfigure must update the existing one.
-                return self.async_update_and_abort(
-                    self._get_entry(),
-                    subentry,
-                    title=user_input[CONF_APPLIANCE_NAME],
-                    data=user_input,
-                )
+            # Merge over existing data so the promoted tuning seeds
+            # (priority, thresholds, sustain) survive reconfigure, but a
+            # cleared power-sensor field arrives as an ABSENT key -- drop
+            # it instead of resurrecting the stale entity from the merge.
+            new_data = {**existing_data, **user_input}
+            if CONF_APPLIANCE_POWER_SENSOR_ENTITY not in user_input:
+                new_data.pop(CONF_APPLIANCE_POWER_SENSOR_ENTITY, None)
+            # async_create_entry here would ADD a duplicate subentry --
+            # subentry reconfigure must update the existing one.
+            return self.async_update_and_abort(
+                self._get_entry(),
+                subentry,
+                title=user_input[CONF_APPLIANCE_NAME],
+                data=new_data,
+            )
 
         schema = vol.Schema(
             {
@@ -1987,41 +1872,6 @@ class ApplianceSubentryFlowHandler(ConfigSubentryFlow):
                 ): NumberSelector(NumberSelectorConfig(min=1, max=3, step=2)),
                 vol.Optional(CONF_APPLIANCE_POWER_SENSOR_ENTITY): EntitySelector(
                     EntitySelectorConfig(domain="sensor", device_class="power")
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_PRIORITY, default=DEFAULT_APPLIANCE_PRIORITY
-                ): NumberSelector(NumberSelectorConfig(min=1, max=10, step=1)),
-                vol.Optional(
-                    CONF_APPLIANCE_ON_THRESHOLD_PCT,
-                    default=DEFAULT_APPLIANCE_ON_THRESHOLD_PCT,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=50, max=300, step=1, unit_of_measurement="%"
-                    )
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_OFF_THRESHOLD_PCT,
-                    default=DEFAULT_APPLIANCE_OFF_THRESHOLD_PCT,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=150, step=1, unit_of_measurement="%"
-                    )
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_ON_SUSTAIN_MINUTES,
-                    default=DEFAULT_APPLIANCE_ON_SUSTAIN_MINUTES,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=720, step=1, unit_of_measurement="min"
-                    )
-                ),
-                vol.Optional(
-                    CONF_APPLIANCE_OFF_SUSTAIN_MINUTES,
-                    default=DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=720, step=1, unit_of_measurement="min"
-                    )
                 ),
                 vol.Optional(
                     CONF_APPLIANCE_MIN_ON_MINUTES,
