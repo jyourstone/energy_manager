@@ -1045,6 +1045,74 @@ class TestSolarBranchIntegration:
         assert any(c.action == "set_dynamic_limit" and c.value == 7.0 for c in decision.commands)
 
 
+class TestSolarDipRideThrough:
+    """A momentary surplus collapse while solar charging must not hard-pause.
+
+    Fuse headroom is still fine during a cloud dip -- only the solar term
+    collapsed -- so the charger rides through at min_amps and the solar
+    latch's deactivation delay decides when the session actually ends
+    (2026-08-08 incident: PV 8.7->2.0 kW for ~60s produced a hard pause plus
+    a safety notification, twice in 14 seconds).
+    """
+
+    def _drawing_solar_inputs(self, **overrides):
+        """Charging in solar mode with ample fuse headroom; surplus collapsed."""
+        defaults = {
+            "charger_status": "charging",
+            "charger_power_kw": 6.5,
+            "cars": (_car(active_slot=False, home_and_plugged=True),),
+            # net = 1.0 - 0.5 = 0.5 kW => solar_raw floors to 0A => raw <= 0
+            "solar_surplus_kw": 1.0,
+            "battery_soc_pct": 100.0,
+        }
+        defaults.update(overrides)
+        return _inputs(**defaults)
+
+    def test_surplus_collapse_while_drawing_rides_at_min_amps(self):
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        decision = controller.decide(self._drawing_solar_inputs())
+        assert decision.mode == "solar"
+        assert decision.notifications == ()
+        assert all(c.action != "pause" for c in decision.commands)
+        assert decision.target_amps == pytest.approx(6.0)
+        assert any(
+            c.action == "set_dynamic_limit" and c.value == 6.0
+            for c in decision.commands
+        )
+        assert decision.override_reason == "solar_dip_ride_through"
+
+    def test_fuse_capacity_collapse_still_pauses_with_notification(self):
+        """Capacity-driven raw<=0 keeps the instant safety stop even in solar
+        mode: worst=19A => fuse available = 20-2-19 = -1A => capacity 0."""
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        decision = controller.decide(
+            self._drawing_solar_inputs(
+                solar_surplus_kw=5.5,
+                measured_worst_case_signed_amps=19.0,
+            )
+        )
+        assert any(c.action == "pause" for c in decision.commands)
+        assert decision.notifications != ()
+        assert decision.target_amps == 0.0
+
+    def test_dip_longer_than_deactivation_delay_ends_session(self):
+        """The latch bounds the ride-through: after solar_deactivation_delay_s
+        of collapsed surplus the mode drops to idle and the running draw is
+        suppressed (stop + 0A limit) -- no indefinite min-amp grid charging."""
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        first = controller.decide(self._drawing_solar_inputs(now=T0))
+        assert first.mode == "solar"
+        later = controller.decide(
+            self._drawing_solar_inputs(now=T0 + timedelta(seconds=61))
+        )
+        assert later.mode == "idle"
+        assert any(c.action == "stop" for c in later.commands)
+        assert later.target_amps == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Fuse Layer 1: emergency overload pause
 # ---------------------------------------------------------------------------

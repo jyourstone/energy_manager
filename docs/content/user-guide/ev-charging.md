@@ -8,7 +8,7 @@ Each car gets its own schedule: the cheapest available hours between now and its
 
 On top of the price schedule, **solar-surplus charging** can divert live PV surplus to the car outside its scheduled hours, up to its separate **Solar charging target** ceiling:
 
-- Solar charging only activates once the raw solar signal clears a configured start threshold continuously for an activation delay (filters passing clouds), and deactivates after its own, shorter deactivation delay. The activation state persists across restarts and config reloads, so a reload during active solar charging does not interrupt the session or restart the delay.
+- Solar charging only activates once the raw solar signal clears a configured start threshold continuously for an activation delay (filters passing clouds), and deactivates after its own, shorter deactivation delay. A cloud dip mid-session does not hard-pause the charger: as long as fuse headroom allows it, charging rides through at the minimum current until the surplus recovers or the deactivation delay ends the session. The activation state persists across restarts and config reloads, so a reload during active solar charging does not interrupt the session or restart the delay.
 - With the Home Battery module enabled, it only kicks in once the house battery itself is at or above the configured battery SOC gate (100% by default) — the battery fills first, and only the surplus left over goes to the car. Without that module there is no gate, and surplus goes straight to the car.
 - Mode arbitration is strict priority order: **forced** charging (see below) beats a **scheduled** price slot, which beats **solar** surplus, which beats **idle**. A car mid-way through a cheap scheduled hour is never bumped for solar.
 
