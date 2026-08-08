@@ -200,7 +200,8 @@ def compute_ems_state(
             should be active (from PVHysteresisTracker.update()).
         max_soc_pct: Maximum SOC target percentage. PV charging skipped above this.
         safety_buffer_amps: Amps reserved as safety margin on fuse headroom.
-        voltage: Grid voltage in volts for amps-to-kW conversion.
+        voltage: Per-phase grid voltage in volts for the 3-phase
+            amps-to-kW conversion.
         sensor_blocked: When True, the current sensor(s) were unavailable and
             the configured fail-behavior is "block" -- headroom is forced to
             0 (no charge authorization) regardless of current_l_amps.
@@ -280,8 +281,13 @@ def compute_ems_state(
             override_reason="max_soc_reached",
         )
 
-    # 4. Fuse-limited charging power (EMS-02)
-    headroom_kw = (charge_ceiling_amps * voltage) / 1000.0
+    # 4. Fuse-limited charging power (EMS-02). charge_ceiling_amps is a
+    # PER-PHASE current ceiling (fuse math and the battery-own add-back are
+    # all per-phase quantities); the battery charges balanced across all
+    # three phases, so the available power is amps x 3 x voltage -- same
+    # 3-phase conversion as compute_export_limit_kw() and
+    # WATTS_TO_AMPS_3PHASE_DIVISOR.
+    headroom_kw = (charge_ceiling_amps * 3 * voltage) / 1000.0
     safe_charge_kw = max(0.0, min(max_charge_power_kw, headroom_kw))
 
     # 5. PV opportunistic charging (EMS-08): the SigenStor executes

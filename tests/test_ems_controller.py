@@ -184,8 +184,9 @@ class TestFuseProtection:
         assert result.fuse_headroom_amps == 0.0
 
     def test_charge_limit_reduced_by_fuse(self):
-        """max_charge=5kW but only 3A headroom => limit capped to ~0.69kW."""
-        # headroom = 20 - 15 - 2 = 3A => 3*230/1000 = 0.69kW
+        """max_charge=5kW but only 3A/phase headroom => limit capped to 2.07kW."""
+        # headroom = 20 - 15 - 2 = 3A per phase; the battery charges
+        # balanced across 3 phases => 3A * 3 * 230/1000 = 2.07kW
         result = compute_ems_state(
             target_ems_mode="command_charging",
             current_l_amps=15.0,
@@ -203,7 +204,7 @@ class TestFuseProtection:
             car_charging_active=False,
             house_consumption_kw=0.0,
         )
-        expected_kw = (3.0 * 230.0) / 1000.0  # 0.69 kW
+        expected_kw = (3.0 * 3 * 230.0) / 1000.0  # 2.07 kW
         assert result.charge_limit_kw == pytest.approx(expected_kw)
 
     def test_charge_limit_zero_when_no_headroom(self):
@@ -552,6 +553,33 @@ class TestPVOpportunisticCharging:
         )
         assert result.target_mode == "command_charging"
         assert result.charge_limit_kw == pytest.approx(0.8)
+
+    def test_pv_charging_full_surplus_within_3phase_fuse_headroom(self):
+        """Live incident 2026-08-08: PV 7.16kW, house 0.94kW, 14.8A/phase
+        ESS ceiling. The per-phase amps ceiling converts to power across
+        all 3 phases (14.8 * 3 * 230 = 10.2kW), so the commanded limit is
+        the full 6.2kW surplus -- the old single-phase conversion capped
+        it at 3.4kW and exported the rest."""
+        result = compute_ems_state(
+            target_ems_mode="max_self_consumption",
+            current_l_amps=5.4,
+            fuse_rating_amps=20.0,
+            max_charge_power_kw=8.0,
+            battery_soc_pct=77.5,
+            car_scheduled=False,
+            car_plugged_in=False,
+            pv_power_w=7160.0,
+            pv_hysteresis_active=True,
+            safety_buffer_amps=1.0,
+            available_ess_amps=14.8,
+            discharge_allowed=True,
+            discharge_gate_reason="scheduled_discharge",
+            car_charging_active=False,
+            house_consumption_kw=0.94,
+        )
+        assert result.target_mode == "command_charging"
+        assert result.override_reason == "pv_opportunistic"
+        assert result.charge_limit_kw == pytest.approx(6.22)
 
 
 # ---------------------------------------------------------------------------
