@@ -229,7 +229,7 @@ class TestFuseProtection:
 
     def test_charge_limit_uses_max_when_ample_headroom(self):
         """Plenty of headroom => charge_limit equals max_charge_power."""
-        # headroom = 63 - 5 - 2 = 56A => 56*230/1000 = 12.88kW >> max 5kW
+        # headroom = 63 - 5 - 2 = 56A => 56*3*230/1000 = 38.64kW >> max 5kW
         result = compute_ems_state(
             target_ems_mode="command_charging",
             current_l_amps=5.0,
