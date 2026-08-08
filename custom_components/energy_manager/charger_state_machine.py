@@ -888,6 +888,22 @@ class ChargerController:
             self._sequence_mode = mode
             return self._continue_sequence(inputs, capacity, raw, is_drawing)
 
+        # A surplus collapse while solar charging (cloud dip) is not a safety
+        # condition -- fuse headroom is still fine, only the solar term went
+        # to zero. Ride through at min_amps instead of hard-pausing; the
+        # solar latch's deactivation delay bounds the ride-through, after
+        # which idle-mode suppression ends the session. Capacity-driven
+        # collapses (capacity < min_amps) still take the instant safety stop
+        # below.
+        if (
+            raw <= 0.0
+            and mode == "solar"
+            and is_drawing
+            and capacity >= inputs.min_amps
+        ):
+            raw = inputs.min_amps
+            note = note or "solar_dip_ride_through"
+
         # Fuse Layer 3 + pre-start gate, decided BEFORE any phase-mode switch
         # is considered -- there is no point requesting a phase switch when
         # we are not going to charge regardless (capacity collapsed to 0 or
