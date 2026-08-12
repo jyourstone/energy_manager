@@ -214,11 +214,6 @@ async def async_unload_entry(
     Returns:
         True if unload was successful.
     """
-    # Repairs issues are re-detected every update cycle -- clear them all
-    # on unload so nothing stale survives a reload or reconfiguration.
-    for issue_id in ALL_ISSUE_IDS:
-        async_clear_issue(hass, issue_id)
-
     forwarded = getattr(entry.runtime_data, "forwarded_platforms", None)
     if forwarded is not None:
         platforms = [Platform(p) for p in forwarded]
@@ -248,6 +243,13 @@ async def async_unload_entry(
     if easee_coordinator is not None:
         await easee_coordinator.async_shutdown()
         await easee_coordinator.async_flush_solar_tracker_store()
+
+    # Repairs issues are re-detected every update cycle -- clear them all
+    # last, after every await above, so an in-flight refresh landing
+    # between an earlier clear and shutdown cannot re-file a sticky issue
+    # (e.g. grid_sensor_mismatch) and strand it across a config-fix reload.
+    for issue_id in ALL_ISSUE_IDS:
+        async_clear_issue(hass, issue_id)
 
     return True
 

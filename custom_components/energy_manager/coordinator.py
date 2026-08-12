@@ -230,6 +230,11 @@ from .forecast_accuracy import (
     restore_fa_store,
     serialize_fa_store,
 )
+from .grid_consistency import (
+    EVENT_RAISE,
+    GridConsistencyTracker,
+    update_grid_consistency,
+)
 from .nordpool_adapter import (
     DEFAULT_PRICE_UNIT,
     async_get_prices,
@@ -239,7 +244,9 @@ from .repairs import (
     ISSUE_CHARGE_LIMIT_WRONG_DOMAIN,
     ISSUE_DISCHARGE_LIMIT_WRONG_DOMAIN,
     ISSUE_FUSE_SENSOR_FALLBACK,
+    ISSUE_GRID_SENSOR_MISMATCH,
     async_clear_issue,
+    async_issue_exists,
     async_report_issue,
 )
 
@@ -1404,6 +1411,24 @@ def _entity_has_value(hass: HomeAssistant, entity_id: str) -> bool:
     return state is not None and state.state not in ("unavailable", "unknown")
 
 
+def _entity_state_is_numeric(hass: HomeAssistant, entity_id: str) -> bool:
+    """Return True only when the entity's state parses to a float.
+
+    Stricter than _entity_has_value on purpose (the BATT-17 idiom): used
+    by the grid-consistency guard only, where a sensor stuck at a
+    non-numeric state must read as unavailable -- the shared helpers'
+    0.0 default would fabricate a reading and could sustain a false
+    mismatch against the other sensor group.
+    """
+    if not _entity_has_value(hass, entity_id):
+        return False
+    state = hass.states.get(entity_id)
+    try:
+        return math.isfinite(float(state.state))
+    except (TypeError, ValueError):
+        return False
+
+
 def _read_control_enabled(config_entry: ConfigEntry) -> bool:
     """Return the master "Device control" switch state (CORE-14).
 
@@ -1545,6 +1570,10 @@ class FuseSensorReader:
         # fallback streak (None while reads succeed) -- drives the Repairs
         # issue for persistent sensor outages.
         self._fallback_since: float | None = None
+        # Sustain-clock state for the phase-sum vs total consistency guard
+        # (only advanced when both entity groups are configured) -- drives
+        # the grid_sensor_mismatch Repairs issue.
+        self._mismatch_tracker = GridConsistencyTracker()
 
     def read_grid_current_amps(self) -> tuple[float, bool]:
         """Read grid power and return (signed worst-case phase current, sensor_blocked).
@@ -1558,6 +1587,10 @@ class FuseSensorReader:
         If the required sensors are unavailable, unknown, or unconfigured,
         applies the configured fail-behavior instead of silently assuming
         0A load (see resolve_current_sensor_fallback()).
+
+        When BOTH the per-phase entities and the total grid power entity
+        are configured, additionally compares the phase-sum kW against the
+        total kW each read (see _check_grid_consistency()).
 
         Returns:
             Tuple of (current_l_amps, sensor_blocked). sensor_blocked is
@@ -1574,7 +1607,20 @@ class FuseSensorReader:
             if all(_entity_has_value(self._hass, e) for e in phase_entities):
                 amps = [self._read_signed_power_amps(e, 230.0) for e in phase_entities]
                 self._note_read_success()
+                # Per-phase kW sum recovered from the already-read amps
+                # (each phase was divided by 230 V above). The guard parses
+                # strictly: a phase stuck at a non-numeric state reads as
+                # 0.0 amps above (safe for the fuse math) but must reach
+                # the consistency tracker as unavailable, not a fabricated
+                # 0 kW that could sustain a false mismatch.
+                if all(
+                    _entity_state_is_numeric(self._hass, e) for e in phase_entities
+                ):
+                    self._check_grid_consistency(sum(amps) * 230.0 / 1000.0)
+                else:
+                    self._check_grid_consistency(None)
                 return worst_case_signed_amps(amps), False
+            self._check_grid_consistency(None)
             return self._apply_fallback("grid phase current sensors")
 
         if self._grid_power_entity:
@@ -1603,6 +1649,67 @@ class FuseSensorReader:
             if uom == "kW":
                 power *= 1000.0
         return power / divisor
+
+    def _check_grid_consistency(self, phase_sum_kw: float | None) -> None:
+        """Compare the per-phase kW sum against the total grid power sensor.
+
+        Both readings describe the same physical grid flow, so a sustained
+        disagreement means one entity group is misconfigured (the observed
+        case: inverter-output sensors selected as grid phase sensors, which
+        inverts the surplus sign and corrupts fuse headroom). Detection
+        thresholds, the sustain window, and the sticky flag lifecycle live
+        in grid_consistency.py; this method only performs the reads and
+        files the Repairs issue. The issue is never deleted at runtime --
+        it clears when the config entry unloads (repairs.py ALL_ISSUE_IDS),
+        and a config fix requires an entry reload anyway.
+
+        Args:
+            phase_sum_kw: Sum of the per-phase readings in kW, or None when
+                the per-phase read failed (resets the sustain clock).
+        """
+        if not self._grid_power_entity:
+            return
+        total_kw: float | None = None
+        if _entity_state_is_numeric(self._hass, self._grid_power_entity):
+            total_kw = _read_power_kw(self._hass, self._grid_power_entity)
+        event = update_grid_consistency(
+            self._mismatch_tracker, phase_sum_kw, total_kw, monotonic()
+        )
+        if event == EVENT_RAISE:
+            # Three FuseSensorReader instances (EMS, Easee, and appliance
+            # coordinators) each run this guard against the same fixed
+            # issue id -- only the first to cross the sustain window warns
+            # and files; the rest find the issue already in the registry
+            # and stay silent.
+            if async_issue_exists(self._hass, ISSUE_GRID_SENSOR_MISMATCH):
+                return
+            phase_entities = (
+                f"{self._grid_phase_a_entity}, {self._grid_phase_b_entity}, "
+                f"{self._grid_phase_c_entity}"
+            )
+            _LOGGER.warning(
+                "Grid sensor mismatch: per-phase grid sensors (%s) sum to %.1f kW "
+                "but the total grid power sensor %s reads %.1f kW. The per-phase "
+                "entities are likely inverter-output sensors instead of grid-flow "
+                "sensors, or use an opposite sign convention -- fuse protection "
+                "and solar-surplus decisions are unreliable until they agree.",
+                phase_entities,
+                phase_sum_kw,
+                self._grid_power_entity,
+                total_kw,
+            )
+            async_report_issue(
+                self._hass,
+                ISSUE_GRID_SENSOR_MISMATCH,
+                ir.IssueSeverity.WARNING,
+                ISSUE_GRID_SENSOR_MISMATCH,
+                {
+                    "phase_entities": phase_entities,
+                    "phase_sum_kw": f"{phase_sum_kw:.1f}",
+                    "grid_power_entity": self._grid_power_entity,
+                    "total_kw": f"{total_kw:.1f}",
+                },
+            )
 
     def _note_read_success(self) -> None:
         """Reset fallback tracking and clear the Repairs issue after a good read."""
