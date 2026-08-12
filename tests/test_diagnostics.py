@@ -145,6 +145,15 @@ def _fake_entry(
     )
 
 
+def _fake_hass() -> SimpleNamespace:
+    """hass stub with the executor-job API the diagnostics handler uses."""
+
+    async def async_add_executor_job(func, *args):
+        return func(*args)
+
+    return SimpleNamespace(async_add_executor_job=async_add_executor_job)
+
+
 # ---------------------------------------------------------------------------
 # _read_manifest_version()
 # ---------------------------------------------------------------------------
@@ -178,7 +187,7 @@ def test_diagnostics_full_snapshot() -> None:
     )
 
     result = asyncio.run(
-        diagnostics.async_get_config_entry_diagnostics(SimpleNamespace(), entry)
+        diagnostics.async_get_config_entry_diagnostics(_fake_hass(), entry)
     )
 
     assert result["entry"]["data"] == {"nordpool_sensor": "sensor.np"}
@@ -222,7 +231,7 @@ def test_diagnostics_missing_optional_coordinators_are_none() -> None:
     entry = _fake_entry()
 
     result = asyncio.run(
-        diagnostics.async_get_config_entry_diagnostics(SimpleNamespace(), entry)
+        diagnostics.async_get_config_entry_diagnostics(_fake_hass(), entry)
     )
 
     assert result["coordinators"]["battery"] is None
@@ -239,7 +248,7 @@ def test_diagnostics_jsonify_converts_datetime_in_ems_snapshot() -> None:
     entry = _fake_entry(ems_coordinator=SimpleNamespace(data=ems))
 
     result = asyncio.run(
-        diagnostics.async_get_config_entry_diagnostics(SimpleNamespace(), entry)
+        diagnostics.async_get_config_entry_diagnostics(_fake_hass(), entry)
     )
 
     assert result["coordinators"]["ems"]["last_command_time"] == "2026-02-15T12:30:00+00:00"

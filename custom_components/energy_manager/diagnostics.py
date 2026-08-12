@@ -43,7 +43,11 @@ async def async_get_config_entry_diagnostics(
             "data": async_redact_data(dict(entry.data), TO_REDACT),
             "options": async_redact_data(dict(entry.options), TO_REDACT),
         },
-        "integration_version": _read_manifest_version(),
+        # Executor job: manifest.json is read from disk, and blocking I/O
+        # in the event loop trips HA's blocking-call detector.
+        "integration_version": await hass.async_add_executor_job(
+            _read_manifest_version
+        ),
         "runtime_flags": {
             "control_enabled": runtime.control_enabled,
             "force_charging": runtime.force_charging,
