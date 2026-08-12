@@ -25,9 +25,12 @@ if TYPE_CHECKING:
 # support is feature-detected via DeviceInfo's TypedDict metadata rather than
 # an HA version check. Drop this gate once the integration's minimum
 # supported HA version (see hacs.json) reaches 2026.8.
-_VIA_DEVICE_ID_SUPPORTED = "via_device_id" in getattr(
-    DeviceInfo, "__optional_keys__", ()
-)
+def _supports_via_device_id(device_info_cls: type) -> bool:
+    """Return True if this HA's DeviceInfo accepts the via_device_id key."""
+    return "via_device_id" in getattr(device_info_cls, "__optional_keys__", ())
+
+
+_VIA_DEVICE_ID_SUPPORTED = _supports_via_device_id(DeviceInfo)
 
 
 def get_price_unit(entry: ConfigEntry) -> str:

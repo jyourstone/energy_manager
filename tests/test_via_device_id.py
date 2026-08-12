@@ -16,7 +16,10 @@ flag and the getattr(..., "__optional_keys__", ()) pattern it relies on.
 
 from __future__ import annotations
 
-from custom_components.energy_manager.entity import _VIA_DEVICE_ID_SUPPORTED
+from custom_components.energy_manager.entity import (
+    _VIA_DEVICE_ID_SUPPORTED,
+    _supports_via_device_id,
+)
 
 
 def test_via_device_id_not_supported_under_test_stubs() -> None:
@@ -27,25 +30,25 @@ def test_via_device_id_not_supported_under_test_stubs() -> None:
     assert _VIA_DEVICE_ID_SUPPORTED is False
 
 
-def test_optional_keys_detection_true_when_via_device_id_present() -> None:
-    """A DeviceInfo-shaped object exposing via_device_id in its
+def test_supports_via_device_id_true_when_key_present() -> None:
+    """A DeviceInfo-shaped class exposing via_device_id in its
     __optional_keys__ (as on HA >= 2026.8) is detected as supported.
     """
 
     class _NewDeviceInfo:
         __optional_keys__ = frozenset({"via_device_id", "sw_version"})
 
-    assert "via_device_id" in getattr(_NewDeviceInfo, "__optional_keys__", ())
+    assert _supports_via_device_id(_NewDeviceInfo) is True
 
 
-def test_optional_keys_detection_false_when_via_device_id_absent() -> None:
-    """A DeviceInfo-shaped object without via_device_id (as on HA < 2026.8,
-    or an object with no __optional_keys__ at all) is detected as
+def test_supports_via_device_id_false_when_key_absent() -> None:
+    """A DeviceInfo-shaped class without via_device_id (as on HA < 2026.8,
+    or a class with no __optional_keys__ at all) is detected as
     unsupported.
     """
 
     class _OldDeviceInfo:
         __optional_keys__ = frozenset({"via_device", "sw_version"})
 
-    assert "via_device_id" not in getattr(_OldDeviceInfo, "__optional_keys__", ())
-    assert "via_device_id" not in getattr(object(), "__optional_keys__", ())
+    assert _supports_via_device_id(_OldDeviceInfo) is False
+    assert _supports_via_device_id(object) is False
