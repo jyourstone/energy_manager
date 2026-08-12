@@ -68,6 +68,14 @@ async def async_setup_entry(
             (raised automatically by async_config_entry_first_refresh via
             UpdateFailed).
     """
+    # Clear any repairs issues left over from a prior instance of this
+    # entry. Every condition is re-detected below (the sustained ones
+    # within their own sustain windows), so this also self-heals a sticky
+    # issue stranded by the unload-time clear racing an in-flight refresh
+    # (DataUpdateCoordinator.async_shutdown() does not await one).
+    for issue_id in ALL_ISSUE_IDS:
+        async_clear_issue(hass, issue_id)
+
     # Create and initialize the price coordinator
     price_coordinator = PriceCoordinator(hass, entry)
     await price_coordinator.async_config_entry_first_refresh()
@@ -214,11 +222,6 @@ async def async_unload_entry(
     Returns:
         True if unload was successful.
     """
-    # Repairs issues are re-detected every update cycle -- clear them all
-    # on unload so nothing stale survives a reload or reconfiguration.
-    for issue_id in ALL_ISSUE_IDS:
-        async_clear_issue(hass, issue_id)
-
     forwarded = getattr(entry.runtime_data, "forwarded_platforms", None)
     if forwarded is not None:
         platforms = [Platform(p) for p in forwarded]
@@ -248,6 +251,13 @@ async def async_unload_entry(
     if easee_coordinator is not None:
         await easee_coordinator.async_shutdown()
         await easee_coordinator.async_flush_solar_tracker_store()
+
+    # Repairs issues are re-detected every update cycle -- clear them all
+    # last, after every await above, so an in-flight refresh landing
+    # between an earlier clear and shutdown cannot re-file a sticky issue
+    # (e.g. grid_sensor_mismatch) and strand it across a config-fix reload.
+    for issue_id in ALL_ISSUE_IDS:
+        async_clear_issue(hass, issue_id)
 
     return True
 

@@ -565,6 +565,10 @@
     "discharge_limit_wrong_domain": {
       "title": "Discharge limit entity is not a number entity",
       "description": "The configured discharge limit entity {entity_id} is not in the 'number' domain, so discharge limit commands are skipped. Select a writable number entity in the Energy Manager Grid & Fuse Protection options."
+    },
+    "grid_sensor_mismatch": {
+      "title": "Grid phase sensors disagree with the total grid power sensor",
+      "description": "The per-phase grid sensors ({phase_entities}) sum to {phase_sum_kw} kW, but the total grid power sensor {grid_power_entity} reads {total_kw} kW. The per-phase entities are likely inverter-output sensors instead of grid-flow sensors, or use an opposite sign convention. Fuse protection and solar-surplus decisions are unreliable until they agree. Check the sensor selection in the Energy Manager Grid & Fuse Protection options."
     }
   }
 }

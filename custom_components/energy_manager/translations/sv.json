@@ -565,6 +565,10 @@
     "discharge_limit_wrong_domain": {
       "title": "Entiteten för urladdningsgräns är ingen number-entitet",
       "description": "Den konfigurerade entiteten för urladdningsgräns {entity_id} tillhör inte domänen 'number', så urladdningsgränskommandon hoppas över. Välj en skrivbar number-entitet i Energy Managers inställningar för Elnät och säkringsskydd."
+    },
+    "grid_sensor_mismatch": {
+      "title": "Nätets fassensorer stämmer inte med den totala nätsensorn",
+      "description": "Fassensorerna för nätet ({phase_entities}) summerar till {phase_sum_kw} kW, men den totala nätsensorn {grid_power_entity} visar {total_kw} kW. Fasentiteterna är sannolikt växelriktarsensorer i stället för nätflödessensorer, eller använder omvänd teckenkonvention. Säkringsskyddet och solöverskottsbesluten är otillförlitliga tills värdena stämmer överens. Kontrollera sensorvalen i Energy Managers inställningar för Elnät och säkringsskydd."
     }
   }
 }

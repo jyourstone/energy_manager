@@ -11,9 +11,10 @@ Persistent degraded conditions surface in **Settings → Repairs** instead of on
 | Fuse-protection sensor fallback | A configured grid/fuse power sensor has been unavailable and falling back to the assumed load for 5 or more continuous minutes |
 | Charge limit entity in the wrong domain | The configured battery charge-limit entity isn't a `number.*` entity, so Energy Manager can't call `number.set_value` on it |
 | Discharge limit entity in the wrong domain | Same check, for the configured battery discharge-limit entity |
+| Grid phase sensors disagree with the total grid power sensor | With both the three per-phase grid sensors and the total grid power sensor configured, their readings have disagreed significantly for 5 or more continuous minutes — usually the per-phase entities are inverter-output sensors instead of grid-flow sensors, or use an opposite sign convention |
 
 !!! note "Issues clear themselves"
-    Every issue is re-evaluated on the next update cycle, so nothing needs to be manually dismissed — fix the underlying condition (restore the sensor, repoint the entity picker to a `number.*` entity) and the Repairs entry clears automatically once Energy Manager sees a good read.
+    Every issue is re-evaluated on the next update cycle, so nothing needs to be manually dismissed — fix the underlying condition (restore the sensor, repoint the entity picker to a `number.*` entity) and the Repairs entry clears automatically once Energy Manager sees a good read. The one exception is the grid sensor mismatch issue: the misconfigured sensors it detects can agree for hours at a time (at night, for example), so once raised it stays raised and is instead cleared when the integration reloads or unloads — fix the sensor configuration in **Configure** (which reloads Energy Manager) and it stays gone.
 
 ## Diagnostics
 
