@@ -1159,6 +1159,7 @@ class CarScheduleSensor(CarEntity, SensorEntity):
             "target_soc": data.target_soc,
             "solar_target_soc": data.solar_target_soc,
             "is_preliminary": data.is_preliminary,
+            "fallback_mode": data.fallback_mode,
             "last_calculated": data.last_calculated.isoformat(),
         }
 

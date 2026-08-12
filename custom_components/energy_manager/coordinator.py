@@ -2877,6 +2877,19 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         return True
 
 
+def _read_soc_timestamp(state) -> datetime:
+    """Return the state timestamp to track for EV-08 staleness detection.
+
+    Uses last_reported, not last_updated: last_updated only advances when
+    the state VALUE changes, so a parked car with a constant SOC would
+    look permanently stale to _detect_fallback_needed() even though its
+    integration (e.g. mySkoda) keeps polling fine. last_reported advances
+    on every write regardless of whether the value changed, so a
+    genuinely silent integration still looks correctly stale.
+    """
+    return state.last_reported
+
+
 @dataclass(frozen=True, slots=True)
 class CarChargingData:
     """Output of the car charging coordinator.
@@ -2903,6 +2916,9 @@ class CarChargingData:
             EaseeCoordinator to build a CarDemand.
         solar_target_soc: SOC ceiling for solar charging of this car
             (percent).
+        fallback_mode: True when this schedule is the EV-08 guest-car
+            fallback plan (cheapest half-window, ignores this car's SoC),
+            not the car's own plan.
     """
 
     current_action: str
@@ -2919,6 +2935,7 @@ class CarChargingData:
     phase_capability: int
     max_charge_power_kw: float
     solar_target_soc: float = 100.0
+    fallback_mode: bool = False
 
 
 class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
@@ -3092,6 +3109,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             phase_capability=self._phase_capability,
             max_charge_power_kw=self.max_charge_power_kw,
             solar_target_soc=self.solar_target_soc,
+            fallback_mode=fallback_mode,
         )
 
     def _read_car_soc(self) -> float | None:
@@ -3103,6 +3121,12 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             number (the price scheduler) apply their own assumption;
             solar-mode eligibility must see None so unknown SOC stays
             fail-open (charge) regardless of the solar target level.
+
+        Staleness for _detect_fallback_needed() is tracked via
+        last_reported (see _read_soc_timestamp()), not last_updated:
+        last_updated only advances when the state VALUE changes, so a
+        parked car with an unchanging SOC would otherwise look
+        permanently stale even though its integration is polling fine.
         """
         if not self._battery_level_entity:
             return None
@@ -3113,11 +3137,11 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
 
         try:
             soc = float(state.state)
-            # Track when the sensor itself last produced a value, not when
-            # we happened to read it -- a frozen sensor (integration gone
+            # Track when the sensor itself last reported (see
+            # _read_soc_timestamp()) -- a frozen sensor (integration gone
             # offline but still reporting its last state) must still look
             # stale to _detect_fallback_needed().
-            self._soc_last_updated = state.last_updated
+            self._soc_last_updated = _read_soc_timestamp(state)
             return soc
         except (ValueError, TypeError):
             return None
