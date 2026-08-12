@@ -139,7 +139,7 @@ async def async_setup_entry(
 
     # Register hub device in device registry
     device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
+    hub_device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
         name="Energy Manager",
@@ -147,6 +147,7 @@ async def async_setup_entry(
         model="Hub",
         entry_type=dr.DeviceEntryType.SERVICE,
     )
+    entry.runtime_data.hub_device_id = hub_device.id
 
     # Forward platforms for enabled modules. Remember exactly which were
     # forwarded -- at unload time entry.options may already hold NEW values
