@@ -41,8 +41,17 @@ def async_report_issue(
     severity: ir.IssueSeverity,
     translation_key: str,
     placeholders: dict[str, str] | None = None,
-) -> None:
-    """File (or idempotently refresh) a repairs issue. Never raises."""
+) -> bool:
+    """File (or idempotently refresh) a repairs issue. Never raises.
+
+    Returns:
+        True on success, False when the registry call raised and the
+        exception was swallowed. Most callers can ignore this -- filing
+        is diagnostics and must never fail the update cycle -- but a
+        caller that only gets one shot at filing (e.g. a sticky guard
+        that won't retry until its own state says to) needs to know a
+        report was actually lost, not just attempted.
+    """
     try:
         ir.async_create_issue(
             hass,
@@ -54,8 +63,10 @@ def async_report_issue(
             translation_key=translation_key,
             translation_placeholders=placeholders,
         )
+        return True
     except Exception:  # diagnostics must never fail the update cycle
         _LOGGER.debug("Failed to report repairs issue %s", issue_id, exc_info=True)
+        return False
 
 
 def async_clear_issue(hass: HomeAssistant, issue_id: str) -> None:

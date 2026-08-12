@@ -68,6 +68,14 @@ async def async_setup_entry(
             (raised automatically by async_config_entry_first_refresh via
             UpdateFailed).
     """
+    # Clear any repairs issues left over from a prior instance of this
+    # entry. Every condition is re-detected below (the sustained ones
+    # within their own sustain windows), so this also self-heals a sticky
+    # issue stranded by the unload-time clear racing an in-flight refresh
+    # (DataUpdateCoordinator.async_shutdown() does not await one).
+    for issue_id in ALL_ISSUE_IDS:
+        async_clear_issue(hass, issue_id)
+
     # Create and initialize the price coordinator
     price_coordinator = PriceCoordinator(hass, entry)
     await price_coordinator.async_config_entry_first_refresh()

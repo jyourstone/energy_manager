@@ -1698,7 +1698,7 @@ class FuseSensorReader:
                 self._grid_power_entity,
                 total_kw,
             )
-            async_report_issue(
+            reported = async_report_issue(
                 self._hass,
                 ISSUE_GRID_SENSOR_MISMATCH,
                 ir.IssueSeverity.WARNING,
@@ -1710,6 +1710,15 @@ class FuseSensorReader:
                     "total_kw": f"{total_kw:.1f}",
                 },
             )
+            if not reported:
+                # update_grid_consistency() already sticky-flagged the
+                # tracker for this RAISE event. If the registry call above
+                # swallowed an exception, no issue actually got filed --
+                # without resetting here the guard would stay silently
+                # flagged with nothing filed until the entry reloads.
+                # Re-arm it so a fresh sustain window retries instead.
+                self._mismatch_tracker.flagged = False
+                self._mismatch_tracker.mismatch_since_ts = None
 
     def _note_read_success(self) -> None:
         """Reset fallback tracking and clear the Repairs issue after a good read."""

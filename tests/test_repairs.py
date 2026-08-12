@@ -360,6 +360,52 @@ def test_grid_mismatch_reactivates_issue_after_restart(
     assert len(warnings) == 1
 
 
+def test_grid_mismatch_failed_filing_rearms_the_guard(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A swallowed async_create_issue exception must not strand the guard.
+
+    update_grid_consistency() sticky-flags the tracker on EVENT_RAISE
+    before the registry call runs. If that call raises, no issue actually
+    gets filed -- without a reset the guard would stay silently flagged
+    with nothing filed until the entry reloads. It must instead re-arm
+    (flagged=False, mismatch_since_ts=None) and retry after a fresh
+    sustain window.
+    """
+    clock = {"now": 0.0}
+    monkeypatch.setattr(coordinator_module, "monotonic", lambda: clock["now"])
+    hass = FakeHass(_mismatch_states())
+    reader = _make_grid_reader(hass)
+
+    ir.async_create_issue.side_effect = RuntimeError("registry down")
+
+    with caplog.at_level(logging.WARNING):
+        # First attempt: sustain window elapses, warns, filing raises and
+        # is swallowed -- no issue on record, tracker re-armed.
+        reader.read_grid_current_amps()
+        clock["now"] = MISMATCH_SUSTAIN_SECONDS
+        reader.read_grid_current_amps()
+        assert ir.async_create_issue.call_count == 1
+        assert reader._mismatch_tracker.flagged is False
+        assert reader._mismatch_tracker.mismatch_since_ts is None
+
+        # Registry recovers, but the re-armed guard must run a full fresh
+        # sustain window before retrying -- no immediate re-file.
+        ir.async_create_issue.side_effect = None
+        clock["now"] += 30.0
+        reader.read_grid_current_amps()
+        assert ir.async_create_issue.call_count == 1
+
+        # Second attempt: fresh window elapses, files + warns again.
+        clock["now"] += MISMATCH_SUSTAIN_SECONDS
+        reader.read_grid_current_amps()
+
+    assert ir.async_create_issue.call_count == 2
+    assert reader._mismatch_tracker.flagged is True
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+
+
 # ---------------------------------------------------------------------------
 # async_unload_entry() -- clears all fixed issue ids
 # ---------------------------------------------------------------------------
