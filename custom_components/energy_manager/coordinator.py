@@ -4518,6 +4518,10 @@ class EnergyManagerData:
     # an options change (module toggle) between setup and unload can't make
     # us unload platforms that were never set up.
     forwarded_platforms: list[str] = field(default_factory=list)
+    # Device registry id of the hub device, set right after registration in
+    # async_setup_entry (before platforms are forwarded). Consumed by
+    # CarEntity/ApplianceEntity to link via via_device_id on HA >= 2026.8.
+    hub_device_id: str | None = None
 
 
 EnergyManagerConfigEntry = ConfigEntry[EnergyManagerData]
