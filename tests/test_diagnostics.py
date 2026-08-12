@@ -252,3 +252,18 @@ def test_diagnostics_jsonify_converts_datetime_in_ems_snapshot() -> None:
     )
 
     assert result["coordinators"]["ems"]["last_command_time"] == "2026-02-15T12:30:00+00:00"
+
+
+# ---------------------------------------------------------------------------
+# _car_snapshot() -- EV-08 guest-fallback surfacing (car-fallback-guest-misfire)
+# ---------------------------------------------------------------------------
+
+
+def test_car_snapshot_fallback_mode_defaults_false() -> None:
+    assert diagnostics._car_snapshot(_car_data())["fallback_mode"] is False
+
+
+def test_car_snapshot_includes_fallback_mode_when_set() -> None:
+    car = replace(_car_data(), fallback_mode=True)
+
+    assert diagnostics._car_snapshot(car)["fallback_mode"] is True

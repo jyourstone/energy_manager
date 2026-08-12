@@ -140,6 +140,7 @@ def _car_snapshot(data: CarChargingData | None) -> dict[str, Any] | None:
         "target_soc": data.target_soc,
         "is_preliminary": data.is_preliminary,
         "home_and_plugged": data.home_and_plugged,
+        "fallback_mode": data.fallback_mode,
         "phase_capability": data.phase_capability,
         "max_charge_power_kw": data.max_charge_power_kw,
         "last_calculated": data.last_calculated.isoformat(),

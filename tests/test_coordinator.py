@@ -24,9 +24,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+from custom_components.energy_manager.const import FALLBACK_STALE_THRESHOLD_MINUTES
 from custom_components.energy_manager.coordinator import (
+    CarChargingData,
     EMSData,
     _prune_samples,
+    _read_soc_timestamp,
     _read_sun_dawn_dusk,
     _restore_samples,
     _serialize_samples,
@@ -39,9 +42,17 @@ UTC = timezone.utc
 
 
 class FakeState:
-    def __init__(self, state: str, attributes: dict | None = None) -> None:
+    def __init__(
+        self,
+        state: str,
+        attributes: dict | None = None,
+        last_updated: datetime | None = None,
+        last_reported: datetime | None = None,
+    ) -> None:
         self.state = state
         self.attributes = attributes or {}
+        self.last_updated = last_updated
+        self.last_reported = last_reported
 
 
 class FakeHass:
@@ -340,3 +351,99 @@ def test_ems_data_discharge_limit_fields_carried() -> None:
 
     assert data.discharge_limit_kw == 4.2
     assert data.discharge_limit_delivered is True
+
+
+# ---------------------------------------------------------------------------
+# _read_soc_timestamp() -- EV-08 guest-fallback staleness fix
+#
+# CarChargingCoordinator itself cannot be instantiated (or even
+# introspected for its methods) under the homeassistant stub -- see the
+# module docstring above -- so this covers the extracted staleness-field
+# helper directly, and composes it with the same threshold constant
+# _detect_fallback_needed() compares against to prove the actual
+# incident scenario no longer misfires.
+# ---------------------------------------------------------------------------
+
+
+def test_read_soc_timestamp_uses_last_reported_not_last_updated() -> None:
+    """last_updated only advances on a state VALUE change -- a parked car
+    with a constant SOC must not be tracked by that field, or it would
+    look permanently stale. last_reported advances on every write."""
+    state = FakeState(
+        "55",
+        last_updated=datetime(2026, 8, 12, 9, 0, tzinfo=UTC),
+        last_reported=datetime(2026, 8, 12, 11, 55, tzinfo=UTC),
+    )
+
+    assert _read_soc_timestamp(state) == datetime(2026, 8, 12, 11, 55, tzinfo=UTC)
+
+
+def test_fallback_not_stale_when_last_reported_is_fresh() -> None:
+    """Regression test for the guest-fallback misfire: a parked car whose
+    SOC value hasn't changed in 2h (stale last_updated) but whose
+    integration keeps polling (fresh last_reported) must not trip
+    _detect_fallback_needed()'s staleness threshold."""
+    now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    state = FakeState(
+        "55",
+        last_updated=now - timedelta(hours=2),
+        last_reported=now - timedelta(minutes=5),
+    )
+
+    soc_last_updated = _read_soc_timestamp(state)
+    elapsed = (now - soc_last_updated).total_seconds()
+
+    assert elapsed <= FALLBACK_STALE_THRESHOLD_MINUTES * 60
+
+
+def test_fallback_stale_when_last_reported_is_also_old() -> None:
+    """When last_reported itself is stale (integration truly silent, or
+    an unrecognized guest car), the staleness threshold must still
+    trip."""
+    now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    state = FakeState(
+        "55",
+        last_updated=now - timedelta(hours=2),
+        last_reported=now - timedelta(hours=2),
+    )
+
+    soc_last_updated = _read_soc_timestamp(state)
+    elapsed = (now - soc_last_updated).total_seconds()
+
+    assert elapsed > FALLBACK_STALE_THRESHOLD_MINUTES * 60
+
+
+# ---------------------------------------------------------------------------
+# CarChargingData.fallback_mode -- EV-08 guest-fallback surfacing
+# ---------------------------------------------------------------------------
+
+
+def _minimal_car_charging_data(**overrides) -> CarChargingData:
+    """CarChargingData with only the required (non-default) fields filled."""
+    kwargs = {
+        "current_action": "idle",
+        "schedule": [],
+        "charging_slot_count": 0,
+        "energy_needed_kwh": 0.0,
+        "hours_needed": 0.0,
+        "is_preliminary": False,
+        "car_name": "Test Car",
+        "current_soc": 50.0,
+        "target_soc": 80.0,
+        "last_calculated": datetime(2026, 8, 12, 12, 0, tzinfo=UTC),
+        "home_and_plugged": False,
+        "phase_capability": 3,
+        "max_charge_power_kw": 7.4,
+    }
+    kwargs.update(overrides)
+    return CarChargingData(**kwargs)
+
+
+def test_car_charging_data_fallback_mode_defaults_false() -> None:
+    """A normal (non-guest) schedule must not be flagged as fallback."""
+    assert _minimal_car_charging_data().fallback_mode is False
+
+
+def test_car_charging_data_fallback_mode_carried() -> None:
+    """The EV-08 guest-fallback flag passes through when set."""
+    assert _minimal_car_charging_data(fallback_mode=True).fallback_mode is True
