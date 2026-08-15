@@ -83,6 +83,7 @@ from .const import (
     CONF_APPLIANCE_RATED_POWER_W,
     CONF_APPLIANCE_SWITCH_ENTITY,
     CONF_ASSUMED_LOAD_AMPS,
+    CONF_AVAILABLE_CHARGE_POWER_ENTITY,
     CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
@@ -124,6 +125,7 @@ from .const import (
     CONF_PHASE_SWITCH_THRESHOLD_KW,
     CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_CHARGE_POWER_ENTITY,
     CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
@@ -1863,6 +1865,12 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         self._discharge_limit_entity: str = entry.options.get(
             CONF_DISCHARGE_LIMIT_ENTITY, ""
         )
+        self._available_charge_power_entity: str = entry.options.get(
+            CONF_AVAILABLE_CHARGE_POWER_ENTITY, ""
+        )
+        self._rated_charge_power_entity: str = entry.options.get(
+            CONF_RATED_CHARGE_POWER_ENTITY, ""
+        )
         self._available_discharge_power_entity: str = entry.options.get(
             CONF_AVAILABLE_DISCHARGE_POWER_ENTITY, ""
         )
@@ -2753,6 +2761,20 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # Clamp to safe range before sending (Pitfall 2)
         clamped = max(0.0, min(limit_kw, MAX_CHARGE_LIMIT_KW))
+
+        # Hardware caps (incident 2026-08-15): SigenStor rejects charge-limit
+        # register writes above the battery's rated charging power (which can
+        # sit below the MAX_CHARGE_LIMIT_KW fallback), and available charging
+        # power drops as the battery fills. Clamping only ever lowers the
+        # value, so the fuse-cap decrease invariant is preserved.
+        clamped = _apply_power_caps(
+            self.hass,
+            clamped,
+            (
+                self._available_charge_power_entity,
+                self._rated_charge_power_entity,
+            ),
+        )
 
         # Choke point (CORE-14): suppress the command when observe-only.
         decision = build_command_decision(

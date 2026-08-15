@@ -49,7 +49,7 @@ Every command sensor carries extra attributes that explain the state — read th
 | `discharge_limit_delivered` | Commanded discharge limit | Whether the value also reached a configured SigenStor discharge-limit entity (`false` when the send was skipped or failed) |
 | `discharge_gate_reason` | Commanded discharge limit | Why discharge is currently allowed or blocked, e.g. `scheduled_discharge`, `no_schedule` |
 
-The commanded discharge limit sensor's state is the requested value; when it's delivered to a configured SigenStor discharge-limit entity, the write is additionally clamped to the configured *available* and *rated* discharge power sensors, if set — so the value the hardware actually receives may be lower than what the sensor shows.
+The commanded discharge limit sensor's state is the requested value; when it's delivered to a configured SigenStor discharge-limit entity, the write is additionally clamped to the configured *available* and *rated* discharge power sensors, if set — so the value the hardware actually receives may be lower than what the sensor shows. The commanded charge limit is clamped the same way, against the configured *available* and *rated* charge power sensors, if set.
 
 The commanded charging current sensor also carries `charger_mode` and `charger_status` (EM's internal decision mode and the raw charger status this tick) — useful context if you're debugging why a current value changed, but not part of the contract your automation needs to act on.
 
