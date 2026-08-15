@@ -71,6 +71,7 @@ from .const import (
     CONF_APPLIANCE_SWITCH_ENTITY,
     CONF_APPLIANCES_ENABLED,
     CONF_ASSUMED_LOAD_AMPS,
+    CONF_AVAILABLE_CHARGE_POWER_ENTITY,
     CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
@@ -117,6 +118,7 @@ from .const import (
     CONF_PHASE_SWITCH_THRESHOLD_KW,
     CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_CHARGE_POWER_ENTITY,
     CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
@@ -524,6 +526,12 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_RATED_DISCHARGE_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_AVAILABLE_CHARGE_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_RATED_CHARGE_POWER_ENTITY): EntitySelector(
                 EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
@@ -961,6 +969,12 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_RATED_DISCHARGE_POWER_ENTITY: self._data.get(
                 CONF_RATED_DISCHARGE_POWER_ENTITY, ""
             ),
+            CONF_AVAILABLE_CHARGE_POWER_ENTITY: self._data.get(
+                CONF_AVAILABLE_CHARGE_POWER_ENTITY, ""
+            ),
+            CONF_RATED_CHARGE_POWER_ENTITY: self._data.get(
+                CONF_RATED_CHARGE_POWER_ENTITY, ""
+            ),
             CONF_GRID_POWER_ENTITY: self._data.get(CONF_GRID_POWER_ENTITY, ""),
             CONF_GRID_PHASE_A_ENTITY: self._data.get(CONF_GRID_PHASE_A_ENTITY, ""),
             CONF_GRID_PHASE_B_ENTITY: self._data.get(CONF_GRID_PHASE_B_ENTITY, ""),
@@ -1277,6 +1291,12 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                 EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_RATED_DISCHARGE_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_AVAILABLE_CHARGE_POWER_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_RATED_CHARGE_POWER_ENTITY): EntitySelector(
                 EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(

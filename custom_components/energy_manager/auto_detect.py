@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    CONF_AVAILABLE_CHARGE_POWER_ENTITY,
     CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGE_LIMIT_ENTITY,
@@ -30,6 +31,7 @@ from .const import (
     CONF_GRID_POWER_ENTITY,
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_CHARGE_POWER_ENTITY,
     CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_SOC_ENTITY,
 )
@@ -351,6 +353,38 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                 result[CONF_RATED_DISCHARGE_POWER_ENTITY] = entity_entry.entity_id
                 _LOGGER.debug(
                     "Found SigenStor rated discharge power entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            # Look for available charge power cap (sensor domain, read-only
+            # capability used to clamp the number-domain charge limit write)
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_AVAILABLE_CHARGE_POWER_ENTITY not in result
+                and (
+                    "available_max_charging" in entity_id_lower
+                    or "available_max_charging" in unique_id_lower
+                )
+            ):
+                result[CONF_AVAILABLE_CHARGE_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor available charge power entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            # Look for rated charge power cap (sensor domain, read-only
+            # capability used to clamp the number-domain charge limit write)
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_RATED_CHARGE_POWER_ENTITY not in result
+                and (
+                    "rated_charging" in entity_id_lower
+                    or "rated_charging" in unique_id_lower
+                )
+            ):
+                result[CONF_RATED_CHARGE_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor rated charge power entity: %s",
                     entity_entry.entity_id,
                 )
 

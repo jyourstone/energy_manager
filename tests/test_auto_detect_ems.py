@@ -25,6 +25,7 @@ from custom_components.energy_manager.auto_detect import (
     find_sigenstor_entities,
 )
 from custom_components.energy_manager.const import (
+    CONF_AVAILABLE_CHARGE_POWER_ENTITY,
     CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGE_LIMIT_ENTITY,
@@ -36,6 +37,7 @@ from custom_components.energy_manager.const import (
     CONF_GRID_POWER_ENTITY,
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_CHARGE_POWER_ENTITY,
     CONF_RATED_DISCHARGE_POWER_ENTITY,
 )
 
@@ -314,6 +316,85 @@ class TestDischargePowerCapSensors:
         result = _run_detect([entity])
         assert CONF_AVAILABLE_DISCHARGE_POWER_ENTITY not in result
         assert CONF_RATED_DISCHARGE_POWER_ENTITY not in result
+
+
+# ---------------------------------------------------------------------------
+# Test 2c: Charge power cap sensors (available/rated) -- hardware clamp
+# ---------------------------------------------------------------------------
+
+
+class TestChargePowerCapSensors:
+    """Sensor-domain capability sensors used by coordinator to clamp the
+    charge limit write against SigenStor's live rated/available charge
+    power (avoids exception_code=2 illegal-data-address rejects)."""
+
+    def test_detects_available_max_charging_power_sensor(self):
+        """sensor.sigen_plant_available_max_charging_power should be detected."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_available_max_charging_power",
+            domain="sensor",
+            unique_id="sigen_plant_available_max_charging_power",
+        )
+        result = _run_detect([entity])
+        assert CONF_AVAILABLE_CHARGE_POWER_ENTITY in result
+        assert result[CONF_AVAILABLE_CHARGE_POWER_ENTITY] == entity.entity_id
+
+    def test_detects_rated_charging_power_sensor(self):
+        """sensor.sigen_battery_ess_rated_charging_power should be detected."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_battery_ess_rated_charging_power",
+            domain="sensor",
+            unique_id="sigen_battery_ess_rated_charging_power",
+        )
+        result = _run_detect([entity])
+        assert CONF_RATED_CHARGE_POWER_ENTITY in result
+        assert result[CONF_RATED_CHARGE_POWER_ENTITY] == entity.entity_id
+
+    def test_discharging_sensors_do_not_populate_charge_keys(self):
+        """available_max_discharging / rated_discharging must NOT match the
+        charge-side substrings -- "discharging" contains "charging" as a
+        substring, so a naive `in` check would cross-contaminate."""
+        available = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_available_max_discharging_power",
+            domain="sensor",
+            unique_id="sigen_plant_available_max_discharging_power",
+        )
+        rated = FakeEntityEntry(
+            entity_id="sensor.sigen_battery_ess_rated_discharging_power",
+            domain="sensor",
+            unique_id="sigen_battery_ess_rated_discharging_power",
+        )
+        result = _run_detect([available, rated])
+        assert CONF_AVAILABLE_CHARGE_POWER_ENTITY not in result
+        assert CONF_RATED_CHARGE_POWER_ENTITY not in result
+
+    def test_charging_sensors_do_not_populate_discharge_keys(self):
+        """available_max_charging / rated_charging must NOT match the
+        discharge-side substrings -- the reverse of the above."""
+        available = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_available_max_charging_power",
+            domain="sensor",
+            unique_id="sigen_plant_available_max_charging_power",
+        )
+        rated = FakeEntityEntry(
+            entity_id="sensor.sigen_battery_ess_rated_charging_power",
+            domain="sensor",
+            unique_id="sigen_battery_ess_rated_charging_power",
+        )
+        result = _run_detect([available, rated])
+        assert CONF_AVAILABLE_DISCHARGE_POWER_ENTITY not in result
+        assert CONF_RATED_DISCHARGE_POWER_ENTITY not in result
+
+    def test_keys_absent_when_no_matching_sensors(self):
+        """Neither cap-sensor key is present when no matching sensors exist."""
+        entity = FakeEntityEntry(
+            entity_id="sensor.sigen_plant_grid_active_power",
+            domain="sensor",
+            unique_id="sigen_plant_grid_active_power",
+        )
+        result = _run_detect([entity])
+        assert CONF_AVAILABLE_CHARGE_POWER_ENTITY not in result
+        assert CONF_RATED_CHARGE_POWER_ENTITY not in result
 
 
 # ---------------------------------------------------------------------------
