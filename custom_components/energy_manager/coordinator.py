@@ -83,6 +83,7 @@ from .const import (
     CONF_APPLIANCE_RATED_POWER_W,
     CONF_APPLIANCE_SWITCH_ENTITY,
     CONF_ASSUMED_LOAD_AMPS,
+    CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
@@ -123,6 +124,7 @@ from .const import (
     CONF_PHASE_SWITCH_THRESHOLD_KW,
     CONF_PRODUCTION_FACTOR,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     CONF_SOC_ENTITY,
     CONF_SOLAR_ACTIVATION_DELAY,
@@ -1403,6 +1405,34 @@ def _read_entity_float(hass: HomeAssistant, entity_id: str, default: float) -> f
         return default
 
 
+def _apply_power_caps(
+    hass: HomeAssistant, limit_kw: float, cap_entities: tuple[str, ...]
+) -> float:
+    """Clamp a limit command to configured hardware power-cap sensors.
+
+    SigenStor rejects limit-register writes above the plant's rated
+    discharge power with an illegal-data-address error (exception_code=2,
+    incident 2026-08-15), and the available power drops below rated at low
+    SOC -- so both sensors are checked. An unreadable cap sensor
+    (unconfigured/unavailable/non-numeric) is skipped rather than blocking
+    the send; power sensors never read negative, so a negative read is
+    treated as unreadable too.
+
+    Args:
+        hass: Home Assistant instance.
+        limit_kw: The already range-clamped limit command in kW.
+        cap_entities: Cap sensor entity ids; "" entries are skipped.
+
+    Returns:
+        limit_kw reduced to the lowest readable cap.
+    """
+    for cap_entity in cap_entities:
+        cap = _read_entity_float(hass, cap_entity, -1.0)
+        if cap >= 0.0:
+            limit_kw = min(limit_kw, cap)
+    return limit_kw
+
+
 def _entity_has_value(hass: HomeAssistant, entity_id: str) -> bool:
     """Return True if entity_id is configured and has a valid numeric state."""
     if not entity_id:
@@ -1832,6 +1862,12 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
         )
         self._discharge_limit_entity: str = entry.options.get(
             CONF_DISCHARGE_LIMIT_ENTITY, ""
+        )
+        self._available_discharge_power_entity: str = entry.options.get(
+            CONF_AVAILABLE_DISCHARGE_POWER_ENTITY, ""
+        )
+        self._rated_discharge_power_entity: str = entry.options.get(
+            CONF_RATED_DISCHARGE_POWER_ENTITY, ""
         )
         self._grid_power_entity: str = entry.options.get(
             CONF_GRID_POWER_ENTITY, ""
@@ -2793,6 +2829,18 @@ class EMSCoordinator(DataUpdateCoordinator[EMSData]):
 
         # Clamp to safe range before sending (Pitfall 2)
         clamped = max(0.0, min(limit_kw, MAX_CHARGE_LIMIT_KW))
+
+        # Hardware caps (incident 2026-08-15): SigenStor rejects register
+        # writes above the plant's rated discharge power, and the available
+        # power drops below rated at low SOC.
+        clamped = _apply_power_caps(
+            self.hass,
+            clamped,
+            (
+                self._available_discharge_power_entity,
+                self._rated_discharge_power_entity,
+            ),
+        )
 
         # Choke point (CORE-14): suppress the command when observe-only.
         decision = build_command_decision(

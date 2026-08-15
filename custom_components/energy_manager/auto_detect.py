@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_CHARGER_POWER_ENTITY,
@@ -29,6 +30,7 @@ from .const import (
     CONF_GRID_POWER_ENTITY,
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_SOC_ENTITY,
 )
 from .nordpool_adapter import auto_detect_nordpool as _nordpool_auto_detect
@@ -317,6 +319,38 @@ def find_sigenstor_ems_entities(hass: HomeAssistant) -> dict[str, str]:
                 result[CONF_PV_POWER_ENTITY] = entity_entry.entity_id
                 _LOGGER.debug(
                     "Found SigenStor PV power entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            # Look for available discharge power cap (sensor domain, read-only
+            # capability used to clamp the number-domain discharge limit write)
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_AVAILABLE_DISCHARGE_POWER_ENTITY not in result
+                and (
+                    "available_max_discharging" in entity_id_lower
+                    or "available_max_discharging" in unique_id_lower
+                )
+            ):
+                result[CONF_AVAILABLE_DISCHARGE_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor available discharge power entity: %s",
+                    entity_entry.entity_id,
+                )
+
+            # Look for rated discharge power cap (sensor domain, read-only
+            # capability used to clamp the number-domain discharge limit write)
+            if (
+                entity_entry.domain == "sensor"
+                and CONF_RATED_DISCHARGE_POWER_ENTITY not in result
+                and (
+                    "rated_discharging" in entity_id_lower
+                    or "rated_discharging" in unique_id_lower
+                )
+            ):
+                result[CONF_RATED_DISCHARGE_POWER_ENTITY] = entity_entry.entity_id
+                _LOGGER.debug(
+                    "Found SigenStor rated discharge power entity: %s",
                     entity_entry.entity_id,
                 )
 
