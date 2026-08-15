@@ -26,6 +26,7 @@ import pytest
 
 from custom_components.energy_manager.const import (
     CONF_ASSUMED_LOAD_AMPS,
+    CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SOC_GATE_PCT,
     CONF_CHARGE_LIMIT_ENTITY,
@@ -42,6 +43,7 @@ from custom_components.energy_manager.const import (
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_MAX_ESS_CHARGE_AMPS,
     CONF_PV_POWER_ENTITY,
+    CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_SENSOR_FAIL_BEHAVIOR,
     DEFAULT_ASSUMED_LOAD_AMPS,
     DEFAULT_SENSOR_FAIL_BEHAVIOR,
@@ -89,6 +91,8 @@ _INVERTER_FIELDS = (
     CONF_EMS_SELECT_ENTITY,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
+    CONF_RATED_DISCHARGE_POWER_ENTITY,
     CONF_MAX_ESS_CHARGE_AMPS,
     CONF_ESS_INCREASE_DELAY,
 )
@@ -117,6 +121,8 @@ _POPULATED_EMS_OPTIONS: dict[str, Any] = {
     CONF_EMS_SELECT_ENTITY: "select.sigen_mode",
     CONF_CHARGE_LIMIT_ENTITY: "number.sigen_charge_limit",
     CONF_DISCHARGE_LIMIT_ENTITY: "number.sigen_discharge_limit",
+    CONF_AVAILABLE_DISCHARGE_POWER_ENTITY: "sensor.sigen_available_discharge_power",
+    CONF_RATED_DISCHARGE_POWER_ENTITY: "sensor.sigen_rated_discharge_power",
     CONF_MAX_ESS_CHARGE_AMPS: 25.0,
     CONF_ESS_INCREASE_DELAY: 240.0,
 }
@@ -245,13 +251,7 @@ class TestValuePreservation:
         must still pre-fill them from the surviving stored values."""
         original_options = _POPULATED_EMS_OPTIONS
         stored = dict(original_options)
-        inverter_fields = (
-            CONF_EMS_SELECT_ENTITY,
-            CONF_CHARGE_LIMIT_ENTITY,
-            CONF_DISCHARGE_LIMIT_ENTITY,
-            CONF_MAX_ESS_CHARGE_AMPS,
-            CONF_ESS_INCREASE_DELAY,
-        )
+        inverter_fields = _INVERTER_FIELDS
 
         # Pass 1 -- battery off, ev on: the inverter fields are hidden, so
         # only the visible fields (pre-filled, unchanged, plus the fuse

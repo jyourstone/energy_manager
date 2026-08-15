@@ -28,6 +28,7 @@ from custom_components.energy_manager.const import FALLBACK_STALE_THRESHOLD_MINU
 from custom_components.energy_manager.coordinator import (
     CarChargingData,
     EMSData,
+    _apply_power_caps,
     _prune_samples,
     _read_soc_timestamp,
     _read_sun_dawn_dusk,
@@ -447,3 +448,63 @@ def test_car_charging_data_fallback_mode_defaults_false() -> None:
 def test_car_charging_data_fallback_mode_carried() -> None:
     """The EV-08 guest-fallback flag passes through when set."""
     assert _minimal_car_charging_data(fallback_mode=True).fallback_mode is True
+
+
+# ---------------------------------------------------------------------------
+# _apply_power_caps() -- hardware discharge-power caps
+#
+# SigenStor rejects limit-register writes above the plant's rated discharge
+# power with exception_code=2 (incident 2026-08-15), and the available
+# power drops below rated at low SOC -- _send_discharge_limit() clamps the
+# requested kW against both optional cap sensors via this helper before
+# sending.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_power_caps_clamps_to_tighter_of_both_caps() -> None:
+    hass = FakeHass(
+        {
+            "sensor.available_discharge_power": FakeState("21.6"),
+            "sensor.rated_discharge_power": FakeState("14.4"),
+        }
+    )
+    caps = ("sensor.available_discharge_power", "sensor.rated_discharge_power")
+    assert _apply_power_caps(hass, 15.0, caps) == 14.4
+
+
+def test_apply_power_caps_unavailable_caps_fall_back_to_old_behavior() -> None:
+    hass = FakeHass(
+        {
+            "sensor.available_discharge_power": FakeState("unavailable"),
+            "sensor.rated_discharge_power": FakeState("unavailable"),
+        }
+    )
+    caps = ("sensor.available_discharge_power", "sensor.rated_discharge_power")
+    assert _apply_power_caps(hass, 15.0, caps) == 15.0
+
+
+def test_apply_power_caps_clamps_to_available_cap_alone() -> None:
+    hass = FakeHass({"sensor.available_discharge_power": FakeState("3.2")})
+    caps = ("sensor.available_discharge_power", "")
+    assert _apply_power_caps(hass, 15.0, caps) == 3.2
+
+
+def test_apply_power_caps_non_numeric_cap_skipped_falls_back_to_other_cap() -> None:
+    hass = FakeHass(
+        {
+            "sensor.available_discharge_power": FakeState("garbage"),
+            "sensor.rated_discharge_power": FakeState("14.4"),
+        }
+    )
+    caps = ("sensor.available_discharge_power", "sensor.rated_discharge_power")
+    assert _apply_power_caps(hass, 15.0, caps) == 14.4
+
+
+def test_apply_power_caps_unconfigured_returns_requested_value() -> None:
+    assert _apply_power_caps(FakeHass({}), 15.0, ("", "")) == 15.0
+
+
+def test_apply_power_caps_negative_read_treated_as_unreadable() -> None:
+    hass = FakeHass({"sensor.available_discharge_power": FakeState("-1.0")})
+    caps = ("sensor.available_discharge_power", "")
+    assert _apply_power_caps(hass, 15.0, caps) == 15.0
