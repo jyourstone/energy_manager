@@ -1420,6 +1420,11 @@ def _apply_power_caps(
     the send; power sensors never read negative, so a negative read is
     treated as unreadable too.
 
+    Values are assumed to be kW unless the entity's unit_of_measurement is
+    exactly "W" -- the OPPOSITE default from _read_power_kw(), on purpose: a
+    unitless input_number helper holding a rated power like 14.4 must not be
+    read as 14.4 W (a ~0 kW cap would silently block every limit send).
+
     Args:
         hass: Home Assistant instance.
         limit_kw: The already range-clamped limit command in kW.
@@ -1430,8 +1435,15 @@ def _apply_power_caps(
     """
     for cap_entity in cap_entities:
         cap = _read_entity_float(hass, cap_entity, -1.0)
-        if cap >= 0.0:
-            limit_kw = min(limit_kw, cap)
+        if cap < 0.0:
+            continue
+        state = hass.states.get(cap_entity)
+        if (
+            state is not None
+            and state.attributes.get("unit_of_measurement") == "W"
+        ):
+            cap /= 1000.0
+        limit_kw = min(limit_kw, cap)
     return limit_kw
 
 
