@@ -523,16 +523,16 @@ class EnergyManagerConfigFlow(ConfigFlow, domain=DOMAIN):
                 EntitySelectorConfig(domain="number")
             ),
             vol.Optional(CONF_AVAILABLE_DISCHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_RATED_DISCHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_AVAILABLE_CHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_RATED_CHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
                 EntitySelectorConfig(domain="sensor")
@@ -1288,16 +1288,16 @@ class EnergyManagerOptionsFlow(OptionsFlow):
                 EntitySelectorConfig(domain="number")
             ),
             vol.Optional(CONF_AVAILABLE_DISCHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_RATED_DISCHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_AVAILABLE_CHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_RATED_CHARGE_POWER_ENTITY): EntitySelector(
-                EntitySelectorConfig(domain="sensor")
+                EntitySelectorConfig(domain=["sensor", "input_number", "number"])
             ),
             vol.Optional(CONF_GRID_POWER_ENTITY): EntitySelector(
                 EntitySelectorConfig(domain="sensor")

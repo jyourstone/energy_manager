@@ -508,3 +508,23 @@ def test_apply_power_caps_negative_read_treated_as_unreadable() -> None:
     hass = FakeHass({"sensor.available_discharge_power": FakeState("-1.0")})
     caps = ("sensor.available_discharge_power", "")
     assert _apply_power_caps(hass, 15.0, caps) == 15.0
+
+
+def test_apply_power_caps_watt_unit_normalized_to_kw() -> None:
+    """A W-unit cap entity (e.g. 5000 W) must clamp as 5.0 kW, not 5000 kW."""
+    hass = FakeHass(
+        {
+            "sensor.rated_discharge_power": FakeState(
+                "5000", {"unit_of_measurement": "W"}
+            )
+        }
+    )
+    caps = ("sensor.rated_discharge_power", "")
+    assert _apply_power_caps(hass, 15.0, caps) == 5.0
+
+
+def test_apply_power_caps_unitless_helper_assumed_kw() -> None:
+    """A unitless input_number holding 14.4 means 14.4 kW -- never 14.4 W."""
+    hass = FakeHass({"input_number.rated_discharge_power": FakeState("14.4")})
+    caps = ("input_number.rated_discharge_power", "")
+    assert _apply_power_caps(hass, 15.0, caps) == 14.4
