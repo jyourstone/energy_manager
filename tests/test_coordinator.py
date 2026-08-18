@@ -17,18 +17,31 @@ and BATT-16 (tomorrow forecast entity derivation):
   consumption average (event-driven refreshes must not append a sample on
   every tick).
 - _read_sun_dawn_dusk(): reads sun.sun's next_dawn/next_dusk attributes.
+- _cancel_unsub(): call-if-set helper shared by PriceCoordinator's
+  event-driven refresh listeners.
+- _is_recent_nordpool_refresh(): pure suppression-window predicate behind
+  PriceCoordinator._recent_nordpool_refresh_request().
+- _find_native_coordinator(): entity registry -> config entry -> runtime_data
+  lookup behind PriceCoordinator._subscribe_native_coordinator().
 """
 
 from __future__ import annotations
 
+import inspect
+import re
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from custom_components.energy_manager.const import FALLBACK_STALE_THRESHOLD_MINUTES
 from custom_components.energy_manager.coordinator import (
     CarChargingData,
     EMSData,
     _apply_power_caps,
+    _cancel_unsub,
+    _find_native_coordinator,
+    _is_recent_nordpool_refresh,
     _prune_samples,
     _read_soc_timestamp,
     _read_sun_dawn_dusk,
@@ -38,6 +51,7 @@ from custom_components.energy_manager.coordinator import (
     derive_tomorrow_forecast_entities,
     sum_solar_forecast_wh,
 )
+from custom_components.energy_manager import coordinator as coordinator_module
 
 UTC = timezone.utc
 
@@ -528,3 +542,133 @@ def test_apply_power_caps_unitless_helper_assumed_kw() -> None:
     hass = FakeHass({"input_number.rated_discharge_power": FakeState("14.4")})
     caps = ("input_number.rated_discharge_power", "")
     assert _apply_power_caps(hass, 15.0, caps) == 14.4
+
+
+# ---------------------------------------------------------------------------
+# PriceCoordinator event-driven refresh -- _cancel_unsub(),
+# _is_recent_nordpool_refresh(), _find_native_coordinator()
+#
+# PriceCoordinator itself cannot be instantiated under the HA stub (see
+# module docstring), so these test the pure/HA-light functions its
+# refresh-tracking instance methods (_schedule_clock_refresh,
+# _request_refresh_from_nordpool, _subscribe_native_coordinator,
+# async_shutdown) delegate to.
+# ---------------------------------------------------------------------------
+
+
+class TestCancelUnsub:
+    """_cancel_unsub() -- shared call-if-set helper used by every listener
+    PriceCoordinator owns (clock refresh, delayed clock refresh, Nord Pool
+    state listener, native coordinator listener)."""
+
+    def test_calls_unsub_when_set(self) -> None:
+        unsub = MagicMock()
+        _cancel_unsub(unsub)
+        unsub.assert_called_once()
+
+    def test_noop_when_none(self) -> None:
+        _cancel_unsub(None)  # must not raise
+
+
+class TestIsRecentNordpoolRefresh:
+    """Pure suppression-window predicate behind
+    PriceCoordinator._recent_nordpool_refresh_request() -- used by
+    _schedule_clock_refresh() to skip the clock-aligned fallback when Nord
+    Pool already requested a refresh near the same boundary."""
+
+    def test_false_when_never_requested(self) -> None:
+        now = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+        assert _is_recent_nordpool_refresh(None, now, 20) is False
+
+    def test_true_within_suppression_window(self) -> None:
+        now = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+        last_request = now - timedelta(seconds=19)
+        assert _is_recent_nordpool_refresh(last_request, now, 20) is True
+
+    def test_true_exactly_at_boundary(self) -> None:
+        now = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+        last_request = now - timedelta(seconds=20)
+        assert _is_recent_nordpool_refresh(last_request, now, 20) is True
+
+    def test_false_after_suppression_window(self) -> None:
+        now = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+        last_request = now - timedelta(seconds=21)
+        assert _is_recent_nordpool_refresh(last_request, now, 20) is False
+
+
+def _hass_with_registry(
+    entity_entry: object | None, config_entry: object | None = None
+) -> tuple[MagicMock, MagicMock]:
+    """Build a hass double whose entity registry returns entity_entry."""
+    hass = MagicMock()
+    hass.config_entries.async_get_entry.return_value = config_entry
+    registry = MagicMock()
+    registry.async_get.return_value = entity_entry
+    return hass, registry
+
+
+class TestFindNativeCoordinator:
+    """Entity registry -> config entry -> runtime_data lookup behind
+    PriceCoordinator._subscribe_native_coordinator()."""
+
+    def test_returns_none_when_entity_not_registered(self) -> None:
+        hass, registry = _hass_with_registry(entity_entry=None)
+        with patch.object(coordinator_module.er, "async_get", return_value=registry):
+            assert _find_native_coordinator(hass, "sensor.nordpool") is None
+
+    def test_returns_none_when_entity_has_no_config_entry_id(self) -> None:
+        entity_entry = SimpleNamespace(config_entry_id=None)
+        hass, registry = _hass_with_registry(entity_entry)
+        with patch.object(coordinator_module.er, "async_get", return_value=registry):
+            assert _find_native_coordinator(hass, "sensor.nordpool") is None
+
+    def test_returns_none_when_config_entry_missing(self) -> None:
+        entity_entry = SimpleNamespace(config_entry_id="abc123")
+        hass, registry = _hass_with_registry(entity_entry, config_entry=None)
+        with patch.object(coordinator_module.er, "async_get", return_value=registry):
+            assert _find_native_coordinator(hass, "sensor.nordpool") is None
+
+    def test_returns_none_when_runtime_data_missing(self) -> None:
+        entity_entry = SimpleNamespace(config_entry_id="abc123")
+        config_entry = SimpleNamespace(runtime_data=None)
+        hass, registry = _hass_with_registry(entity_entry, config_entry)
+        with patch.object(coordinator_module.er, "async_get", return_value=registry):
+            assert _find_native_coordinator(hass, "sensor.nordpool") is None
+
+    def test_returns_none_when_runtime_data_lacks_async_add_listener(self) -> None:
+        entity_entry = SimpleNamespace(config_entry_id="abc123")
+        config_entry = SimpleNamespace(runtime_data=object())
+        hass, registry = _hass_with_registry(entity_entry, config_entry)
+        with patch.object(coordinator_module.er, "async_get", return_value=registry):
+            assert _find_native_coordinator(hass, "sensor.nordpool") is None
+
+    def test_returns_coordinator_when_fully_available(self) -> None:
+        native_coordinator = MagicMock()
+        entity_entry = SimpleNamespace(config_entry_id="abc123")
+        config_entry = SimpleNamespace(runtime_data=native_coordinator)
+        hass, registry = _hass_with_registry(entity_entry, config_entry)
+        with patch.object(coordinator_module.er, "async_get", return_value=registry):
+            result = _find_native_coordinator(hass, "sensor.nordpool")
+        assert result is native_coordinator
+
+
+class TestPriceCoordinatorHasNoPollingInterval:
+    """PriceCoordinator must not use a fixed polling interval -- refreshes
+    are event-driven (Nord Pool updates + clock-aligned fallback).
+
+    PriceCoordinator cannot be instantiated under the HA stub (see module
+    docstring: DataUpdateCoordinator subclassing breaks under the stub), so
+    this checks the source directly rather than introspecting a live
+    instance's update_interval attribute.
+    """
+
+    def test_init_passes_update_interval_none(self) -> None:
+        source_path = inspect.getsourcefile(coordinator_module)
+        text = Path(source_path).read_text()
+        match = re.search(
+            r"class PriceCoordinator\(.*?(?=\nclass \w|\Z)", text, re.DOTALL
+        )
+        assert match is not None, "PriceCoordinator class not found in coordinator.py"
+        class_source = match.group(0)
+        assert "update_interval=None" in class_source
+        assert "update_interval=timedelta" not in class_source

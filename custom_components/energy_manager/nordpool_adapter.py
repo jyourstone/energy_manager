@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 
+import aiohttp
+
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -43,6 +45,44 @@ def derive_price_unit(attributes: dict) -> str:
     if isinstance(currency, str) and currency:
         return f"{currency}/kWh"
     return DEFAULT_PRICE_UNIT
+
+
+def split_by_local_day(
+    slots: list[dict], now: datetime
+) -> tuple[list[dict], list[dict]]:
+    """Bucket price slots into Home Assistant's local today and tomorrow.
+
+    Nord Pool delivery days are defined in CET, and the API labels each batch
+    with deliveryDateCET. Sorting batches by that label assigns whole CET days
+    to "today", which silently shifts the scheduling day for anyone outside
+    CET -- EET (Finland, Baltics) runs an hour ahead, the UK an hour behind.
+
+    Slots are therefore assigned by their own start timestamp converted to
+    local time. Slots outside today and tomorrow are dropped, so callers that
+    supply only the CET days overlapping the local ones may come up short at
+    one edge; that is preferable to mislabelling a whole day.
+    """
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+
+    buckets: dict[date, list[tuple[datetime, dict]]] = {today: [], tomorrow: []}
+    for slot in slots:
+        start = slot.get("start")
+        try:
+            start_dt = (
+                start if isinstance(start, datetime) else datetime.fromisoformat(start)
+            ).astimezone(now.tzinfo)
+        except (TypeError, ValueError):
+            continue
+
+        bucket = buckets.get(start_dt.date())
+        if bucket is not None:
+            bucket.append((start_dt, slot))
+
+    return (
+        [slot for _dt, slot in sorted(buckets[today], key=lambda p: p[0])],
+        [slot for _dt, slot in sorted(buckets[tomorrow], key=lambda p: p[0])],
+    )
 
 
 def detect_nordpool_type(hass: HomeAssistant, entity_id: str) -> str:
@@ -179,7 +219,11 @@ def _get_hacs_prices(
 async def _async_get_native_prices(
     hass: HomeAssistant, entity_id: str
 ) -> tuple[list[dict], list[dict]]:
-    """Fetch prices from native HA Nord Pool via service call."""
+    """Fetch prices from native HA Nord Pool.
+
+    Tries to read directly from the native coordinator's cached data first,
+    falling back to individual service calls if the cache is unavailable.
+    """
     registry = er.async_get(hass)
     entity_entry = registry.async_get(entity_id)
     if entity_entry is None or entity_entry.config_entry_id is None:
@@ -189,13 +233,95 @@ async def _async_get_native_prices(
         return [], []
 
     config_entry_id = entity_entry.config_entry_id
-    today = dt_util.now().date()
+
+    config_entry = hass.config_entries.async_get_entry(config_entry_id)
+    if config_entry is not None:
+        result = _get_native_coordinator_prices(config_entry)
+        if result is not None:
+            raw_today, raw_tomorrow = result
+            _LOGGER.debug(
+                "Read prices from native coordinator cache: today=%d, tomorrow=%d",
+                len(raw_today),
+                len(raw_tomorrow),
+            )
+            return raw_today, raw_tomorrow
+
+    _LOGGER.debug("Falling back to service calls for native Nord Pool prices")
+    now = dt_util.now()
+    today = now.date()
     tomorrow = today + timedelta(days=1)
 
     raw_today = await _async_fetch_native_date(hass, config_entry_id, today)
     raw_tomorrow = await _async_fetch_native_date(hass, config_entry_id, tomorrow)
 
-    return raw_today, raw_tomorrow
+    return split_by_local_day(raw_today + raw_tomorrow, now)
+
+
+def _get_native_coordinator_prices(
+    config_entry,
+) -> tuple[list[dict], list[dict]] | None:
+    """Read prices directly from the native Nord Pool coordinator's cached data.
+
+    The native coordinator stores DeliveryPeriodsData with entries for
+    yesterday, today, and tomorrow. Each entry has a list of DeliveryPeriodEntry
+    with start, end, entry attributes.
+
+    pynordpool changed the container type of DeliveryPeriodsData.entries in
+    0.4.0 (shipped with HA 2026.8) from list[DeliveryPeriodData] to
+    dict[date, DeliveryPeriodData]. Both shapes are normalized to the
+    delivery periods themselves here.
+
+    Returns (today_prices, tomorrow_prices) or None if unable to read.
+    """
+    coordinator = getattr(config_entry, "runtime_data", None)
+    if coordinator is None:
+        return None
+
+    data = getattr(coordinator, "data", None)
+    if data is None:
+        return None
+
+    entries = getattr(data, "entries", None)
+    if not entries:
+        return None
+
+    delivery_periods = entries.values() if isinstance(entries, dict) else entries
+
+    areas = config_entry.data.get("areas", [])
+    if not areas:
+        _LOGGER.debug("No areas configured in native Nord Pool config entry")
+        return None
+    area = areas[0]
+
+    slots: list[dict] = []
+
+    try:
+        for delivery_period in delivery_periods:
+            for entry in getattr(delivery_period, "entries", []):
+                price_mwh = entry.entry.get(area)
+                if price_mwh is None:
+                    continue
+
+                start = entry.start
+                end = entry.end
+                slots.append({
+                    "start": start if isinstance(start, str) else start.isoformat(),
+                    "end": end if isinstance(end, str) else end.isoformat(),
+                    "value": float(price_mwh) / 1000.0,
+                })
+    except (AttributeError, TypeError, KeyError, ValueError) as exc:
+        _LOGGER.warning(
+            "Malformed cached Nord Pool data: %s", exc,
+            exc_info=True,
+        )
+        return None
+
+    today_prices, tomorrow_prices = split_by_local_day(slots, dt_util.now())
+
+    if not today_prices:
+        return None
+
+    return today_prices, tomorrow_prices
 
 
 async def _async_fetch_native_date(
@@ -213,7 +339,11 @@ async def _async_fetch_native_date(
             blocking=True,
             return_response=True,
         )
-    except (HomeAssistantError, KeyError, ValueError):
+    except (HomeAssistantError, aiohttp.ClientError, TimeoutError, KeyError, ValueError):
+        # pynordpool only wraps its own NordPool* errors, so transport-level
+        # failures (connection refused, DNS, TLS) surface as raw aiohttp
+        # errors through the service call. Uncaught, they escape the
+        # coordinator and mark every entity unavailable.
         _LOGGER.debug(
             "Failed to fetch native Nord Pool prices for %s (may not be available yet)",
             target_date,
