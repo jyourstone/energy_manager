@@ -71,7 +71,13 @@ def split_by_local_day(
         try:
             start_dt = (
                 start if isinstance(start, datetime) else datetime.fromisoformat(start)
-            ).astimezone(now.tzinfo)
+            )
+            # A naive timestamp is interpreted as HA-local rather than left
+            # to astimezone()'s system-tz assumption -- in containers the
+            # system tz is often UTC while HA is configured to the user's.
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=now.tzinfo)
+            start_dt = start_dt.astimezone(now.tzinfo)
         except (TypeError, ValueError):
             continue
 

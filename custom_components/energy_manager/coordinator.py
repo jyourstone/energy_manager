@@ -399,7 +399,14 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
 
         Triggers an immediate refresh when the Nordpool sensor updates,
         e.g., when tomorrow's prices become available around 13:00 CET.
+        A transition to unavailable/unknown carries no price data --
+        refreshing on it would raise UpdateFailed AND suppress the next
+        clock-aligned fallback, so those transitions are ignored and
+        recovery rides on the sensor coming back (another state change).
         """
+        new_state = event.data.get("new_state")
+        if new_state is None or new_state.state in ("unavailable", "unknown"):
+            return
         self._request_refresh_from_nordpool("Nord Pool sensor")
 
     def _subscribe_native_coordinator(self) -> None:

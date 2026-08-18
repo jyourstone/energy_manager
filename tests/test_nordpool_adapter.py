@@ -53,7 +53,10 @@ def _config_entry(areas: list[str], delivery_periods, as_dict: bool = False):
     DeliveryPeriodsData.entries is a dict keyed by date instead of a list.
     """
     if as_dict:
-        entries = {i: period for i, period in enumerate(delivery_periods)}
+        # pynordpool 0.4.0 keys the dict by delivery date.
+        entries = {
+            period.entries[0].start.date(): period for period in delivery_periods
+        }
     else:
         entries = list(delivery_periods)
 
