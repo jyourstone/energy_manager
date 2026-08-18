@@ -34,6 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from custom_components.energy_manager import coordinator as coordinator_module
 from custom_components.energy_manager.const import FALLBACK_STALE_THRESHOLD_MINUTES
 from custom_components.energy_manager.coordinator import (
     CarChargingData,
@@ -51,7 +52,6 @@ from custom_components.energy_manager.coordinator import (
     derive_tomorrow_forecast_entities,
     sum_solar_forecast_wh,
 )
-from custom_components.energy_manager import coordinator as coordinator_module
 
 UTC = timezone.utc
 

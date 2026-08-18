@@ -11,7 +11,6 @@ import logging
 from datetime import date, datetime, timedelta
 
 import aiohttp
-
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
