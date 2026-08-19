@@ -212,9 +212,10 @@ async def async_unload_entry(
 ) -> bool:
     """Unload an Energy Manager config entry.
 
-    Unloads forwarded platforms. Coordinator listeners are auto-cleaned
-    via entry.async_on_unload() registered during _async_setup.
-    Runtime data is garbage collected.
+    Unloads forwarded platforms, shuts down the coordinators that own
+    listeners or stores, and clears Repairs issues. Remaining coordinator
+    listeners are auto-cleaned via entry.async_on_unload() registered
+    during _async_setup. Runtime data is garbage collected.
 
     Args:
         hass: Home Assistant instance.
@@ -232,6 +233,15 @@ async def async_unload_entry(
         entry, platforms
     ):
         return False
+
+    # The price coordinator owns its refresh listeners (Nord Pool events,
+    # native coordinator subscription, clock-aligned fallback) and cleans
+    # them up in async_shutdown(). HA also auto-registers coordinator
+    # shutdown on unload; the explicit call matches the other coordinators
+    # and keeps reload behaviour obvious. async_shutdown() is idempotent.
+    price_coordinator = getattr(entry.runtime_data, "price_coordinator", None)
+    if price_coordinator is not None:
+        await price_coordinator.async_shutdown()
 
     # Shut the store-owning coordinators down BEFORE flushing: a refresh
     # tick landing after the flush could otherwise schedule a new delayed

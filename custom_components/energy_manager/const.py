@@ -17,8 +17,12 @@ CONF_NORDPOOL_TYPE = "nordpool_type"
 NORDPOOL_TYPE_HACS = "hacs"
 NORDPOOL_TYPE_NATIVE = "native"
 
-# Price update interval (minutes)
-PRICE_UPDATE_INTERVAL_MINUTES = 5
+# Price coordinator event-driven refresh: clock-aligned fallback boundaries,
+# the grace-period delay before that fallback fires, and the window during
+# which a Nord Pool event suppresses the fallback (it already refreshed).
+PRICE_CLOCK_REFRESH_MINUTES = (0, 15, 30, 45)
+PRICE_CLOCK_REFRESH_DELAY_SECONDS = 10
+PRICE_CLOCK_REFRESH_SUPPRESS_SECONDS = 20
 
 # --- Module toggles ---
 

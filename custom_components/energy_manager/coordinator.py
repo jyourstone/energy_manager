@@ -29,9 +29,14 @@ from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -200,7 +205,10 @@ from .const import (
     MAX_CHARGE_LIMIT_KW,
     MEAN_CONSUMPTION_WINDOW_HOURS,
     MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES,
-    PRICE_UPDATE_INTERVAL_MINUTES,
+    NORDPOOL_TYPE_NATIVE,
+    PRICE_CLOCK_REFRESH_DELAY_SECONDS,
+    PRICE_CLOCK_REFRESH_MINUTES,
+    PRICE_CLOCK_REFRESH_SUPPRESS_SECONDS,
     SENSOR_FAIL_BEHAVIOR_ASSUME_LOAD,
     SOLAR_TRACKER_SAVE_DELAY_SECONDS,
     SOLAR_TRACKER_STORAGE_VERSION,
@@ -278,10 +286,12 @@ class PriceData:
 
 
 class PriceCoordinator(DataUpdateCoordinator[PriceData]):
-    """Coordinator that fetches Nordpool prices with hybrid update strategy.
+    """Coordinator that fetches Nordpool prices with an event-driven refresh.
 
-    Uses 5-minute polling as a baseline, with immediate refresh triggered
-    by Nordpool sensor state changes (e.g., when tomorrow's prices arrive).
+    Refreshes immediately on Nordpool sensor state changes (HACS Nordpool)
+    or native Nordpool coordinator updates (native integration), with a
+    clock-aligned fallback shortly after each quarter-hour boundary in case
+    those events are missed.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -296,23 +306,93 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
             _LOGGER,
             name="Energy Manager Prices",
             config_entry=entry,
-            update_interval=timedelta(minutes=PRICE_UPDATE_INTERVAL_MINUTES),
+            update_interval=None,
             always_update=False,
         )
         self._nordpool_entity: str = entry.data[CONF_NORDPOOL_SENSOR]
         self._nordpool_type: str = entry.data[CONF_NORDPOOL_TYPE]
+        self._unsub_nordpool: CALLBACK_TYPE | None = None
+        self._unsub_native_coordinator: CALLBACK_TYPE | None = None
+        self._unsub_clock_refresh: CALLBACK_TYPE | None = None
+        self._unsub_delayed_clock_refresh: CALLBACK_TYPE | None = None
+        self._last_nordpool_refresh_request: datetime | None = None
 
     async def _async_setup(self) -> None:
-        """Register Nordpool state change listener for immediate updates.
+        """Register event-driven and clock-aligned refresh tracking.
 
-        Called once during async_config_entry_first_refresh. The listener
-        is cleaned up automatically on unload via async_on_unload.
+        Called once during async_config_entry_first_refresh. Cleanup is
+        owned entirely by async_shutdown (not async_on_unload), so a single
+        mechanism unsubscribes everything registered here.
         """
-        self.config_entry.async_on_unload(
-            async_track_state_change_event(
-                self.hass, [self._nordpool_entity], self._on_nordpool_update
-            )
+        self._unsub_nordpool = async_track_state_change_event(
+            self.hass, [self._nordpool_entity], self._on_nordpool_update
         )
+
+        # For native Nord Pool, also subscribe to the native coordinator's
+        # data updates. The native coordinator fetches prices hourly
+        # (including tomorrow's) but the current_price sensor state only
+        # changes when the price itself changes -- it does NOT fire a state
+        # change when tomorrow's data becomes available. Subscribing
+        # directly ensures we refresh promptly when new price data lands.
+        if self._nordpool_type == NORDPOOL_TYPE_NATIVE:
+            self._subscribe_native_coordinator()
+
+        # Fallback refresh shortly after each Nord Pool quarter-hour
+        # boundary. The delay gives upstream sensors a small window to
+        # publish fresh state. _async_update_data raises UpdateFailed when
+        # raw_today is empty and there is no cached schedule, so this
+        # fallback is what keeps a missed event from leaving entities
+        # unavailable until the next Nord Pool update.
+        self._unsub_clock_refresh = async_track_time_change(
+            self.hass,
+            self._schedule_clock_refresh,
+            minute=PRICE_CLOCK_REFRESH_MINUTES,
+            second=0,
+        )
+
+    @callback
+    def _schedule_clock_refresh(self, _now: datetime) -> None:
+        """Schedule a delayed refresh after a quarter-hour boundary."""
+        _cancel_unsub(self._unsub_delayed_clock_refresh)
+        self._unsub_delayed_clock_refresh = None
+
+        if self._recent_nordpool_refresh_request():
+            _LOGGER.debug(
+                "Skipping clock-aligned fallback refresh because Nord Pool "
+                "already requested a refresh near the boundary"
+            )
+            return
+
+        self._unsub_delayed_clock_refresh = async_call_later(
+            self.hass,
+            PRICE_CLOCK_REFRESH_DELAY_SECONDS,
+            self._on_clock_refresh_delay_elapsed,
+        )
+
+    @callback
+    def _on_clock_refresh_delay_elapsed(self, _now: datetime) -> None:
+        """Refresh after the quarter-hour boundary grace period."""
+        self._unsub_delayed_clock_refresh = None
+        self.hass.async_create_task(self.async_request_refresh())
+
+    def _recent_nordpool_refresh_request(self) -> bool:
+        """Return whether Nord Pool recently requested a refresh."""
+        return _is_recent_nordpool_refresh(
+            self._last_nordpool_refresh_request,
+            dt_util.utcnow(),
+            PRICE_CLOCK_REFRESH_SUPPRESS_SECONDS,
+        )
+
+    @callback
+    def _request_refresh_from_nordpool(self, source: str) -> None:
+        """Request a refresh from a Nord Pool event, suppressing the clock fallback."""
+        self._last_nordpool_refresh_request = dt_util.utcnow()
+
+        _cancel_unsub(self._unsub_delayed_clock_refresh)
+        self._unsub_delayed_clock_refresh = None
+
+        _LOGGER.debug("%s updated, requesting refresh", source)
+        self.hass.async_create_task(self.async_request_refresh())
 
     @callback
     def _on_nordpool_update(self, event) -> None:
@@ -320,8 +400,44 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
 
         Triggers an immediate refresh when the Nordpool sensor updates,
         e.g., when tomorrow's prices become available around 13:00 CET.
+        A transition to unavailable/unknown carries no price data --
+        refreshing on it would raise UpdateFailed AND suppress the next
+        clock-aligned fallback, so those transitions are ignored and
+        recovery rides on the sensor coming back (another state change).
         """
-        self.hass.async_create_task(self.async_request_refresh())
+        new_state = event.data.get("new_state")
+        if new_state is None or new_state.state in ("unavailable", "unknown"):
+            return
+        self._request_refresh_from_nordpool("Nord Pool sensor")
+
+    def _subscribe_native_coordinator(self) -> None:
+        """Subscribe to native Nord Pool coordinator updates.
+
+        Called at setup and retried on each refresh until successful --
+        entry.runtime_data may not exist yet when this coordinator sets up.
+        """
+        if self._unsub_native_coordinator is not None:
+            return
+
+        try:
+            coordinator = _find_native_coordinator(self.hass, self._nordpool_entity)
+            if coordinator is None:
+                return
+
+            self._unsub_native_coordinator = coordinator.async_add_listener(
+                self._on_native_coordinator_update
+            )
+            _LOGGER.debug("Subscribed to native Nord Pool coordinator updates")
+        except Exception:
+            _LOGGER.warning(
+                "Could not subscribe to native Nord Pool coordinator",
+                exc_info=True,
+            )
+
+    @callback
+    def _on_native_coordinator_update(self) -> None:
+        """Handle native Nord Pool coordinator data update."""
+        self._request_refresh_from_nordpool("Native Nord Pool coordinator")
 
     async def _async_update_data(self) -> PriceData:
         """Fetch price data from Nordpool adapter and convert to PriceSlots.
@@ -332,6 +448,11 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
         Raises:
             UpdateFailed: If no price data is available for today.
         """
+        # Retry the native coordinator subscription if not yet established
+        # (entry.runtime_data may not exist yet at setup time).
+        if self._nordpool_type == NORDPOOL_TYPE_NATIVE:
+            self._subscribe_native_coordinator()
+
         raw_today, raw_tomorrow = await async_get_prices(
             self.hass, self._nordpool_entity, self._nordpool_type
         )
@@ -358,6 +479,63 @@ class PriceCoordinator(DataUpdateCoordinator[PriceData]):
             last_updated=dt_util.utcnow(),
             price_unit=price_unit,
         )
+
+    async def async_shutdown(self) -> None:
+        """Clean up all event-driven and clock-aligned refresh listeners."""
+        _cancel_unsub(self._unsub_nordpool)
+        self._unsub_nordpool = None
+        _cancel_unsub(self._unsub_native_coordinator)
+        self._unsub_native_coordinator = None
+        _cancel_unsub(self._unsub_clock_refresh)
+        self._unsub_clock_refresh = None
+        _cancel_unsub(self._unsub_delayed_clock_refresh)
+        self._unsub_delayed_clock_refresh = None
+        await super().async_shutdown()
+
+
+def _cancel_unsub(unsub: CALLBACK_TYPE | None) -> None:
+    """Call unsub() if set. Shared by every listener PriceCoordinator owns."""
+    if unsub is not None:
+        unsub()
+
+
+def _is_recent_nordpool_refresh(
+    last_request: datetime | None, now: datetime, suppress_seconds: float
+) -> bool:
+    """Return whether a Nord Pool refresh was requested within suppress_seconds.
+
+    Pure predicate behind PriceCoordinator._recent_nordpool_refresh_request --
+    used to suppress the clock-aligned fallback refresh when Nord Pool
+    already triggered one near the same boundary.
+    """
+    if last_request is None:
+        return False
+    return (now - last_request) <= timedelta(seconds=suppress_seconds)
+
+
+def _find_native_coordinator(
+    hass: HomeAssistant, nordpool_entity: str
+) -> object | None:
+    """Look up the native Nord Pool integration's DataUpdateCoordinator.
+
+    Walks entity registry -> config entry -> runtime_data. Returns None at
+    any step that isn't available yet (e.g. runtime_data not set up) or
+    doesn't expose async_add_listener.
+    """
+    registry = er.async_get(hass)
+    entity_entry = registry.async_get(nordpool_entity)
+    if entity_entry is None or entity_entry.config_entry_id is None:
+        return None
+
+    config_entry = hass.config_entries.async_get_entry(entity_entry.config_entry_id)
+    if config_entry is None:
+        return None
+
+    coordinator = getattr(config_entry, "runtime_data", None)
+    if coordinator is None or not hasattr(coordinator, "async_add_listener"):
+        return None
+
+    return coordinator
 
 
 def _convert_to_price_slots(raw_entries: list[dict]) -> list[PriceSlot]:
