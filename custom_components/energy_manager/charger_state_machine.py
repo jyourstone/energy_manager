@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +47,15 @@ PAUSED_STATUS = "paused"
 #: reported status disagrees -- status is unreliable (live watchdog evidence),
 #: power is always cross-checked.
 POWER_ACTIVE_THRESHOLD_KW = 0.5
+
+#: A fuse overload must hold continuously for this long before a critical
+#: alert is sent. Fuse Layer 1 pauses instantly on every overload, but most
+#: overloads are single-tick spikes (house load steps faster than the tick
+#: interval, and the charger obeys a new dynamic limit with seconds of lag)
+#: that clear on their own -- alerting on those is noise. Surviving this
+#: delay means pausing the charger did not fix it, which is the condition
+#: that actually needs a human.
+OVERLOAD_ALERT_DELAY_SECONDS = 120.0
 
 #: A restored solar-latch pending timer older than this is discarded --
 #: garbage guard bounding the timer's absolute age. Twice
@@ -224,8 +233,11 @@ class ChargerDecision:
         target_phase_mode: The desired phase mode ("single"/"three").
         commands: Ordered commands to send this tick (empty when nothing to
             do). Callers execute these through the observe-only choke point.
-        notifications: Human-readable safety notification messages (fuse
-            emergency overload, 0A-target safety stop). Empty otherwise.
+        notifications: Human-readable safety notification messages (0A-target
+            safety stop). Empty otherwise.
+        critical_notifications: Notification messages that warrant a critical
+            alert (one that overrides silent mode) -- a fuse overload that
+            refused to clear. See _overload_alert().
         sequence_state: Phase-switch sequence state: "idle", "pausing",
             "set_phase", "resuming", or "set_limit".
         stuck: True when a command was issued but showed no observable
@@ -243,6 +255,7 @@ class ChargerDecision:
     sequence_state: str
     stuck: bool
     override_reason: str | None
+    critical_notifications: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +710,9 @@ class ChargerController:
         self._last_sent_limit: float | None = None
         self._last_limit_sent_at: datetime | None = None
         self._last_start_sent_at: datetime | None = None
+        # Fuse-overload alert latch -- see _overload_alert().
+        self._overload_since: datetime | None = None
+        self._overload_alerted: bool = False
 
     @property
     def sequence_state(self) -> str:
@@ -723,6 +739,58 @@ class ChargerController:
         self._solar_tracker = tracker
 
     def decide(self, inputs: ChargerInputs) -> ChargerDecision:
+        """Compute this tick's charger decision, plus any overload alert.
+
+        The decision itself comes from _decide(); the persistent-overload
+        alert is attached here so it is evaluated on every tick regardless
+        of which of _decide()'s exit paths was taken.
+        """
+        decision = self._decide(inputs)
+        alert = self._overload_alert(inputs)
+        if alert:
+            decision = replace(decision, critical_notifications=alert)
+        return decision
+
+    def _overload_alert(self, inputs: ChargerInputs) -> tuple[str, ...]:
+        """Return a critical alert when a fuse overload refuses to clear.
+
+        Fuse Layer 1 pauses the charger instantly on every overload, but
+        most overloads are single-tick spikes -- house load steps faster
+        than the tick interval and the charger obeys a new dynamic limit
+        with seconds of lag -- which clear on their own. Only an overload
+        that survives OVERLOAD_ALERT_DELAY_SECONDS continuously means load
+        balancing did not fix it, and only that one is alerted. Fires once
+        per episode; re-arms when the overload clears.
+
+        Deliberately evaluated regardless of whether the charger is
+        drawing: the worst case -- house load alone above the fuse rating
+        with the charger already paused -- is exactly the case Layer 1's
+        is_drawing gate can never see.
+        """
+        threshold = inputs.fuse_rating_amps + inputs.emergency_margin_amps
+        if inputs.measured_worst_case_signed_amps < threshold:
+            self._overload_since = None
+            self._overload_alerted = False
+            return ()
+        if self._overload_since is None:
+            self._overload_since = inputs.now
+            return ()
+        if self._overload_alerted:
+            return ()
+        elapsed = (inputs.now - self._overload_since).total_seconds()
+        if elapsed < OVERLOAD_ALERT_DELAY_SECONDS:
+            return ()
+        self._overload_alerted = True
+        return (
+            "Överlast kvarstår: uppmätt fasström "
+            f"{inputs.measured_worst_case_signed_amps:.1f} A överskrider "
+            f"säkringsgränsen ({inputs.fuse_rating_amps:.0f} A + "
+            f"{inputs.emergency_margin_amps:.0f} A marginal) sedan "
+            f"{elapsed / 60:.0f} min. Lastbalanseringen räcker inte till – "
+            "minska övrig förbrukning.",
+        )
+
+    def _decide(self, inputs: ChargerInputs) -> ChargerDecision:
         """Compute this tick's charger decision.
 
         See module docstring for the overall behavior. Processing order:
@@ -844,18 +912,16 @@ class ChargerController:
             self._sequence_state = "idle"
             self._pending_phase_mode = None
             self._note_command_expectation(False, now, "pause")
-            msg = (
-                "Nödläge: Laddaren pausad – uppmätt fasström "
-                f"{inputs.measured_worst_case_signed_amps:.1f} A överskrider "
-                f"säkringsgränsen ({inputs.fuse_rating_amps:.0f} A + "
-                f"{inputs.emergency_margin_amps:.0f} A marginal)."
-            )
+            # No notification here: the pause is the load-balancing response
+            # and clears the overload within a tick or two in the common
+            # (spike) case. _overload_alert() reports only the overloads
+            # that survive it.
             return ChargerDecision(
                 mode=mode,
                 target_amps=0.0,
                 target_phase_mode=inputs.current_phase_mode,
                 commands=(ChargerCommand("pause"),),
-                notifications=(msg,),
+                notifications=(),
                 sequence_state="idle",
                 stuck=self._stuck,
                 override_reason="emergency_fuse_overload",

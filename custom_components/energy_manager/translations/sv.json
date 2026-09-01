@@ -132,7 +132,7 @@
           "solar_activation_delay": "Avancerat: hur länge solöverskott måste finnas kontinuerligt innan solladdning aktiveras.",
           "solar_deactivation_delay": "Avancerat: hur länge solöverskott måste saknas kontinuerligt innan solladdning avaktiveras.",
           "battery_soc_gate_pct": "Avancerat: lägsta batterinivå i hembatteriet innan solladdning tillåts avleda överskott till bilen.",
-          "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser nödpaus och avisering."
+          "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser omedelbar paus av laddaren. Avisering skickas bara om överlasten kvarstår i två minuter."
         }
       },
       "economics": {
@@ -401,7 +401,7 @@
           "phase_switch_threshold_kw": "Avancerat: tillgänglig effekt under vilken laddaren växlar till enfasladdning.",
           "solar_activation_delay": "Avancerat: hur länge solöverskott måste finnas kontinuerligt innan solladdning aktiveras.",
           "solar_deactivation_delay": "Avancerat: hur länge solöverskott måste saknas kontinuerligt innan solladdning avaktiveras.",
-          "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser nödpaus och avisering."
+          "emergency_margin_amps": "Avancerat: ampere över säkringens storlek som utlöser omedelbar paus av laddaren. Avisering skickas bara om överlasten kvarstår i två minuter."
         }
       }
     },

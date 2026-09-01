@@ -139,6 +139,7 @@ from .const import (
     CONF_SOLAR_START_THRESHOLD_KW,
     CONSUMPTION_STORAGE_SAVE_DELAY_SECONDS,
     CONSUMPTION_STORAGE_VERSION,
+    CRITICAL_NOTIFICATION_DATA,
     DEFAULT_AMP_DECREASE_DELAY_SECONDS,
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
@@ -4030,7 +4031,9 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 SOLAR_TRACKER_SAVE_DELAY_SECONDS,
             )
         await self._execute_commands(decision.commands)
-        await self._send_notifications(decision.notifications)
+        await self._send_notifications(
+            decision.notifications, decision.critical_notifications
+        )
 
         fuse_headroom_amps = (
             0.0
@@ -4052,7 +4055,9 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             stuck=decision.stuck,
             dry_run=not control_enabled,
             last_suppressed_command=self._last_suppressed_command,
-            notification_count=len(decision.notifications),
+            notification_count=(
+                len(decision.notifications) + len(decision.critical_notifications)
+            ),
             override_reason=decision.override_reason,
             charger_status=charger_status,
             charger_power_kw=charger_power_kw,
@@ -4230,14 +4235,26 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         _LOGGER.info("Sending Easee command: %s.%s %s", domain, service, service_data)
         await self.hass.services.async_call(domain, service, service_data, blocking=True)
 
-    async def _send_notifications(self, notifications: tuple[str, ...]) -> None:
+    async def _send_notifications(
+        self,
+        notifications: tuple[str, ...],
+        critical_notifications: tuple[str, ...] = (),
+    ) -> None:
         """Send safety notifications via the configured notify service.
 
         ALWAYS sent even in observe-only mode (they report real measured
-        conditions, e.g. an emergency fuse overload) -- prefixed with
+        conditions, e.g. a persistent fuse overload) -- prefixed with
         "[observe-only] " when device control is disabled (EASE-08).
+
+        critical_notifications additionally carry the mobile_app payload
+        that breaks through silent mode / Do Not Disturb: an unclearable
+        fuse overload needs a human now. The payload holds both the iOS
+        (push.sound.critical) and Android (channel/priority) keys -- each
+        platform ignores the other's. iOS also requires the companion app's
+        "Critical Alerts" permission to be granted, otherwise it degrades
+        to a normal notification.
         """
-        if not notifications or not self._notify_service:
+        if not (notifications or critical_notifications) or not self._notify_service:
             return
 
         domain, _, service = self._notify_service.partition(".")
@@ -4254,6 +4271,16 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 domain,
                 service,
                 {"message": f"{prefix}{message}"},
+                blocking=True,
+            )
+        for message in critical_notifications:
+            await self.hass.services.async_call(
+                domain,
+                service,
+                {
+                    "message": f"{prefix}{message}",
+                    "data": CRITICAL_NOTIFICATION_DATA,
+                },
                 blocking=True,
             )
 
