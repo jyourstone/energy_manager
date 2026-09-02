@@ -17,6 +17,7 @@ EMSCoordinator themselves. Covers:
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -351,10 +352,11 @@ def _notify_hass(*, raises: bool = False):
     return hass
 
 
-@pytest.mark.asyncio
-async def test_dispatch_notifications_marks_critical_messages_only() -> None:
+def test_dispatch_notifications_marks_critical_messages_only() -> None:
     hass = _notify_hass()
-    await _dispatch_notifications(hass, "notify.mobil", "", ("plain",), ("urgent",))
+    asyncio.run(
+        _dispatch_notifications(hass, "notify.mobil", "", ("plain",), ("urgent",))
+    )
     calls = hass.services.async_call.await_args_list
     assert [c.args[0] for c in calls] == ["notify", "notify"]
     assert [c.args[2]["message"] for c in calls] == ["plain", "urgent"]
@@ -362,28 +364,27 @@ async def test_dispatch_notifications_marks_critical_messages_only() -> None:
     assert calls[1].args[2]["data"]["push"]["sound"]["critical"] == 1
 
 
-@pytest.mark.asyncio
-async def test_dispatch_notifications_applies_the_prefix() -> None:
+def test_dispatch_notifications_applies_the_prefix() -> None:
     hass = _notify_hass()
-    await _dispatch_notifications(
-        hass, "notify.mobil", "[observe-only] ", (), ("urgent",)
+    asyncio.run(
+        _dispatch_notifications(hass, "notify.mobil", "[observe-only] ", (), ("urgent",))
     )
     call = hass.services.async_call.await_args_list[0]
     assert call.args[2]["message"] == "[observe-only] urgent"
 
 
-@pytest.mark.asyncio
-async def test_dispatch_notifications_never_raises_and_keeps_going() -> None:
+def test_dispatch_notifications_never_raises_and_keeps_going() -> None:
     """A failing notify service must not abort the control tick -- this runs
     in the finally of the command dispatch, so raising here would mask the
     command failure the alert exists to report."""
     hass = _notify_hass(raises=True)
-    await _dispatch_notifications(hass, "notify.mobil", "", ("plain",), ("urgent",))
+    asyncio.run(
+        _dispatch_notifications(hass, "notify.mobil", "", ("plain",), ("urgent",))
+    )
     assert hass.services.async_call.await_count == 2
 
 
-@pytest.mark.asyncio
-async def test_dispatch_notifications_ignores_a_malformed_service() -> None:
+def test_dispatch_notifications_ignores_a_malformed_service() -> None:
     hass = _notify_hass()
-    await _dispatch_notifications(hass, "mobil", "", ("plain",), ())
+    asyncio.run(_dispatch_notifications(hass, "mobil", "", ("plain",), ()))
     hass.services.async_call.assert_not_awaited()
