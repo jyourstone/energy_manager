@@ -1,6 +1,6 @@
 # Setup Wizard
 
-Energy Manager is configured through a guided config flow that auto-detects your Nordpool, SigenStor, Easee, and car integrations and pre-fills the forms wherever it can.
+Energy Manager is configured through a guided config flow that auto-detects your Nordpool, SigenStor and Easee integrations and pre-fills the forms wherever it can. Cars are added separately afterwards, where picking the car's device suggests its entities.
 
 ## Starting the Wizard
 

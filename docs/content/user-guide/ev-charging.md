@@ -43,7 +43,7 @@ Each car is added as its own **subentry** on the Energy Manager device (not part
 | Car name | Friendly name, e.g. "Enyaq" |
 | Battery capacity (kWh) | Total battery capacity, used to convert an SOC gap into energy needed |
 | Battery level sensor | Optional; suggested from the car device you pick when adding the car |
-| Car charger connected sensor | Optional binary sensor confirming the cable is plugged in; also auto-detected |
+| Car charger connected sensor | Optional binary sensor confirming the cable is plugged in; suggested from the car device you pick |
 | Car location tracker | Optional device tracker used to confirm the car is actually home |
 | Charger phases used by this car | 1, 2, or 3 — how many of the charger's phases this car actually draws on in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2. Default 3 |
 

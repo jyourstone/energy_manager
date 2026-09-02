@@ -728,6 +728,8 @@ def match_car_entities(hass: HomeAssistant, device_id: str) -> dict[str, str]:
             if (
                 "target" in entity_id_lower
                 or "target" in unique_id_lower
+                or "goal" in entity_id_lower
+                or "goal" in unique_id_lower
                 or "mal_" in entity_id_lower
             ):
                 continue
@@ -749,7 +751,12 @@ def match_car_entities(hass: HomeAssistant, device_id: str) -> dict[str, str]:
                 battery_by_keyword = entity_entry.entity_id
 
         elif entity_entry.domain == "binary_sensor":
-            if device_class in ("plug", "battery_charging"):
+            # Only "plug". A device_class "battery_charging" sensor answers a
+            # different question -- it is off whenever current is not flowing,
+            # including while EM itself has the charger paused. Feeding that to
+            # _is_car_present() would make an EM pause read as "unplugged",
+            # drop the car from demand, and never resume.
+            if device_class == "plug":
                 suggestions.setdefault(
                     CONF_CHARGER_CONNECTED_ENTITY, entity_entry.entity_id
                 )

@@ -198,6 +198,22 @@ class TestActualSocWinsOverTarget:
         )
         assert _run_match([target, actual])["battery_level_entity"] == actual.entity_id
 
+    def test_excludes_english_goal_soc(self):
+        """A "goal" SOC carries device_class battery too -- actual must win."""
+        goal = FakeEntityEntry(
+            entity_id="sensor.car_goal_state_of_charge",
+            domain="sensor",
+            unique_id="VIN123_goal_state_of_charge",
+            original_device_class="battery",
+        )
+        actual = FakeEntityEntry(
+            entity_id="sensor.car_state_of_charge",
+            domain="sensor",
+            unique_id="VIN123_state_of_charge",
+            original_device_class="battery",
+        )
+        assert _run_match([goal, actual])["battery_level_entity"] == actual.entity_id
+
     def test_no_battery_key_when_only_target_soc_exists(self):
         """If only the target/goal SOC entity exists, nothing is suggested."""
         target = FakeEntityEntry(
@@ -226,14 +242,19 @@ class TestChargerConnectedAndLocation:
         )
         assert _run_match([plug])["charger_connected_entity"] == plug.entity_id
 
-    def test_accepts_battery_charging_device_class(self):
-        """Integrations that expose the cable as battery_charging also match."""
+    def test_rejects_battery_charging_device_class(self):
+        """battery_charging is off whenever current is not flowing.
+
+        Suggesting it as the cable sensor would make an EM-commanded pause read
+        as "unplugged" in _is_car_present(), dropping the car from demand and
+        never resuming. Better to suggest nothing and let the user pick.
+        """
         charging = FakeEntityEntry(
             entity_id="binary_sensor.enyaq_laddar",
             domain="binary_sensor",
             original_device_class="battery_charging",
         )
-        assert _run_match([charging])["charger_connected_entity"] == charging.entity_id
+        assert "charger_connected_entity" not in _run_match([charging])
 
     def test_falls_back_to_keywords_when_no_device_class(self):
         """Unclassed binary sensors match on the usual naming."""

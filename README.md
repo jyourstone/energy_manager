@@ -60,7 +60,7 @@ Optional on either path: a car integration for automatic battery-level and locat
 - **Nordpool, native or HACS** — both the official Nordpool integration and the HACS custom component are supported and auto-detected. All price entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR, ...) — no conversion, everything stays in your area's currency.
 - **Solar-aware** — [Forecast.Solar](https://www.home-assistant.io/integrations/forecast_solar/) forecasts shape the battery schedule, and surplus solar production can charge the battery or car outside the price plan — without rapid on/off cycling.
 - **Observe-only by default** — the master **Device control** switch ships OFF: Energy Manager computes and publishes every decision but sends no hardware command until you turn it on, so you can watch what it *would* do first.
-- **Guided setup** — the config wizard auto-detects Nordpool, SigenStor, Easee, and car integrations and pre-fills the forms. Every setting can be changed later via **Configure** — no re-adding needed.
+- **Guided setup** — the config wizard auto-detects Nordpool, SigenStor and Easee and pre-fills the forms; cars are added afterwards, where picking the car's device suggests its entities. Every setting can be changed later via **Configure** — no re-adding needed.
 - **Translations** — English and Swedish, both complete.
 
 ## Status
