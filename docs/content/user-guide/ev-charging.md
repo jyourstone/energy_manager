@@ -27,7 +27,7 @@ Configured in Step 5 of the [Setup Wizard](../getting-started/setup-wizard.md). 
 | 3-phase switch threshold (kW) | 4.1 | Available power below which the charger drops to single-phase |
 | Solar charging start threshold (kW) | 1.5 | Minimum net solar surplus, sustained past the activation delay, before solar charging begins |
 | Battery SOC gate (%) | 100 | Advanced option: minimum house-battery SOC before solar EV charging starts — the battery fills first, only the leftover surplus goes to the car. Requires the Home Battery module; the field and its number entity are hidden without it, and the gate is not applied |
-| Notification service | — | Optional `notify.*` service for safety alerts — fuse emergency overload pauses and the 0A safety stop |
+| Notification service | — | Optional `notify.*` service for safety alerts — an unclearable fuse overload and the 0A safety stop |
 
 A handful of further tuning knobs (current increase/decrease delay, solar activation/deactivation delay, the emergency overload margin) live in the same step's advanced options, pre-filled with tuned defaults.
 
@@ -72,6 +72,15 @@ The **EV charger force charging** switch overrides both the schedule and the sol
 ## Fuse Protection
 
 Whatever mode wins, the amp target actually sent to the charger is capped by fuse headroom, computed independently every control cycle: the fuse rating minus the safety buffer — both configured in the shared **Grid & Fuse Protection** step — minus the worst-loaded phase's current draw, with the charger's own current draw added back so it never counts against its own headroom. That figure is combined with the grid charging power cap and the car's own max charge power — EM always requests the lowest of the three. This applies identically to Easee charging and to the commanded-current sensor a non-Easee automation follows.
+
+### Overload Alerts
+
+Routine load balancing is silent. When the measured current does cross the fuse rating plus the emergency overload margin, EM pauses the charger immediately — but sends nothing, because that pause (or the house load stepping back down) normally clears the overload within a cycle or two, and a spike is not something worth a notification.
+
+An alert is only sent when the overload holds continuously for two minutes, i.e. when pausing the charger did **not** fix it and the remaining house load is what is eating the fuse. That one is sent as a critical notification — it overrides silent mode and Do Not Disturb — once per episode, re-arming when the overload clears. It is also sent when the charger is already paused or the car is unplugged, which is precisely the case where EM has no lever left to pull.
+
+!!! note "iOS"
+    Critical alerts require the Home Assistant companion app's *Critical Alerts* permission. Without it the alert still arrives, as a normal notification.
 
 ## Non-Easee Chargers
 

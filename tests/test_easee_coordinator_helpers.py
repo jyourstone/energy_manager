@@ -17,8 +17,9 @@ EMSCoordinator themselves. Covers:
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -27,6 +28,7 @@ from custom_components.energy_manager.coordinator import (
     EASEE_PHASE_MODE_MAP,
     FuseSensorReader,
     _derive_phase_mode,
+    _dispatch_notifications,
     _entity_has_value,
     _estimate_charger_current_amps,
     _read_control_enabled,
@@ -334,3 +336,55 @@ def test_fuse_reader_not_configured_applies_fallback() -> None:
     amps, blocked = reader.read_grid_current_amps()
     assert amps == 7.5
     assert blocked is False
+
+
+# ---------------------------------------------------------------------------
+# _dispatch_notifications() -- the testable half of
+# EaseeCoordinator._send_notifications (the coordinator itself cannot be
+# instantiated under the HA stubs, see the module docstring)
+# ---------------------------------------------------------------------------
+
+
+def _notify_hass(*, raises: bool = False):
+    hass = SimpleNamespace(services=SimpleNamespace(async_call=AsyncMock()))
+    if raises:
+        hass.services.async_call.side_effect = RuntimeError("notify backend down")
+    return hass
+
+
+def test_dispatch_notifications_marks_critical_messages_only() -> None:
+    hass = _notify_hass()
+    asyncio.run(
+        _dispatch_notifications(hass, "notify.mobil", "", ("plain",), ("urgent",))
+    )
+    calls = hass.services.async_call.await_args_list
+    assert [c.args[0] for c in calls] == ["notify", "notify"]
+    assert [c.args[2]["message"] for c in calls] == ["plain", "urgent"]
+    assert "data" not in calls[0].args[2]
+    assert calls[1].args[2]["data"]["push"]["sound"]["critical"] == 1
+
+
+def test_dispatch_notifications_applies_the_prefix() -> None:
+    hass = _notify_hass()
+    asyncio.run(
+        _dispatch_notifications(hass, "notify.mobil", "[observe-only] ", (), ("urgent",))
+    )
+    call = hass.services.async_call.await_args_list[0]
+    assert call.args[2]["message"] == "[observe-only] urgent"
+
+
+def test_dispatch_notifications_never_raises_and_keeps_going() -> None:
+    """A failing notify service must not abort the control tick -- this runs
+    in the finally of the command dispatch, so raising here would mask the
+    command failure the alert exists to report."""
+    hass = _notify_hass(raises=True)
+    asyncio.run(
+        _dispatch_notifications(hass, "notify.mobil", "", ("plain",), ("urgent",))
+    )
+    assert hass.services.async_call.await_count == 2
+
+
+def test_dispatch_notifications_ignores_a_malformed_service() -> None:
+    hass = _notify_hass()
+    asyncio.run(_dispatch_notifications(hass, "mobil", "", ("plain",), ()))
+    hass.services.async_call.assert_not_awaited()

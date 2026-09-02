@@ -139,6 +139,7 @@ from .const import (
     CONF_SOLAR_START_THRESHOLD_KW,
     CONSUMPTION_STORAGE_SAVE_DELAY_SECONDS,
     CONSUMPTION_STORAGE_VERSION,
+    CRITICAL_NOTIFICATION_DATA,
     DEFAULT_AMP_DECREASE_DELAY_SECONDS,
     DEFAULT_AMP_INCREASE_DELAY_SECONDS,
     DEFAULT_APPLIANCE_MIN_OFF_MINUTES,
@@ -1746,6 +1747,53 @@ def _read_net_house_consumption_kw(
     return house_consumption_kw - excluded_power_kw
 
 
+async def _dispatch_notifications(
+    hass,
+    notify_service: str,
+    prefix: str,
+    notifications: tuple[str, ...],
+    critical_notifications: tuple[str, ...],
+) -> None:
+    """Send safety notifications, one service call per message.
+
+    critical_notifications carry the mobile_app payload that breaks
+    through silent mode / Do Not Disturb: an unclearable fuse overload
+    needs a human now. The payload holds both the iOS
+    (push.sound.critical) and Android (channel/priority) keys -- each
+    platform ignores the other's. iOS also requires the companion app's
+    "Critical Alerts" permission to be granted, otherwise it degrades to a
+    normal notification.
+
+    Never raises. It runs in the `finally` of the command dispatch, so an
+    exception here would mask the very command failure the alert exists to
+    report -- and a notify backend that is down is not a reason to fail a
+    control tick.
+    """
+    if not (notifications or critical_notifications) or not notify_service:
+        return
+
+    domain, _, service = notify_service.partition(".")
+    if not domain or not service:
+        _LOGGER.warning(
+            "Invalid notify_service '%s' -- expected 'notify.<service>'",
+            notify_service,
+        )
+        return
+
+    payloads = [{"message": f"{prefix}{m}"} for m in notifications]
+    payloads += [
+        {"message": f"{prefix}{m}", "data": CRITICAL_NOTIFICATION_DATA}
+        for m in critical_notifications
+    ]
+    for payload in payloads:
+        try:
+            await hass.services.async_call(domain, service, payload, blocking=True)
+        except Exception:  # notify backends raise anything
+            _LOGGER.exception(
+                "Failed to send safety notification via %s", notify_service
+            )
+
+
 class FuseSensorReader:
     """Shared grid-current sensor read + fallback logic.
 
@@ -1941,6 +1989,17 @@ class FuseSensorReader:
                 # Re-arm it so a fresh sustain window retries instead.
                 self._mismatch_tracker.flagged = False
                 self._mismatch_tracker.mismatch_since_ts = None
+
+    @property
+    def sensor_fallback_active(self) -> bool:
+        """Whether the last read used the fail-behavior fallback.
+
+        Consumers use this to tell an assumed load apart from a measured
+        one -- the fuse math treats them identically (assuming load is the
+        safe direction), but a user-facing alert must not report an
+        assumption as a measurement.
+        """
+        return self._fallback_since is not None
 
     def _note_read_success(self) -> None:
         """Reset fallback tracking and clear the Repairs issue after a good read."""
@@ -3983,6 +4042,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             charger_status=charger_status,
             charger_power_kw=charger_power_kw,
             measured_worst_case_signed_amps=0.0 if sensor_blocked else l_current,
+            measured_amps_is_fallback=self._fuse_reader.sensor_fallback_active,
             current_dynamic_limit_amps=current_dynamic_limit_amps,
             force_charging=self._is_force_charging(),
             solar_surplus_kw=solar_surplus_kw,
@@ -4029,8 +4089,18 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 ),
                 SOLAR_TRACKER_SAVE_DELAY_SECONDS,
             )
-        await self._execute_commands(decision.commands)
-        await self._send_notifications(decision.notifications)
+        try:
+            await self._execute_commands(decision.commands)
+        finally:
+            # Dispatched even when a command raised: an unreachable charger
+            # during a persistent overload is exactly when the alert matters
+            # most, and the controller's alert latch has already fired for
+            # this episode -- a skipped send is a lost alert, not a delayed
+            # one. _send_notifications() never raises, so the command
+            # failure still propagates untouched.
+            await self._send_notifications(
+                decision.notifications, decision.critical_notifications
+            )
 
         fuse_headroom_amps = (
             0.0
@@ -4052,7 +4122,9 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             stuck=decision.stuck,
             dry_run=not control_enabled,
             last_suppressed_command=self._last_suppressed_command,
-            notification_count=len(decision.notifications),
+            notification_count=(
+                len(decision.notifications) + len(decision.critical_notifications)
+            ),
             override_reason=decision.override_reason,
             charger_status=charger_status,
             charger_power_kw=charger_power_kw,
@@ -4230,32 +4302,28 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         _LOGGER.info("Sending Easee command: %s.%s %s", domain, service, service_data)
         await self.hass.services.async_call(domain, service, service_data, blocking=True)
 
-    async def _send_notifications(self, notifications: tuple[str, ...]) -> None:
+    async def _send_notifications(
+        self,
+        notifications: tuple[str, ...],
+        critical_notifications: tuple[str, ...] = (),
+    ) -> None:
         """Send safety notifications via the configured notify service.
 
         ALWAYS sent even in observe-only mode (they report real measured
-        conditions, e.g. an emergency fuse overload) -- prefixed with
+        conditions, e.g. a persistent fuse overload) -- prefixed with
         "[observe-only] " when device control is disabled (EASE-08).
+
+        Never raises; see _dispatch_notifications(), which holds the logic
+        so it is reachable from tests (EaseeCoordinator itself cannot be
+        instantiated under the HA stubs).
         """
-        if not notifications or not self._notify_service:
-            return
-
-        domain, _, service = self._notify_service.partition(".")
-        if not domain or not service:
-            _LOGGER.warning(
-                "Invalid notify_service '%s' -- expected 'notify.<service>'",
-                self._notify_service,
-            )
-            return
-
-        prefix = "" if self._is_control_enabled() else "[observe-only] "
-        for message in notifications:
-            await self.hass.services.async_call(
-                domain,
-                service,
-                {"message": f"{prefix}{message}"},
-                blocking=True,
-            )
+        await _dispatch_notifications(
+            self.hass,
+            self._notify_service,
+            "" if self._is_control_enabled() else "[observe-only] ",
+            notifications,
+            critical_notifications,
+        )
 
 
 @dataclass(frozen=True, slots=True)

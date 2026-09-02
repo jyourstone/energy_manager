@@ -90,7 +90,7 @@ Fuse rating, grid power sensors, house consumption and excluded power sensors ar
 | Phase-switch threshold (kW) | Available power below which the charger drops to single-phase |
 | Solar charging start threshold (kW) | Seeds the **Solar start threshold** number entity; activation/deactivation delays stay wizard-owned |
 | Battery SOC gate (advanced options) | Seeds the **Battery SOC gate** number entity: minimum house-battery SOC before solar EV charging starts (only shown when the Home Battery module is enabled — the gate compares against the house battery's SOC) |
-| Notification service | Optional — for charger safety alerts (e.g. emergency overload pause) |
+| Notification service | Optional — for charger safety alerts (e.g. a fuse overload that load balancing could not clear) |
 
 All advanced options are pre-filled with tuned defaults and grouped at the end of the step. See the [EV Charging](../user-guide/ev-charging.md) page for what each field means. The three seeded fields above stay adjustable afterward from the Energy Manager device page, without going back through the wizard.
 

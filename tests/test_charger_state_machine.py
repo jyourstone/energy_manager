@@ -1130,7 +1130,10 @@ class TestFuseLayer1Emergency:
         assert decision.override_reason == "emergency_fuse_overload"
         assert decision.commands == (decision.commands[0],)  # single command
         assert decision.commands[0].action == "pause"
-        assert len(decision.notifications) == 1
+        # The pause is instant; the alert is not -- a single-tick overload
+        # is a spike the pause clears, not something to wake a human for.
+        assert decision.notifications == ()
+        assert decision.critical_notifications == ()
 
     def test_does_not_trigger_just_below_boundary(self):
         inputs = _inputs(
@@ -1179,6 +1182,111 @@ class TestFuseLayer1Emergency:
         decision = ChargerController().decide(inputs)
         assert decision.override_reason == "emergency_fuse_overload"
 
+
+# ---------------------------------------------------------------------------
+# Persistent-overload critical alert
+# ---------------------------------------------------------------------------
+
+
+class TestPersistentOverloadAlert:
+    """Alerting on an overload that load balancing could not clear."""
+
+    @staticmethod
+    def _overloaded(now, **overrides):
+        defaults = {
+            "charger_status": "charging",
+            "charger_power_kw": 3.5,
+            "measured_worst_case_signed_amps": 25.0,  # >= fuse(20)+margin(2)
+            "force_charging": True,
+            "now": now,
+        }
+        defaults.update(overrides)
+        return _inputs(**defaults)
+
+    def test_transient_overload_never_alerts(self):
+        controller = ChargerController()
+        first = controller.decide(self._overloaded(T0))
+        cleared = controller.decide(
+            self._overloaded(
+                T0 + timedelta(seconds=30), measured_worst_case_signed_amps=15.0
+            )
+        )
+        assert first.critical_notifications == ()
+        assert cleared.critical_notifications == ()
+
+    def test_alerts_once_after_the_delay(self):
+        controller = ChargerController()
+        controller.decide(self._overloaded(T0))
+        before = controller.decide(self._overloaded(T0 + timedelta(seconds=119)))
+        alerting = controller.decide(self._overloaded(T0 + timedelta(seconds=120)))
+        after = controller.decide(self._overloaded(T0 + timedelta(seconds=150)))
+        assert before.critical_notifications == ()
+        assert len(alerting.critical_notifications) == 1
+        assert "25.0 A" in alerting.critical_notifications[0]
+        # Once per episode -- no re-alert every tick while it persists.
+        assert after.critical_notifications == ()
+
+    def test_alerts_again_after_the_overload_clears_and_returns(self):
+        controller = ChargerController()
+        controller.decide(self._overloaded(T0))
+        assert controller.decide(
+            self._overloaded(T0 + timedelta(seconds=120))
+        ).critical_notifications
+        controller.decide(
+            self._overloaded(
+                T0 + timedelta(seconds=150), measured_worst_case_signed_amps=10.0
+            )
+        )
+        controller.decide(self._overloaded(T0 + timedelta(seconds=180)))
+        second = controller.decide(self._overloaded(T0 + timedelta(seconds=300)))
+        assert len(second.critical_notifications) == 1
+
+    def test_alerts_while_the_charger_is_already_paused(self):
+        """The case Fuse Layer 1's is_drawing gate can never see: the charger
+        is off and the house load alone is over the fuse rating."""
+        controller = ChargerController()
+        idle = {"charger_status": "paused", "charger_power_kw": 0.0}
+        first = controller.decide(self._overloaded(T0, **idle))
+        alerting = controller.decide(
+            self._overloaded(T0 + timedelta(seconds=120), **idle)
+        )
+        assert first.override_reason != "emergency_fuse_overload"
+        assert first.critical_notifications == ()
+        assert len(alerting.critical_notifications) == 1
+
+    def test_fallback_reading_never_alerts(self):
+        """An assumed load at or above fuse+margin is not evidence of an
+        overload -- it is a static config value standing in for a dead
+        sensor, and would otherwise alert forever."""
+        controller = ChargerController()
+        controller.decide(self._overloaded(T0, measured_amps_is_fallback=True))
+        later = controller.decide(
+            self._overloaded(
+                T0 + timedelta(seconds=600), measured_amps_is_fallback=True
+            )
+        )
+        assert later.critical_notifications == ()
+
+    def test_clock_starts_fresh_when_the_sensors_recover(self):
+        """A fallback stretch must not count toward the delay -- the first
+        real reading starts the clock."""
+        controller = ChargerController()
+        controller.decide(self._overloaded(T0, measured_amps_is_fallback=True))
+        real = controller.decide(self._overloaded(T0 + timedelta(seconds=600)))
+        assert real.critical_notifications == ()
+        alerting = controller.decide(self._overloaded(T0 + timedelta(seconds=720)))
+        assert len(alerting.critical_notifications) == 1
+
+    def test_alerts_even_when_the_car_is_disconnected(self):
+        """Terminal status returns early from _decide() -- the alert is
+        attached outside it, so it still fires."""
+        controller = ChargerController()
+        terminal = {"charger_status": "disconnected", "charger_power_kw": 0.0}
+        controller.decide(self._overloaded(T0, **terminal))
+        alerting = controller.decide(
+            self._overloaded(T0 + timedelta(seconds=120), **terminal)
+        )
+        assert len(alerting.critical_notifications) == 1
 
 # ---------------------------------------------------------------------------
 # Fuse Layer 3: 0A-target safety stop + pre-start gate
@@ -1428,7 +1536,6 @@ class TestTerminalStatusPhysicsDefence:
         )
         assert decision.override_reason == "emergency_fuse_overload"
         assert [c.action for c in decision.commands] == ["pause"]
-        assert decision.notifications
 
     def test_one_tick_delayed_reset_after_real_unplug(self):
         """During the lie the controller keeps supervising; the reset fires

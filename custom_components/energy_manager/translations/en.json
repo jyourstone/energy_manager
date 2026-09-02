@@ -132,7 +132,7 @@
           "solar_activation_delay": "Advanced: how long solar surplus must be continuously available before solar charging activates.",
           "solar_deactivation_delay": "Advanced: how long solar surplus must be continuously unavailable before solar charging deactivates.",
           "battery_soc_gate_pct": "Advanced: minimum house battery charge level before solar charging is allowed to divert surplus to the car.",
-          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
+          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an immediate charger pause. A notification is only sent if the overload persists for two minutes."
         }
       },
       "economics": {
@@ -401,7 +401,7 @@
           "phase_switch_threshold_kw": "Advanced: available power below which the charger switches to single-phase charging.",
           "solar_activation_delay": "Advanced: how long solar surplus must be continuously available before solar charging activates.",
           "solar_deactivation_delay": "Advanced: how long solar surplus must be continuously unavailable before solar charging deactivates.",
-          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an emergency pause and notification."
+          "emergency_margin_amps": "Advanced: amps above the fuse rating that triggers an immediate charger pause. A notification is only sent if the overload persists for two minutes."
         }
       }
     },

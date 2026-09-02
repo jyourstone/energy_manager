@@ -279,6 +279,18 @@ CONF_EXCLUDED_POWER_ENTITIES = "excluded_power_entities"
 # EASE-08 safety notifications
 CONF_NOTIFY_SERVICE = "notify_service"
 
+#: notify service "data" payload that breaks a notification through silent
+#: mode / Do Not Disturb. iOS reads push.sound (and needs the companion
+#: app's "Critical Alerts" permission, otherwise it degrades to a normal
+#: notification); Android reads channel/priority/ttl. Each platform ignores
+#: the other's keys, so one payload covers both.
+CRITICAL_NOTIFICATION_DATA = {
+    "push": {"sound": {"name": "default", "critical": 1, "volume": 1.0}},
+    "channel": "alarm_stream",
+    "priority": "high",
+    "ttl": 0,
+}
+
 # Charger amp limits (Easee minimum is 6A per phase)
 CONF_MIN_CHARGE_AMPS = "min_charge_amps"
 CONF_MAX_CHARGE_AMPS = "max_charge_amps"
