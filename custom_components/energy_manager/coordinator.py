@@ -32,6 +32,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import restore_state
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -59,20 +60,31 @@ from .battery_scheduler import (
     compute_effective_discharge_threshold,
 )
 from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
+from .car_power_estimator import (
+    CarThroughputLearner,
+    ThroughputTick,
+    attributable_car,
+    observed_phase_count,
+    planning_power_kw,
+)
 from .charger_state_machine import (
     POWER_ACTIVE_THRESHOLD_KW,
     TERMINAL_STATUSES,
     CarDemand,
     ChargerCommand,
     ChargerController,
+    ChargerDecision,
     ChargerInputs,
     SolarActivationTracker,
     compute_solar_surplus_kw,
+    derive_car_max_charge_power_kw,
 )
 from .const import (
     APPLIANCE_UPDATE_INTERVAL_SECONDS,
     BATTERY_SCHEDULE_UPDATE_INTERVAL_MINUTES,
     CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES,
+    CAR_THROUGHPUT_SAVE_DELAY_SECONDS,
+    CAR_THROUGHPUT_STORAGE_VERSION,
     CONF_AMP_DECREASE_DELAY,
     CONF_AMP_INCREASE_DELAY,
     CONF_APPLIANCE_MIN_OFF_MINUTES,
@@ -92,6 +104,7 @@ from .const import (
     CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_CYCLE_COST,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
@@ -104,6 +117,7 @@ from .const import (
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_ELECTRICITY_COMPANY_FEE,
     CONF_EMERGENCY_MARGIN_AMPS,
     CONF_EMS_SELECT_ENTITY,
     CONF_ESS_INCREASE_DELAY,
@@ -116,6 +130,7 @@ from .const import (
     CONF_GRID_PHASE_B_ENTITY,
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_GRID_TRANSFER_FEE,
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_LOCATION_ENTITY,
     CONF_MAX_CHARGE_AMPS,
@@ -155,7 +170,6 @@ from .const import (
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
-    DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
     DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_CHARGE_THRESHOLD,
@@ -203,8 +217,10 @@ from .const import (
     FORECAST_ACCURACY_SAVE_DELAY_SECONDS,
     FORECAST_ACCURACY_STORAGE_VERSION,
     FUSE_FALLBACK_ISSUE_THRESHOLD_SECONDS,
+    MAX_CAR_MAX_CHARGE_POWER_KW,
     MAX_CHARGE_LIMIT_KW,
     MEAN_CONSUMPTION_WINDOW_HOURS,
+    MIN_CAR_MAX_CHARGE_POWER_KW,
     MIN_CONSUMPTION_SAMPLE_INTERVAL_MINUTES,
     NORDPOOL_TYPE_NATIVE,
     PRICE_CLOCK_REFRESH_DELAY_SECONDS,
@@ -214,6 +230,7 @@ from .const import (
     SOLAR_TRACKER_SAVE_DELAY_SECONDS,
     SOLAR_TRACKER_STORAGE_VERSION,
     SUBENTRY_TYPE_APPLIANCE,
+    SUBENTRY_TYPE_CAR,
     WATTS_TO_AMPS_3PHASE_DIVISOR,
 )
 from .ems_controller import (
@@ -514,6 +531,94 @@ def _is_recent_nordpool_refresh(
     return (now - last_request) <= timedelta(seconds=suppress_seconds)
 
 
+def _restored_number(hass: HomeAssistant, unique_id: str, default: float) -> float:
+    """Return the value a RestoreNumber with this unique_id will restore.
+
+    Seventeen coordinator attributes are OWNED by RestoreNumber entities:
+    the constructor seeds a DEFAULT_* constant and the user's real value
+    only lands when that entity's async_added_to_hass() assigns it. But
+    every coordinator is constructed AND first-refreshed before
+    entry.runtime_data is assigned (__init__.py:87-128), and the number
+    platform -- which creates those entities -- is forwarded only after
+    that. So the first schedule of every restart and every reload is
+    computed on defaults.
+
+    Incident 2026-09-02 (08:05:53, 09:54:07 -> 09:54:17, 10:05:12 ->
+    10:05:22): with battery_cycle_cost still at DEFAULT_BATTERY_CYCLE_COST
+    (0.0) rather than the configured 1.00, the scheduler used the manual
+    0.50 SEK/kWh instead of the derived 1.00 - 0.78 = 0.22, and
+    number.energy_manager_battery_discharge_spread_threshold -- whose
+    availability rule is "cycle cost <= 0" (number.py:284) -- published
+    0.5 and then went Unavailable ~10 s later, once
+    async_request_refresh()'s debounce let the listener re-evaluate it.
+
+    Reading the restore store here makes the seed EQUAL to what the entity
+    will assign, which is what removes the flap in both directions: a user
+    whose cycle cost really is 0.0 has a stored 0.0 (distinguishable from
+    "nothing stored") and keeps seeing the manual threshold, while a fresh
+    install with no record falls back to `default` -- which callers pass as
+    the entity's own fallback expression, so seed and entity agree there
+    too.
+
+    An options-only seed cannot replace this: the options flow has no
+    economics step (config_flow.py:1063-1582), so entry.options goes stale
+    the moment the user moves the number, and entries created before
+    async_step_economics existed never carried these keys at all.
+
+    Walks entity registry -> restore-state store, mirroring
+    _find_native_coordinator's "return the fallback at any step that is not
+    available". Both lookups are synchronous -- restore_state.async_get is a
+    @singleton @callback whose store bootstrap loads long before config
+    entries -- so nothing here awaits, nothing waits on an entity, and a
+    number entity that fails to load, is disabled, or lives on a platform
+    that was never forwarded can only leave the attribute where it is
+    today. Deadlock is structurally impossible.
+
+    Args:
+        hass: Home Assistant instance.
+        unique_id: The entity's unique_id, e.g.
+            f"{entry.entry_id}_battery_cycle_cost". Must stay verbatim in
+            sync with number.py -- guarded by a source-text test.
+        default: The seed to use when nothing is stored. Pass the entity's
+            OWN fallback expression, not a bare DEFAULT_* constant.
+
+    Returns:
+        The stored native value as a float, else `default`.
+    """
+    try:
+        entity_id = er.async_get(hass).async_get_entity_id(
+            "number", DOMAIN, unique_id
+        )
+        if entity_id is None:
+            return default
+        stored = restore_state.async_get(hass).last_states.get(entity_id)
+        if stored is None or stored.extra_data is None:
+            return default
+        # extra_data is a NumberExtraStoredData after a reload and a
+        # RestoredExtraData after a cold restart -- dataclasses in both
+        # cases, never dicts, so it must be read through as_dict() and
+        # never subscripted. The state STRING is no fallback either: the
+        # discharge-threshold entity is stored as "unavailable" precisely
+        # when a cycle cost is configured, which is the case this exists
+        # for.
+        value = stored.extra_data.as_dict().get("native_value")
+        if value is None:
+            return default
+        if isinstance(value, dict):
+            # A Decimal native_value survives JSON as its encoded form
+            # ({"__type": "<class 'decimal.Decimal'>", "decimal": "0.5"}).
+            # The entity's own NumberExtraStoredData.from_dict rebuilds the
+            # Decimal, so falling through to the default here would put the
+            # seed and the entity back out of step -- the exact divergence
+            # this helper exists to remove.
+            value = value.get("decimal")
+            if value is None:
+                return default
+        return float(value)
+    except Exception:  # noqa: BLE001 -- a seed miss must never block setup
+        return default
+
+
 def _find_native_coordinator(
     hass: HomeAssistant, nordpool_entity: str
 ) -> object | None:
@@ -759,7 +864,19 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
 
         # Mutable thresholds -- updated by NumberEntity instances after setup
         self.charge_threshold: float = DEFAULT_CHARGE_THRESHOLD
-        self.discharge_threshold: float = DEFAULT_DISCHARGE_THRESHOLD
+        # Restore-seeded (see _restored_number): this one is the LIVE
+        # threshold whenever battery_cycle_cost is 0, which is the shipped
+        # default, so leaving it on the constant plans the first schedule
+        # of every restart at 0.50 instead of the user's stored value.
+        self.discharge_threshold: float = _restored_number(
+            hass,
+            f"{entry.entry_id}_discharge_price_threshold",
+            DEFAULT_DISCHARGE_THRESHOLD,
+        )
+        # NOT restore-seeded, deliberately: the entity stores kW and writes
+        # WATTS here (number.py:347 multiplies by 1000), so a seed added
+        # later must be _restored_number(...) * 1000 or it caps battery
+        # charging at ~11 W.
         self.max_charge_power_w: float = DEFAULT_MAX_CHARGE_POWER_KW * 1000
         # BATT-17 export arbitrage -- number entities like their sibling
         # knobs; 0 = feature off
@@ -786,10 +903,37 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         )
         self.max_soc_pct: float = DEFAULT_MAX_SOC_PCT
 
-        # BATT-14 economics -- updated by NumberEntity instances after setup
-        self.battery_cycle_cost: float = DEFAULT_BATTERY_CYCLE_COST
-        self.grid_transfer_fee: float = DEFAULT_GRID_TRANSFER_FEE
-        self.electricity_company_fee: float = DEFAULT_ELECTRICITY_COMPANY_FEE
+        # BATT-14 economics -- owned by NumberEntity instances, but seeded
+        # from the restore store so the FIRST refresh already derives the
+        # effective discharge threshold from the user's real numbers
+        # (cycle_cost - transfer_fee) instead of the manual one. Both are
+        # required: seeding the cycle cost alone would derive 1.00 - 0.00,
+        # wrong in the opposite direction. The fallbacks are the entities'
+        # own (number.py:399-401, :452-454), character for character.
+        self.battery_cycle_cost: float = _restored_number(
+            hass,
+            f"{entry.entry_id}_battery_cycle_cost",
+            float(entry.options.get(CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST)),
+        )
+        self.grid_transfer_fee: float = _restored_number(
+            hass,
+            f"{entry.entry_id}_grid_transfer_fee",
+            float(entry.options.get(CONF_GRID_TRANSFER_FEE, DEFAULT_GRID_TRANSFER_FEE)),
+        )
+        # Seeded for the same reason as grid_transfer_fee, and never without
+        # it: the two are SUMMED (battery_scheduler._mark_export_slots and
+        # ActualElectricityPriceSensor), so seeding one half would leave the
+        # first refresh with a fee that is neither the stored total nor the
+        # default one -- a third wrong answer rather than a fixed one.
+        self.electricity_company_fee: float = _restored_number(
+            hass,
+            f"{entry.entry_id}_electricity_company_fee",
+            float(
+                entry.options.get(
+                    CONF_ELECTRICITY_COMPANY_FEE, DEFAULT_ELECTRICITY_COMPANY_FEE
+                )
+            ),
+        )
 
         # BATT-15 rolling house-consumption samples (~48h window), persisted
         # across restarts via HA Store -- restored in _async_setup, saved
@@ -1449,6 +1593,19 @@ def solar_tracker_storage_key(entry_id: str) -> str:
     so entry removal deletes the same .storage file this coordinator writes.
     """
     return f"{DOMAIN}.{entry_id}-solar-tracker"
+
+
+def car_throughput_storage_key(entry_id: str) -> str:
+    """Storage key for a config entry's measured per-car charge throughput.
+
+    A fourth separate Store (EaseeCoordinator lifecycle, like the solar
+    latch, but a bigger payload with a different write rhythm: committed
+    per-phase samples plus the in-flight segment). Kept separate so a
+    corrupt throughput payload can never take the solar latch down with it.
+    Shared with __init__.async_remove_entry so entry removal deletes the
+    same .storage file this coordinator writes.
+    """
+    return f"{DOMAIN}.{entry_id}-car-throughput"
 
 
 def _serialize_samples(samples: list[tuple[datetime, float]]) -> list[list]:
@@ -3233,11 +3390,29 @@ class CarChargingData:
         max_charge_power_kw: The car's own maximum charge power in kW
             (mutable, set by the per-car number entity). Consumed by
             EaseeCoordinator to build a CarDemand.
+
+            WARNING -- this is the LIVE AMP CEILING, not the planning
+            figure. It flows CarDemand.max_charge_kw ->
+            compute_charger_capacity_amps() -> the dynamic limit the
+            charger is actually told to use. It must keep carrying the
+            number entity's value and must NEVER be pointed at
+            learned_power_kw: a measured 4 kW would then cap the charger at
+            4 kW, which the learner would measure again next session --
+            learn 4, cap 4, learn 4. Only the scheduler call gets the
+            learned value (see planning_power_kw below).
         solar_target_soc: SOC ceiling for solar charging of this car
             (percent).
         fallback_mode: True when this schedule is the EV-08 guest-car
             fallback plan (cheapest half-window, ignores this car's SoC),
             not the car's own plan.
+        learned_power_kw: Measured throughput for this car's phase bucket in
+            kW, or None when nothing has been learned yet (too few samples,
+            solar-only charging, observe-only mode, a charger in Easee
+            "auto" phase mode). Diagnostic only -- never a control input.
+        planning_power_kw: The kW the price scheduler actually sized slots
+            with = planning_power_kw(learned_power_kw, max_charge_power_kw).
+            Equals max_charge_power_kw whenever nothing was learned or the
+            measurement exceeded the ceiling.
     """
 
     current_action: str
@@ -3255,6 +3430,8 @@ class CarChargingData:
     max_charge_power_kw: float
     solar_target_soc: float = 100.0
     fallback_mode: bool = False
+    learned_power_kw: float | None = None
+    planning_power_kw: float | None = None
 
 
 class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
@@ -3317,10 +3494,44 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             CONF_CHARGER_STATUS_ENTITY, ""
         )
 
-        # Mutable attributes -- updated by entity instances after setup
+        # Mutable attributes -- updated by entity instances after setup.
         self.departure_time: time = time(7, 0)  # Default 07:00
+        # NOT restore-seeded, deliberately: the entity rounds before
+        # assigning (number.py:562), so a seed added later must round too or
+        # it disagrees with what the entity restores a moment afterwards.
         self.target_soc: float = DEFAULT_TARGET_SOC_PCT
-        self.max_charge_power_kw: float = DEFAULT_CAR_MAX_CHARGE_POWER_KW
+        # max_charge_power_kw is not only the planning seed -- it is also
+        # the LIVE amp ceiling (CarChargingData.max_charge_power_kw ->
+        # CarDemand.max_charge_kw -> compute_charger_capacity_amps), and
+        # this coordinator's FIRST refresh runs before the platforms are
+        # forwarded (__init__.py). Seeding the phase derivation alone could
+        # therefore command 11.0 kW to a car the user throttled to 7.4 kW
+        # until CarMaxChargePower restores. Reading the store first fixes
+        # that; the derivation stays as the fallback, so a NEWLY created car
+        # -- the only case it was written for (number.py:653-656) -- still
+        # sizes its schedule from phase capability rather than a flat
+        # constant. The seed is always a real positive float -- never None,
+        # never a sub-minimum floor -- so it cannot make _build_car_demands
+        # drop the car (it skips only on data is None) or push
+        # compute_charger_capacity_amps below the 6 A pre-start gate. It
+        # does NOT make the controller's idle/suppression branch
+        # unreachable: on the EaseeCoordinator's own first refresh
+        # entry.runtime_data is still unset, _build_car_demands returns (),
+        # and _decide falls to mode "idle" -- a separate, pre-existing bug
+        # this change neither causes nor fixes.
+        self.max_charge_power_kw: float = _restored_number(
+            hass,
+            f"{subentry.subentry_id}_max_charge_power",
+            derive_car_max_charge_power_kw(
+                self._phase_capability,
+                float(entry.options.get(CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS)),
+                DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
+                DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
+                DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
+                MIN_CAR_MAX_CHARGE_POWER_KW,
+                MAX_CAR_MAX_CHARGE_POWER_KW,
+            ),
+        )
         self.solar_target_soc: float = DEFAULT_CAR_SOLAR_TARGET_SOC_PCT
 
         # SOC staleness tracking for fallback detection
@@ -3396,6 +3607,18 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # 6. Detect fallback mode
         fallback_mode = self._detect_fallback_needed()
 
+        # 6b. Size the plan with the throughput actually measured for this
+        # car's phase bucket, falling back to the number entity's ceiling
+        # when nothing has been learned. Lower assumed power books MORE
+        # slots, which is the safe direction: a fuse- or house-load-throttled
+        # car that really gets 7 kW never reaches target if planned at 11.
+        # In fallback_mode the plan is invariant to this value -- the guest
+        # target is total_energy / 2.0 and every slot's energy scales
+        # linearly with power, so the factor cancels exactly. No guard is
+        # needed here; adding one would be dead code.
+        learned = self._read_learned_charge_power_kw()
+        planning_kw = planning_power_kw(learned, self.max_charge_power_kw)
+
         # 7. Call pure scheduler with the Easee charger's live solar mode
         # (EV-09) -- schedule marking only ("charge" vs "solar_charge"), no
         # effect on the actual control loop.
@@ -3405,7 +3628,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc_pct=scheduling_soc,
             target_soc_pct=self.target_soc,
             battery_capacity_kwh=self._battery_capacity_kwh,
-            max_charge_power_kw=self.max_charge_power_kw,
+            max_charge_power_kw=planning_kw,
             now=dt_util.utcnow(),
             fallback_mode=fallback_mode,
             is_preliminary=is_preliminary,
@@ -3426,9 +3649,14 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             last_calculated=dt_util.utcnow(),
             home_and_plugged=self._is_home_and_plugged_in(),
             phase_capability=self._phase_capability,
+            # Deliberately NOT planning_kw -- this field is the live amp
+            # ceiling (see the CarChargingData docstring). Pointing it at the
+            # learned value would make the estimate self-fulfilling.
             max_charge_power_kw=self.max_charge_power_kw,
             solar_target_soc=self.solar_target_soc,
             fallback_mode=fallback_mode,
+            learned_power_kw=learned,
+            planning_power_kw=planning_kw,
         )
 
     def _read_car_soc(self) -> float | None:
@@ -3551,6 +3779,32 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         if easee_coordinator is None or easee_coordinator.data is None:
             return False
         return easee_coordinator.data.mode == "solar"
+
+    def _read_learned_charge_power_kw(self) -> float | None:
+        """Return the measured throughput for this car's phase bucket, if any.
+
+        Same defensive shape as _read_solar_surplus_available(), and for the
+        same ordering reason: this coordinator's first refresh runs BEFORE
+        EaseeCoordinator exists (__init__.py creates cars in phase 4 and the
+        Easee coordinator in phase 5), so runtime_data or the attribute may
+        legitimately be missing. None then means "not learned yet" and the
+        caller falls back to the ceiling; the number entity's
+        restore-triggered refresh closes that window seconds later.
+
+        Unlike the solar read this does NOT go through easee_coordinator.data
+        -- the learner's state is independent of whether a charger tick has
+        produced an EaseeData yet.
+
+        Returns:
+            Measured kW for (this car, its phase capability), or None.
+        """
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        easee_coordinator = getattr(runtime_data, "easee_coordinator", None)
+        if easee_coordinator is None:
+            return None
+        return easee_coordinator.learned_charge_power_kw(
+            self._subentry.subentry_id, self._phase_capability
+        )
 
     def _is_home_and_plugged_in(self) -> bool:
         """Derive whether the car is home and plugged in from available signals.
@@ -3819,6 +4073,18 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             solar_tracker_storage_key(entry.entry_id),
         )
 
+        # Measured per-car charge throughput -- restored in _async_setup,
+        # saved (delayed) whenever a tick commits a segment or the in-flight
+        # segment goes stale. A config-entry reload fires on ANY options or
+        # subentry save, so without persistence an overnight session's
+        # measurement would be lost to a single settings edit.
+        self._throughput_store: Store = Store(
+            hass,
+            CAR_THROUGHPUT_STORAGE_VERSION,
+            car_throughput_storage_key(entry.entry_id),
+        )
+        self._throughput_learner = CarThroughputLearner()
+
         # -- Entities --
         self._charger_status_entity: str = entry.options.get(
             CONF_CHARGER_STATUS_ENTITY, ""
@@ -3979,6 +4245,24 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
             self._controller.restore_solar_tracker(SolarActivationTracker())
 
+        # Restore the measured throughput history. known_car_ids garbage-
+        # collects a deleted car's learning: HA gives the integration no
+        # subentry-removal hook, so a removed car would otherwise keep its
+        # samples in .storage forever (and hand them straight back if the
+        # same subentry id were ever reused).
+        try:
+            self._throughput_learner = CarThroughputLearner.restore(
+                await self._throughput_store.async_load(),
+                dt_util.utcnow(),
+                frozenset(
+                    subentry_id
+                    for subentry_id, subentry in self.config_entry.subentries.items()
+                    if subentry.subentry_type == SUBENTRY_TYPE_CAR
+                ),
+            )
+        except Exception:  # noqa: BLE001 -- corrupt storage must never block setup
+            self._throughput_learner = CarThroughputLearner()
+
         entities = [e for e in (self._charger_status_entity, self._charger_power_entity) if e]
         if entities:
             self.config_entry.async_on_unload(
@@ -4038,6 +4322,11 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             charger_power_kw, net_house_consumption_kw
         )
 
+        # Hoisted out of the ChargerInputs literal: the throughput sampler
+        # needs the exact same snapshot the controller decided on, and
+        # building it twice could see two different runtime_data reads.
+        cars = self._build_car_demands()
+
         inputs = ChargerInputs(
             charger_status=charger_status,
             charger_power_kw=charger_power_kw,
@@ -4050,7 +4339,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             current_phase_mode=current_phase_mode,
             now=now,
             fuse_rating_amps=self._fuse_rating_amps,
-            cars=self._build_car_demands(),
+            cars=cars,
             safety_buffer_amps=self._safety_buffer_amps,
             min_amps=self._min_amps,
             max_amps=self._max_amps,
@@ -4089,6 +4378,21 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 ),
                 SOLAR_TRACKER_SAVE_DELAY_SECONDS,
             )
+
+        # Measure what the car actually received this tick. AFTER decide()
+        # (the classification needs the decision's mode/target/sequence
+        # state) and BEFORE _execute_commands, which sits in a try/finally
+        # that re-raises: an unguarded learner exception there would skip
+        # command execution and notification dispatch on a fuse-supervision
+        # tick. Telemetry must never fail the refresh -- the same rule the
+        # consumption sampler follows.
+        try:
+            self._sample_throughput(
+                now, cars, decision, charger_power_kw, control_enabled
+            )
+        except Exception as err:  # noqa: BLE001 -- measurement must never fail a tick
+            _LOGGER.debug("Car throughput sampling failed: %s", err)
+
         try:
             await self._execute_commands(decision.commands)
         finally:
@@ -4148,6 +4452,144 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             )
         except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
             _LOGGER.debug("Solar tracker store flush failed on unload: %s", err)
+
+    def _sample_throughput(
+        self,
+        now: datetime,
+        cars: tuple[CarDemand, ...],
+        decision: ChargerDecision,
+        charger_power_kw: float,
+        control_enabled: bool,
+    ) -> None:
+        """Fold this tick into the per-car throughput measurement.
+
+        Every tick where attribution is even *possible* is offered to the
+        learner, including the ones it then refuses: a rejected tick is
+        exactly what closes an open segment, so returning early on an
+        unplugged car or a two-car tie would let a segment stay open across
+        a session boundary and blend two sessions.
+
+        The one exception is an EMPTY car snapshot, which is structural
+        rather than evidential. On the first refresh after a restart or a
+        config-entry reload, config_entry.runtime_data has not been assigned
+        yet (__init__ awaits async_config_entry_first_refresh() before
+        assigning it), so _build_car_demands() returns (). "We cannot see the
+        cars yet" is not evidence that charging stopped -- feeding that tick
+        in would classify it "reject" and close the segment restore() had
+        just carried across the reload, making the short-gap branch of
+        _restore_segment unreachable in production.
+
+        Attribution is derived rather than plumbed: under
+        attributable_car()'s unambiguity rule the car it picks is provably
+        the ChargerController's own selected_car in every mode classify_tick
+        accepts, so ChargerDecision does not need to carry the selection.
+
+        Args:
+            now: This tick's UTC timestamp (the same one the decision saw).
+            cars: The exact CarDemand snapshot passed to decide().
+            decision: The controller's decision for this tick.
+            charger_power_kw: Measured charger draw in kW.
+            control_enabled: Master "Device control" switch -- False means
+                observe-only, where the amp target was never actually sent.
+        """
+        if not cars:
+            return
+
+        car = attributable_car(cars)
+        phases = (
+            None
+            if car is None
+            else observed_phase_count(
+                self._read_raw_config_phase_mode(), car.phase_capability
+            )
+        )
+        car_id = None if car is None else car.car_id
+        tick = ThroughputTick(
+            now=now,
+            car_id=car_id,
+            phases=phases,
+            power_kw=charger_power_kw,
+            mode=decision.mode,
+            sequence_state=decision.sequence_state,
+            stuck=decision.stuck,
+            dry_run=not control_enabled,
+            target_amps=decision.target_amps,
+            min_amps=self._min_amps,
+            fallback_mode=self._read_car_fallback_mode(car_id),
+        )
+        if self._throughput_learner.observe(tick):
+            # The lambda must RE-READ self._throughput_learner at save time
+            # and never capture a payload: _async_setup replaces the learner
+            # object wholesale on restore, and the segment mutates on every
+            # tick between now and the delayed write (same footgun as the
+            # consumption / forecast-accuracy / solar-latch delay_saves).
+            self._throughput_store.async_delay_save(
+                lambda: self._throughput_learner.serialize_stored(dt_util.utcnow()),
+                CAR_THROUGHPUT_SAVE_DELAY_SECONDS,
+            )
+
+    def _read_car_fallback_mode(self, car_id: str | None) -> bool:
+        """Whether this car's current plan is the EV-08 guest-car fallback.
+
+        Guest energy must never be credited to a configured car, and
+        CarDemand does not carry the flag, so it is read back off the car's
+        coordinator through the same defensive runtime_data chain
+        _build_car_demands() uses. An unknown car reads True (refuse), not
+        False: failing closed costs a measurement, failing open poisons a
+        bucket.
+        """
+        if car_id is None:
+            return True
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
+        car_coordinators = getattr(runtime_data, "car_coordinators", None) or {}
+        car_coordinator = car_coordinators.get(car_id)
+        data = None if car_coordinator is None else car_coordinator.data
+        if data is None:
+            return True
+        return data.fallback_mode
+
+    def learned_charge_power_kw(
+        self, car_id: str, phase_capability: int
+    ) -> float | None:
+        """Measured charge throughput for one car's phase bucket, or None.
+
+        The read side of the learner, kept as a thin wrapper so the raw
+        sample payload never crosses the coordinator boundary. Called by
+        CarChargingCoordinator._read_learned_charge_power_kw() once per car
+        tick.
+
+        Args:
+            car_id: The car's HA subentry id.
+            phase_capability: The car's configured phase capability (1-3),
+                which is also the bucket any grid charging lands in (below
+                the phase-switch threshold the pre-start gate stops charging
+                outright, so no 1-phase grid sample exists to strand).
+
+        Returns:
+            The duration-weighted measured kW, or None when the bucket has
+            not yet earned belief (too few samples, too little total time,
+            or a result outside the number entity's own [1.4, 22.0] band).
+        """
+        return self._throughput_learner.estimate_kw(
+            car_id, phase_capability, dt_util.utcnow()
+        )
+
+    async def async_flush_car_throughput_store(self) -> None:
+        """Write the measured throughput now, cancelling any delayed save.
+
+        Called on entry unload, for the same reasons as
+        async_flush_solar_tracker_store(): an in-flight async_delay_save
+        would otherwise fire AFTER async_remove_entry deletes the file, or
+        land after a reload's fresh coordinator already loaded the store.
+        It also makes the common reload path lossless for the in-flight
+        segment -- and a reload fires on ANY options or subentry save.
+        """
+        try:
+            await self._throughput_store.async_save(
+                self._throughput_learner.serialize_stored(dt_util.utcnow())
+            )
+        except Exception as err:  # noqa: BLE001 -- unload must never fail on storage
+            _LOGGER.debug("Car throughput store flush failed on unload: %s", err)
 
     def _is_control_enabled(self) -> bool:
         """Return the master "Device control" switch state (CORE-14)."""
@@ -4230,18 +4672,42 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             return "three"
         return _derive_phase_mode(state.attributes.get("config_phaseMode"))
 
+    def _read_raw_config_phase_mode(self) -> object:
+        """Read the charger's RAW config_phaseMode attribute, uninterpreted.
+
+        Deliberately not _read_current_phase_mode(), which folds auto,
+        missing and unparseable into "three" so the controller fails safe.
+        Measurement has the opposite requirement -- filing 1-phase energy in
+        the 3-phase bucket poisons it permanently -- so the raw value goes
+        to observed_phase_count(), which refuses to guess.
+
+        Returns:
+            The raw attribute (Easee: 1 = single, 2 = auto, 3 = three), or
+            None when there is no status entity, no state, or no attribute.
+        """
+        if not self._charger_status_entity:
+            return None
+        state = self.hass.states.get(self._charger_status_entity)
+        if state is None:
+            return None
+        return state.attributes.get("config_phaseMode")
+
     def _build_car_demands(self) -> tuple[CarDemand, ...]:
         """Build CarDemand snapshots from the car charging coordinators.
 
         Mirrors EMSCoordinator._check_car_priority()'s defensive read of
         runtime_data -- tolerates runtime_data not being set yet (first
         refresh, during async_setup_entry, happens before it is assigned).
+
+        Each demand carries its subentry id so a measured throughput sample
+        can be attributed back to one car without widening ChargerDecision
+        (see _sample_throughput).
         """
         runtime_data = getattr(self.config_entry, "runtime_data", None)
         car_coordinators = getattr(runtime_data, "car_coordinators", None) or {}
 
         demands: list[CarDemand] = []
-        for car_coordinator in car_coordinators.values():
+        for subentry_id, car_coordinator in car_coordinators.items():
             data = car_coordinator.data
             if data is None:
                 continue
@@ -4253,6 +4719,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                     max_charge_kw=data.max_charge_power_kw,
                     soc_pct=data.current_soc,
                     solar_target_soc_pct=data.solar_target_soc,
+                    car_id=subentry_id,
                 )
             )
         return tuple(demands)

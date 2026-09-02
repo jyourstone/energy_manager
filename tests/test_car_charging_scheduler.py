@@ -5,7 +5,9 @@ dict format matching PriceSlot (start, end, price keys with datetime values).
 
 Covers: normal scheduling, SOC at/above target, no available slots, zero
 charge power, fallback mode, solar charge marking, preliminary flag,
-current_action derivation.
+current_action derivation, and monotonicity in the assumed charge power
+(lower power never books fewer slots -- the premise the measured-throughput
+planning figure rests on).
 """
 
 from __future__ import annotations
@@ -1017,3 +1019,149 @@ class TestInProgressSlotIncludedAndProrated:
         # target_energy = 2.0 kWh -- the cheaper in-progress slot (1.0 kWh)
         # alone isn't enough, so both slots must be selected.
         assert result.charging_slot_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Assumed-power monotonicity -- the premise the learned-throughput
+# feature rests on. Feeding the planner a measured (lower) charge power than
+# the car's configured ceiling must never book FEWER slots; if it could, a
+# throttled install would silently under-charge overnight, which is the one
+# direction that leaves a car short at departure.
+# ---------------------------------------------------------------------------
+
+
+class TestAssumedPowerMonotonicity:
+    """Lower assumed power => same or more slots, never fewer."""
+
+    def test_lower_power_never_books_fewer_slots(self):
+        """Identical 24h slot list and SOC gap, swept from 11.0 kW down.
+
+        Each slot delivers duration_hours * power, so a lower power raises
+        the number of cheapest slots needed to cover the fixed
+        energy_needed_kwh. Priced strictly ascending so slot selection has
+        no ties to break and only the power varies between runs.
+        """
+        slots = _make_24h_slots([0.10 * (h + 1) for h in range(24)])
+        departure = datetime(2026, 2, 16, 0, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+        counts = []
+        for power in (11.0, 9.5, 7.4, 6.0, 3.7, 2.0, 1.4):
+            result = build_car_charging_schedule(
+                price_slots=slots,
+                departure_time_utc=departure,
+                current_soc_pct=20.0,
+                target_soc_pct=80.0,
+                battery_capacity_kwh=DEFAULT_CAPACITY,
+                max_charge_power_kw=power,
+                now=now,
+            )
+            counts.append(result.charging_slot_count)
+
+        assert counts == sorted(counts), f"slot count fell as power fell: {counts}"
+
+    def test_measured_power_books_strictly_more_than_the_ceiling(self):
+        """The concrete case the feature exists for: an 11 kW ceiling that
+        actually delivers 7.4 or 3.7 kW."""
+        slots = _make_24h_slots([0.10 * (h + 1) for h in range(24)])
+        departure = datetime(2026, 2, 16, 0, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+        def _plan(power: float) -> CarScheduleResult:
+            return build_car_charging_schedule(
+                price_slots=slots,
+                departure_time_utc=departure,
+                current_soc_pct=20.0,
+                target_soc_pct=80.0,
+                battery_capacity_kwh=DEFAULT_CAPACITY,
+                max_charge_power_kw=power,
+                now=now,
+            )
+
+        # energy_needed = (80-20)/100 * 77 = 46.2 kWh, hourly slots.
+        ceiling = _plan(11.0)      # 46.2 / 11.0 = 4.2h  -> 5 slots
+        measured = _plan(7.4)      # 46.2 / 7.4  = 6.24h -> 7 slots
+        throttled = _plan(3.7)     # 46.2 / 3.7  = 12.49h -> 13 slots
+
+        assert ceiling.charging_slot_count == 5
+        assert measured.charging_slot_count == 7
+        assert throttled.charging_slot_count == 13
+
+        assert measured.hours_needed > ceiling.hours_needed
+        assert throttled.hours_needed > measured.hours_needed
+
+    def test_extra_slots_are_the_next_cheapest_not_a_reshuffle(self):
+        """Lowering the power extends the selection; it never swaps a
+        cheap slot out for an expensive one."""
+        slots = _make_24h_slots([0.10 * (h + 1) for h in range(24)])
+        departure = datetime(2026, 2, 16, 0, 0, 0, tzinfo=UTC)
+        now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+        def _charge_starts(power: float) -> set:
+            result = build_car_charging_schedule(
+                price_slots=slots,
+                departure_time_utc=departure,
+                current_soc_pct=20.0,
+                target_soc_pct=80.0,
+                battery_capacity_kwh=DEFAULT_CAPACITY,
+                max_charge_power_kw=power,
+                now=now,
+            )
+            return {s.start for s in result.schedule if s.action == "charge"}
+
+        assert _charge_starts(11.0) < _charge_starts(7.4) < _charge_starts(3.7)
+
+
+def test_fallback_mode_is_invariant_to_assumed_power():
+    """EV-08's guest plan does not move when the assumed power changes.
+
+    fallback_mode targets total_energy / 2.0, and both that total and every
+    slot's deliverable energy scale linearly with max_charge_power_kw, so
+    the factor cancels exactly. Recorded here so nobody adds a redundant
+    "don't use the learned power in fallback mode" guard on the planner
+    side -- it would be dead code.
+    """
+    slots = _make_24h_slots([0.10 * (h + 1) for h in range(24)])
+    departure = datetime(2026, 2, 16, 0, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC)
+
+    def _plan(power: float) -> list[tuple]:
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=20.0,
+            target_soc_pct=80.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=power,
+            now=now,
+            fallback_mode=True,
+        )
+        return [(s.start, s.action) for s in result.schedule]
+
+    ceiling_plan = _plan(11.0)
+    assert len([a for _, a in ceiling_plan if a == "charge"]) == 12  # 24 // 2
+    for power in (9.5, 7.4, 3.7, 1.4):
+        assert _plan(power) == ceiling_plan
+
+
+def test_fallback_mode_is_invariant_with_a_prorated_in_progress_slot():
+    """The cancellation must survive pro-ration: the in-progress slot's
+    energy is (remaining hours * power), which scales with power too."""
+    slots = _make_quarter_slots([(0, 0.10), (1, 0.30), (2, 0.20), (3, 0.40)])
+    departure = datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 2, 15, 0, 10, 0, tzinfo=UTC)  # 5 of 15 min left
+
+    def _plan(power: float) -> list[tuple]:
+        result = build_car_charging_schedule(
+            price_slots=slots,
+            departure_time_utc=departure,
+            current_soc_pct=20.0,
+            target_soc_pct=80.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=power,
+            now=now,
+            fallback_mode=True,
+        )
+        return [(s.start, s.action) for s in result.schedule]
+
+    assert _plan(3.7) == _plan(11.0)

@@ -146,6 +146,14 @@ FORECAST_ACCURACY_SAVE_DELAY_SECONDS = 30.0
 SOLAR_TRACKER_STORAGE_VERSION = 1
 SOLAR_TRACKER_SAVE_DELAY_SECONDS = 30.0
 
+# Per-car measured charge-throughput persistence (EaseeCoordinator) --
+# committed per-phase throughput samples plus the in-flight segment, so a
+# config-entry reload (which fires on ANY options or subentry save) does
+# not lose an overnight session's measurement. Delayed batched saves like
+# the three stores above; a clean unload flushes.
+CAR_THROUGHPUT_STORAGE_VERSION = 1
+CAR_THROUGHPUT_SAVE_DELAY_SECONDS = 30.0
+
 # --- BATT-14 economics number entities (RestoreNumber, hub-level) ---
 # Reuses MIN_PRICE_THRESHOLD/MAX_PRICE_THRESHOLD/PRICE_THRESHOLD_STEP above
 # (same SEK/kWh range as the charge/discharge thresholds).
@@ -243,7 +251,6 @@ MAX_CHARGE_LIMIT_KW = 15.0
 # --- Car charging configuration ---
 
 # Car charge power limits (kW)
-DEFAULT_CAR_MAX_CHARGE_POWER_KW = 7.4  # 1-phase default (32A * 230V)
 MIN_CAR_MAX_CHARGE_POWER_KW = 1.4  # Minimum ~6A single phase
 MAX_CAR_MAX_CHARGE_POWER_KW = 22.0  # Max 3-phase
 CAR_CHARGE_POWER_STEP_KW = 0.1

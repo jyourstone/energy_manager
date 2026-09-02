@@ -2,8 +2,9 @@
 
 Provides the config-entry diagnostics dict shown by Settings > Devices &
 Services > Energy Manager > Download diagnostics: entry data/options, a
-snapshot of every active coordinator, runtime control flags, and the
-integration version from manifest.json.
+snapshot of every active coordinator, runtime control flags, the measured
+per-car charge-throughput window, and the integration version from
+manifest.json.
 """
 
 from __future__ import annotations
@@ -75,6 +76,7 @@ async def async_get_config_entry_diagnostics(
                 for subentry_id, coordinator in runtime.car_coordinators.items()
             },
         },
+        "car_throughput": _car_throughput_snapshot(runtime.easee_coordinator),
     }
 
 
@@ -143,8 +145,34 @@ def _car_snapshot(data: CarChargingData | None) -> dict[str, Any] | None:
         "fallback_mode": data.fallback_mode,
         "phase_capability": data.phase_capability,
         "max_charge_power_kw": data.max_charge_power_kw,
+        "learned_power_kw": data.learned_power_kw,
+        "planning_power_kw": data.planning_power_kw,
         "last_calculated": data.last_calculated.isoformat(),
     }
+
+
+def _car_throughput_snapshot(easee_coordinator: Any) -> dict[str, Any] | None:
+    """Summarize the measured per-car charge-throughput window.
+
+    The learner lives on EaseeCoordinator, so this is None on an install
+    without the EV module or without a charger status entity. Read behind
+    a defensive getattr rather than an isinstance check: diagnostics is
+    the one handler that must still assemble when a coordinator is a
+    stub, half-set-up, or predates the learner.
+
+    Args:
+        easee_coordinator: The EaseeCoordinator, or None when absent.
+
+    Returns:
+        The learner's JSON-safe snapshot (committed samples per car and
+        phase bucket plus the in-flight segment), or None when there is
+        no learner to read. This is what makes an otherwise opaque
+        planning estimate auditable from a downloaded diagnostics file.
+    """
+    learner = getattr(easee_coordinator, "_throughput_learner", None)
+    if learner is None:
+        return None
+    return learner.snapshot()
 
 
 def _dataclass_snapshot(data: EMSData | EaseeData | None) -> dict[str, Any] | None:

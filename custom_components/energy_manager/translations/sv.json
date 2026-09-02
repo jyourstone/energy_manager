@@ -453,6 +453,9 @@
       "car_schedule": {
         "name": "Bilens laddningsschema"
       },
+      "car_planned_charge_power": {
+        "name": "Planerad laddeffekt"
+      },
       "ev_charger_status": {
         "name": "Elbilsladdarens status"
       },
