@@ -1,12 +1,16 @@
-"""Regression tests for car auto-detection in find_car_integrations().
+"""Tests for device-scoped car entity matching in match_car_entities().
 
-Tests verify (phase41 UAT bug 1):
+The user asserts which device is their car (a DeviceSelector in the car
+subentry flow), so matching only has to pick the right entities *within* that
+device -- it never has to tell a car apart from a phone or a UPS.
+
+Tests verify:
+- Battery level prefers device_class "battery", falling back to name keywords
+  for integrations (and template sensors) that omit the class.
 - Target/goal SOC entities (e.g. mySkoda's target_battery_percentage, or the
-  localized "mal_..." entity_id form) are excluded from SOC matching so the
-  ACTUAL SOC entity wins when both exist on the same device.
-- The suggested car name is derived from the car DEVICE's name in the device
-  registry (e.g. "Skoda Enyaq"), falling back to the previous
-  entity/config-entry-derived behavior only when no device name is available.
+  localized "mal_..." entity_id form) are excluded so the ACTUAL SOC entity
+  wins when both exist on the same device (phase41 UAT bug 1).
+- The suggested car name comes from the device registry.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
-from custom_components.energy_manager.auto_detect import find_car_integrations
+from custom_components.energy_manager.auto_detect import match_car_entities
 
 
 @dataclass
@@ -26,16 +30,9 @@ class FakeEntityEntry:
     unique_id: str | None = None
     original_name: str | None = None
     device_id: str | None = None
+    device_class: str | None = None
+    original_device_class: str | None = None
     disabled_by: str | None = None
-
-
-@dataclass
-class FakeConfigEntry:
-    """Minimal config entry mock."""
-
-    entry_id: str
-    domain: str
-    title: str | None = None
 
 
 @dataclass
@@ -56,28 +53,22 @@ class FakeDeviceRegistry:
         return self._devices.get(device_id)
 
 
-def _run_detect(
+def _run_match(
     entities: list[FakeEntityEntry],
     devices: dict[str, FakeDeviceEntry] | None = None,
-    config_entry: FakeConfigEntry | None = None,
-) -> list[dict[str, str]]:
-    """Run find_car_integrations with mocked HA registries.
+    device_id: str = "device_1",
+) -> dict[str, str]:
+    """Run match_car_entities with mocked HA registries.
 
     Args:
-        entities: Entities registered under the (single) matching config entry.
+        entities: Entities registered to the device being matched.
         devices: Mapping of device_id -> FakeDeviceEntry for the device registry.
-        config_entry: The config entry to match against; defaults to a
-            myskoda entry with no title (forces entity/platform-name fallback).
+        device_id: The device the user picked.
     """
-    if config_entry is None:
-        config_entry = FakeConfigEntry(
-            entry_id="myskoda_entry_1", domain="myskoda", title=None
-        )
     if devices is None:
         devices = {}
 
     hass = MagicMock()
-    hass.config_entries.async_entries.return_value = [config_entry]
 
     with (
         patch(
@@ -85,7 +76,7 @@ def _run_detect(
             return_value=MagicMock(),
         ),
         patch(
-            "custom_components.energy_manager.auto_detect.er.async_entries_for_config_entry",
+            "custom_components.energy_manager.auto_detect.er.async_entries_for_device",
             return_value=entities,
         ),
         patch(
@@ -93,11 +84,79 @@ def _run_detect(
             return_value=FakeDeviceRegistry(devices),
         ),
     ):
-        return find_car_integrations(hass)
+        return match_car_entities(hass, device_id)
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Actual SOC wins over target/goal SOC
+# Battery level selection
+# ---------------------------------------------------------------------------
+
+
+class TestBatteryLevelSelection:
+    """The car's SOC sensor must be picked out of the device's sensors."""
+
+    def test_prefers_device_class_battery(self):
+        """A device_class battery sensor wins over an unrelated named sensor."""
+        soc = FakeEntityEntry(
+            entity_id="sensor.enyaq_batteriprocent",
+            domain="sensor",
+            original_device_class="battery",
+        )
+        other = FakeEntityEntry(entity_id="sensor.enyaq_range", domain="sensor")
+        assert _run_match([other, soc])["battery_level_entity"] == soc.entity_id
+
+    def test_device_class_overrides_original_device_class(self):
+        """A user-overridden device_class is honoured over the original."""
+        soc = FakeEntityEntry(
+            entity_id="sensor.enyaq_soc",
+            domain="sensor",
+            device_class="battery",
+            original_device_class="power",
+        )
+        assert _run_match([soc])["battery_level_entity"] == soc.entity_id
+
+    def test_falls_back_to_keywords_when_no_device_class(self):
+        """Template sensors often omit device_class -- keywords must still match."""
+        soc = FakeEntityEntry(
+            entity_id="sensor.enyaq_state_of_charge", domain="sensor"
+        )
+        assert _run_match([soc])["battery_level_entity"] == soc.entity_id
+
+    def test_device_class_wins_over_keyword_match(self):
+        """A classed sensor beats a merely keyword-matching one."""
+        keyword = FakeEntityEntry(
+            entity_id="sensor.enyaq_battery_level_last_updated", domain="sensor"
+        )
+        classed = FakeEntityEntry(
+            entity_id="sensor.enyaq_soc",
+            domain="sensor",
+            original_device_class="battery",
+        )
+        assert _run_match([keyword, classed])["battery_level_entity"] == (
+            classed.entity_id
+        )
+
+    def test_wrong_device_class_outranks_a_matching_name(self):
+        """A classed non-battery sensor is not rescued by its name.
+
+        "..._battery_level_last_updated" is a timestamp; the integration said
+        so with device_class, and that outranks the keyword match.
+        """
+        stamp = FakeEntityEntry(
+            entity_id="sensor.enyaq_battery_level_last_updated",
+            domain="sensor",
+            original_device_class="timestamp",
+        )
+        assert "battery_level_entity" not in _run_match([stamp])
+
+    def test_no_battery_key_when_device_has_none(self):
+        """A device with no battery-ish sensor yields no battery suggestion."""
+        other = FakeEntityEntry(entity_id="sensor.enyaq_odometer", domain="sensor")
+        assert "battery_level_entity" not in _run_match([other])
+
+
+# ---------------------------------------------------------------------------
+# Actual SOC wins over target/goal SOC
 # ---------------------------------------------------------------------------
 
 
@@ -110,17 +169,15 @@ class TestActualSocWinsOverTarget:
             entity_id="sensor.skoda_enyaq_mal_batteriprocent",
             domain="sensor",
             unique_id="VIN123_target_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
         actual = FakeEntityEntry(
             entity_id="sensor.skoda_enyaq_batteriprocent",
             domain="sensor",
             unique_id="VIN123_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
-        cars = _run_detect([target, actual])
-        assert len(cars) == 1
-        assert cars[0]["battery_level_entity"] == actual.entity_id
+        assert _run_match([target, actual])["battery_level_entity"] == actual.entity_id
 
     def test_actual_wins_when_target_appears_last(self):
         """Target entity iterated after actual -- actual must not be overwritten."""
@@ -128,17 +185,15 @@ class TestActualSocWinsOverTarget:
             entity_id="sensor.skoda_enyaq_batteriprocent",
             domain="sensor",
             unique_id="VIN123_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
         target = FakeEntityEntry(
             entity_id="sensor.skoda_enyaq_mal_batteriprocent",
             domain="sensor",
             unique_id="VIN123_target_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
-        cars = _run_detect([actual, target])
-        assert len(cars) == 1
-        assert cars[0]["battery_level_entity"] == actual.entity_id
+        assert _run_match([actual, target])["battery_level_entity"] == actual.entity_id
 
     def test_excludes_target_by_unique_id_even_with_english_entity_id(self):
         """unique_id containing 'target' is excluded even if entity_id doesn't."""
@@ -146,88 +201,131 @@ class TestActualSocWinsOverTarget:
             entity_id="sensor.skoda_enyaq_target_battery_percentage",
             domain="sensor",
             unique_id="VIN123_target_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
         actual = FakeEntityEntry(
             entity_id="sensor.skoda_enyaq_battery_percentage",
             domain="sensor",
             unique_id="VIN123_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
-        cars = _run_detect([target, actual])
-        assert len(cars) == 1
-        assert cars[0]["battery_level_entity"] == actual.entity_id
+        assert _run_match([target, actual])["battery_level_entity"] == actual.entity_id
 
-    def test_no_car_when_only_target_soc_exists(self):
-        """If only the target/goal SOC entity exists, no car is detected."""
+    def test_excludes_english_goal_soc(self):
+        """A "goal" SOC carries device_class battery too -- actual must win."""
+        goal = FakeEntityEntry(
+            entity_id="sensor.car_goal_state_of_charge",
+            domain="sensor",
+            unique_id="VIN123_goal_state_of_charge",
+            original_device_class="battery",
+        )
+        actual = FakeEntityEntry(
+            entity_id="sensor.car_state_of_charge",
+            domain="sensor",
+            unique_id="VIN123_state_of_charge",
+            original_device_class="battery",
+        )
+        assert _run_match([goal, actual])["battery_level_entity"] == actual.entity_id
+
+    def test_no_battery_key_when_only_target_soc_exists(self):
+        """If only the target/goal SOC entity exists, nothing is suggested."""
         target = FakeEntityEntry(
             entity_id="sensor.skoda_enyaq_mal_batteriprocent",
             domain="sensor",
             unique_id="VIN123_target_battery_percentage",
-            device_id="device_1",
+            original_device_class="battery",
         )
-        cars = _run_detect([target])
-        assert cars == []
+        assert "battery_level_entity" not in _run_match([target])
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Car name derived from device registry
+# Charger connected / location
 # ---------------------------------------------------------------------------
 
 
-class TestCarNameFromDeviceRegistry:
-    """Suggested car name should come from the device registry, not the sensor."""
+class TestChargerConnectedAndLocation:
+    """Plug and location entities are matched by device_class, then keywords."""
 
-    def test_uses_device_name_over_sensor_friendly_name(self):
-        """Device name ("Skoda Enyaq") wins over sensor original_name ("Batteriprocent")."""
-        actual = FakeEntityEntry(
-            entity_id="sensor.skoda_enyaq_batteriprocent",
-            domain="sensor",
-            unique_id="VIN123_battery_percentage",
-            original_name="Batteriprocent",
-            device_id="device_1",
+    def test_prefers_plug_device_class(self):
+        """A device_class plug binary sensor is the charger-connected signal."""
+        plug = FakeEntityEntry(
+            entity_id="binary_sensor.enyaq_kabel",
+            domain="binary_sensor",
+            original_device_class="plug",
         )
+        assert _run_match([plug])["charger_connected_entity"] == plug.entity_id
+
+    def test_rejects_battery_charging_device_class(self):
+        """battery_charging is off whenever current is not flowing.
+
+        Suggesting it as the cable sensor would make an EM-commanded pause read
+        as "unplugged" in _is_car_present(), dropping the car from demand and
+        never resuming. Better to suggest nothing and let the user pick.
+        """
+        charging = FakeEntityEntry(
+            entity_id="binary_sensor.enyaq_laddar",
+            domain="binary_sensor",
+            original_device_class="battery_charging",
+        )
+        assert "charger_connected_entity" not in _run_match([charging])
+
+    def test_falls_back_to_keywords_when_no_device_class(self):
+        """Unclassed binary sensors match on the usual naming."""
+        plug = FakeEntityEntry(
+            entity_id="binary_sensor.enyaq_charger_connected", domain="binary_sensor"
+        )
+        assert _run_match([plug])["charger_connected_entity"] == plug.entity_id
+
+    def test_battery_charging_is_not_rescued_by_its_name(self):
+        """The keyword fallback must not re-open the class guard's hole.
+
+        A battery_charging sensor named "..._charger_connected" is still the
+        wrong signal -- naming does not change when it turns off.
+        """
+        charging = FakeEntityEntry(
+            entity_id="binary_sensor.enyaq_charger_connected",
+            domain="binary_sensor",
+            original_device_class="battery_charging",
+        )
+        assert "charger_connected_entity" not in _run_match([charging])
+
+    def test_ignores_unrelated_binary_sensors(self):
+        """A door sensor on the car device must not be taken for the cable."""
+        door = FakeEntityEntry(
+            entity_id="binary_sensor.enyaq_doors",
+            domain="binary_sensor",
+            original_device_class="door",
+        )
+        assert "charger_connected_entity" not in _run_match([door])
+
+    def test_picks_the_device_tracker_as_location(self):
+        """Any device_tracker on the car device is the location entity."""
+        tracker = FakeEntityEntry(
+            entity_id="device_tracker.enyaq_position", domain="device_tracker"
+        )
+        assert _run_match([tracker])["location_entity"] == tracker.entity_id
+
+
+# ---------------------------------------------------------------------------
+# Car name
+# ---------------------------------------------------------------------------
+
+
+class TestCarName:
+    """Suggested car name comes from the device registry."""
+
+    def test_uses_device_name(self):
+        """Device name is the suggestion."""
         devices = {"device_1": FakeDeviceEntry(name="Skoda Enyaq")}
-        cars = _run_detect([actual], devices=devices)
-        assert len(cars) == 1
-        assert cars[0]["name"] == "Skoda Enyaq"
+        assert _run_match([], devices=devices)["car_name"] == "Skoda Enyaq"
 
     def test_prefers_name_by_user_over_name(self):
         """User-assigned device name takes priority over the default device name."""
-        actual = FakeEntityEntry(
-            entity_id="sensor.skoda_enyaq_batteriprocent",
-            domain="sensor",
-            unique_id="VIN123_battery_percentage",
-            device_id="device_1",
-        )
         devices = {
             "device_1": FakeDeviceEntry(name="Skoda Enyaq", name_by_user="My Car")
         }
-        cars = _run_detect([actual], devices=devices)
-        assert cars[0]["name"] == "My Car"
+        assert _run_match([], devices=devices)["car_name"] == "My Car"
 
-    def test_falls_back_to_sensor_name_when_no_device(self):
-        """No device registry entry -- falls back to the sensor's original_name."""
-        actual = FakeEntityEntry(
-            entity_id="sensor.skoda_enyaq_batteriprocent",
-            domain="sensor",
-            unique_id="VIN123_battery_percentage",
-            original_name="Batteriprocent sensor",
-            device_id="device_1",
-        )
-        cars = _run_detect([actual], devices={})
-        assert cars[0]["name"] == "Batteriprocent"
-
-    def test_falls_back_to_config_entry_title_when_no_device_or_sensor_name(self):
-        """No device and no sensor original_name -- falls back to config entry title."""
-        actual = FakeEntityEntry(
-            entity_id="sensor.skoda_enyaq_batteriprocent",
-            domain="sensor",
-            unique_id="VIN123_battery_percentage",
-            device_id="device_1",
-        )
-        config_entry = FakeConfigEntry(
-            entry_id="myskoda_entry_1", domain="myskoda", title="My Skoda"
-        )
-        cars = _run_detect([actual], devices={}, config_entry=config_entry)
-        assert cars[0]["name"] == "My Skoda"
+    def test_unknown_device_yields_empty_match(self):
+        """A device_id with no registry entry suggests nothing."""
+        assert _run_match([], devices={}) == {}

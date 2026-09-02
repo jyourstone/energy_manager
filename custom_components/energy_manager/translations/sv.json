@@ -176,7 +176,17 @@
       "step": {
         "user": {
           "title": "Lägg till bil",
-          "description": "Konfigurera en bil för laddningsoptimering. Entiteter identifieras automatiskt från Skoda/VW-integrationerna.",
+          "description": "Välj gärna bilens enhet för att fylla i nästa steg automatiskt. Fungerar med alla bilintegrationer. Hoppa över för att fylla i allt själv.",
+          "data": {
+            "car_device": "Bilens enhet"
+          },
+          "data_description": {
+            "car_device": "Valfritt: enheten som din bilintegration skapat. Dess entiteter för batteri, laddkabel och position föreslås i nästa steg -- du kan ändra alla."
+          }
+        },
+        "car": {
+          "title": "Lägg till bil",
+          "description": "Konfigurera en bil för laddningsoptimering.",
           "data": {
             "car_name": "Bilens namn",
             "battery_capacity": "Batterikapacitet (kWh)",
@@ -189,7 +199,7 @@
             "car_name": "Ett beskrivande namn för bilen (t.ex. 'Enyaq', 'Familjebilen').",
             "battery_capacity": "Bilens totala batterikapacitet i kWh.",
             "battery_level_entity": "Sensor som visar bilens batterinivå (%).",
-            "charger_connected_entity": "Valfritt: binär sensor från bilintegrationen som visar om laddkabeln är ansluten. Identifieras automatiskt från Skoda/VW-integrationerna.",
+            "charger_connected_entity": "Valfritt: binär sensor från bilintegrationen som visar om laddkabeln är ansluten.",
             "location_entity": "Valfritt: platsspårare från bilintegrationen som visar fordonets position. Används för att bekräfta att bilen är hemma.",
             "phase_capability": "Hur många av laddarens faser denna bil faktiskt använder när den är i 3-fasläge. De flesta bilar använder alla 3; vissa (t.ex. VW ID.3) använder bara 2."
           }
@@ -209,7 +219,7 @@
             "car_name": "Ett beskrivande namn för bilen (t.ex. 'Enyaq', 'Familjebilen').",
             "battery_capacity": "Bilens totala batterikapacitet i kWh.",
             "battery_level_entity": "Sensor som visar bilens batterinivå (%).",
-            "charger_connected_entity": "Valfritt: binär sensor från bilintegrationen som visar om laddkabeln är ansluten. Identifieras automatiskt från Skoda/VW-integrationerna.",
+            "charger_connected_entity": "Valfritt: binär sensor från bilintegrationen som visar om laddkabeln är ansluten.",
             "location_entity": "Valfritt: platsspårare från bilintegrationen som visar fordonets position. Används för att bekräfta att bilen är hemma.",
             "phase_capability": "Hur många av laddarens faser denna bil faktiskt använder när den är i 3-fasläge. De flesta bilar använder alla 3; vissa (t.ex. VW ID.3) använder bara 2."
           }
