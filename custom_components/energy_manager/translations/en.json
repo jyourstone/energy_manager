@@ -176,7 +176,17 @@
       "step": {
         "user": {
           "title": "Add Car",
-          "description": "Configure a car for charging optimization. Entities are auto-detected from Skoda/VW integrations.",
+          "description": "Optionally pick your car's device to pre-fill the next step. Works with any car integration. Skip this to fill everything in yourself.",
+          "data": {
+            "car_device": "Car device"
+          },
+          "data_description": {
+            "car_device": "Optional: the device your car integration created. Its battery, cable and location entities are suggested on the next step -- you can change any of them."
+          }
+        },
+        "car": {
+          "title": "Add Car",
+          "description": "Configure a car for charging optimization.",
           "data": {
             "car_name": "Car name",
             "battery_capacity": "Battery capacity (kWh)",
@@ -189,7 +199,7 @@
             "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
             "battery_capacity": "Total battery capacity of the car in kWh.",
             "battery_level_entity": "Sensor showing the car's battery level (%).",
-            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
+            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected.",
             "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home.",
             "phase_capability": "How many of the charger's phases this car actually draws on when it is in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2."
           }
@@ -209,7 +219,7 @@
             "car_name": "A friendly name for this car (e.g., 'Enyaq', 'Family Car').",
             "battery_capacity": "Total battery capacity of the car in kWh.",
             "battery_level_entity": "Sensor showing the car's battery level (%).",
-            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected. Auto-detected from Skoda/VW integrations.",
+            "charger_connected_entity": "Optional: binary sensor from the car integration showing if the charger cable is connected.",
             "location_entity": "Optional: device tracker from the car integration showing the vehicle location. Used to confirm the car is home.",
             "phase_capability": "How many of the charger's phases this car actually draws on when it is in 3-phase mode. Most cars use all 3; some (e.g. VW ID.3) only use 2."
           }

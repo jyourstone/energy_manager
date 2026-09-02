@@ -4,7 +4,7 @@ Scans the HA entity registry and config entries to find:
 - Nord Pool price sensors (HACS and native variants)
 - SigenStor battery inverter entities
 - Easee EV charger entities
-- Car integrations (Skoda Connect, VW We Connect)
+- Car entities within a user-selected car device
 """
 
 from __future__ import annotations
@@ -18,8 +18,11 @@ from homeassistant.helpers import entity_registry as er
 from .const import (
     CONF_AVAILABLE_CHARGE_POWER_ENTITY,
     CONF_AVAILABLE_DISCHARGE_POWER_ENTITY,
+    CONF_BATTERY_LEVEL_ENTITY,
     CONF_BATTERY_POWER_ENTITY,
+    CONF_CAR_NAME,
     CONF_CHARGE_LIMIT_ENTITY,
+    CONF_CHARGER_CONNECTED_ENTITY,
     CONF_CHARGER_POWER_ENTITY,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
@@ -30,6 +33,7 @@ from .const import (
     CONF_GRID_PHASE_C_ENTITY,
     CONF_GRID_POWER_ENTITY,
     CONF_HOUSE_CONSUMPTION_ENTITY,
+    CONF_LOCATION_ENTITY,
     CONF_PV_POWER_ENTITY,
     CONF_RATED_CHARGE_POWER_ENTITY,
     CONF_RATED_DISCHARGE_POWER_ENTITY,
@@ -681,151 +685,90 @@ def find_house_consumption_entity(hass: HomeAssistant) -> dict[str, str]:
     return result
 
 
-def find_car_integrations(hass: HomeAssistant) -> list[dict[str, str]]:
-    """Scan for Skoda Connect and VW We Connect car integrations.
+def match_car_entities(hass: HomeAssistant, device_id: str) -> dict[str, str]:
+    """Map a user-asserted car device's entities to car subentry config keys.
 
-    For each car found, returns a dict with the car name, battery level
-    entity, and platform identifier.
+    The user picks the car's device in the subentry flow, so this only has to
+    choose the right entities *within* that device -- it never has to tell a
+    car apart from a phone or a UPS. That is why it is integration-agnostic:
+    no per-platform domain patterns to break when a car API changes.
+
+    Args:
+        hass: Home Assistant instance.
+        device_id: The device the user selected as their car.
 
     Returns:
-        List of dicts, e.g.:
-        [{"name": "Enyaq", "battery_level_entity": "sensor.enyaq_battery_level", "platform": "skoda"}]
-        Returns empty list if none found.
+        Dict of suggested values, e.g.:
+        {"car_name": "Skoda Enyaq", "battery_level_entity": "sensor.enyaq_soc"}
+        Keys are omitted when no match was found; may be empty.
     """
     registry = er.async_get(hass)
     device_registry = dr.async_get(hass)
-    cars: list[dict[str, str]] = []
+    suggestions: dict[str, str] = {}
 
-    # Define platform patterns to search for
-    platform_patterns = {
-        "skoda": ["skoda", "myskoda"],
-        "volkswagen": ["volkswagen", "vw"],
-    }
+    device = device_registry.async_get(device_id)
+    if device:
+        name = device.name_by_user or device.name
+        if name:
+            suggestions[CONF_CAR_NAME] = name
 
-    for platform_name, domain_patterns in platform_patterns.items():
-        # Find matching config entries
-        matching_entries = [
-            entry
-            for entry in hass.config_entries.async_entries()
-            if any(pattern in entry.domain.lower() for pattern in domain_patterns)
-        ]
+    battery_by_keyword: str | None = None
+    charger_by_keyword: str | None = None
 
-        for config_entry in matching_entries:
-            entity_entries = er.async_entries_for_config_entry(
-                registry, config_entry.entry_id
-            )
+    for entity_entry in er.async_entries_for_device(registry, device_id):
+        entity_id_lower = entity_entry.entity_id.lower()
+        unique_id_lower = (entity_entry.unique_id or "").lower()
+        device_class = entity_entry.device_class or entity_entry.original_device_class
 
-            # Group entities by device to find per-car battery level sensors
-            device_entities: dict[str | None, list] = {}
-            for entity_entry in entity_entries:
-                device_id = entity_entry.device_id
-                if device_id not in device_entities:
-                    device_entities[device_id] = []
-                device_entities[device_id].append(entity_entry)
+        if entity_entry.domain == "sensor":
+            # Exclude target/goal SOC entities (e.g. mySkoda's
+            # "target_battery_percentage") -- the ACTUAL SOC entity must win
+            # when both exist on the same device, and both carry device_class
+            # "battery". "mal_" is the localized (Swedish "mal") entity_id form.
+            if (
+                "target" in entity_id_lower
+                or "target" in unique_id_lower
+                or "mal_" in entity_id_lower
+            ):
+                continue
 
-            for device_id, entities in device_entities.items():
-                battery_level_entity = None
-                car_name = None
-                charger_connected_entity = None
-                location_entity = None
+            if device_class == "battery":
+                suggestions.setdefault(
+                    CONF_BATTERY_LEVEL_ENTITY, entity_entry.entity_id
+                )
+            elif battery_by_keyword is None and any(
+                keyword in entity_id_lower or keyword in unique_id_lower
+                for keyword in (
+                    "battery_level",
+                    "state_of_charge",
+                    "battery_percentage",
+                    "charging_level",
+                )
+            ):
+                # Template sensors and some integrations omit device_class.
+                battery_by_keyword = entity_entry.entity_id
 
-                for entity_entry in entities:
-                    entity_id_lower = entity_entry.entity_id.lower()
-                    unique_id_lower = (entity_entry.unique_id or "").lower()
+        elif entity_entry.domain == "binary_sensor":
+            if device_class in ("plug", "battery_charging"):
+                suggestions.setdefault(
+                    CONF_CHARGER_CONNECTED_ENTITY, entity_entry.entity_id
+                )
+            elif charger_by_keyword is None and any(
+                keyword in entity_id_lower or keyword in unique_id_lower
+                for keyword in ("charger_connected", "plug_connected", "charge_cable")
+            ):
+                charger_by_keyword = entity_entry.entity_id
 
-                    # Exclude target/goal SOC entities (e.g. mySkoda's
-                    # "target_battery_percentage") -- the ACTUAL SOC entity
-                    # must win when both exist on the same device. "mal_" is
-                    # the localized (Swedish "mål") entity_id form.
-                    is_target_soc = (
-                        "target" in entity_id_lower
-                        or "target" in unique_id_lower
-                        or "mal_" in entity_id_lower
-                    )
+        elif entity_entry.domain == "device_tracker":
+            suggestions.setdefault(CONF_LOCATION_ENTITY, entity_entry.entity_id)
 
-                    # Look for battery level / SOC sensor
-                    if (
-                        not is_target_soc
-                        and entity_entry.domain == "sensor"
-                        and (
-                            "battery_level" in entity_id_lower
-                            or "battery_level" in unique_id_lower
-                            or "state_of_charge" in entity_id_lower
-                            or "state_of_charge" in unique_id_lower
-                            or "battery_percentage" in entity_id_lower
-                            or "battery_percentage" in unique_id_lower
-                            or "charging_level" in entity_id_lower
-                            or "charging_level" in unique_id_lower
-                        )
-                    ):
-                        battery_level_entity = entity_entry.entity_id
+    if battery_by_keyword and CONF_BATTERY_LEVEL_ENTITY not in suggestions:
+        suggestions[CONF_BATTERY_LEVEL_ENTITY] = battery_by_keyword
+    if charger_by_keyword and CONF_CHARGER_CONNECTED_ENTITY not in suggestions:
+        suggestions[CONF_CHARGER_CONNECTED_ENTITY] = charger_by_keyword
 
-                    # Look for charger connected binary sensor
-                    if entity_entry.domain == "binary_sensor" and (
-                        "charger_connected" in entity_id_lower
-                        or "charger_connected" in unique_id_lower
-                        or "plug_connected" in entity_id_lower
-                        or "plug_connected" in unique_id_lower
-                    ):
-                        charger_connected_entity = entity_entry.entity_id
-
-                    # Look for location device tracker
-                    if entity_entry.domain == "device_tracker" and (
-                        "position" in entity_id_lower
-                        or "location" in entity_id_lower
-                        or "parking" in entity_id_lower
-                    ):
-                        location_entity = entity_entry.entity_id
-
-                    # Try to extract car name from entity's original name or device
-                    if car_name is None and entity_entry.original_name:
-                        car_name = entity_entry.original_name.split(" ")[0]
-
-                if battery_level_entity is not None:
-                    # Prefer the car DEVICE's registry name (e.g. "Skoda
-                    # Enyaq") over the matched sensor's friendly name --
-                    # falls back to the sensor-derived/config-entry name
-                    # only when no device name is available.
-                    device_name = None
-                    if device_id:
-                        device = device_registry.async_get(device_id)
-                        if device:
-                            device_name = device.name_by_user or device.name
-
-                    if device_name:
-                        car_name = device_name
-                    elif car_name is None:
-                        car_name = config_entry.title or platform_name.capitalize()
-
-                    car_info = {
-                        "name": car_name,
-                        "battery_level_entity": battery_level_entity,
-                        "platform": platform_name,
-                    }
-                    if charger_connected_entity:
-                        car_info["charger_connected_entity"] = charger_connected_entity
-                    if location_entity:
-                        car_info["location_entity"] = location_entity
-                    cars.append(car_info)
-                    _LOGGER.debug(
-                        "Found %s car: %s (battery: %s)",
-                        platform_name,
-                        car_name,
-                        battery_level_entity,
-                    )
-                else:
-                    _LOGGER.debug(
-                        "Car integration %s device %s matched domain but no battery "
-                        "level entity found. Available sensors: %s",
-                        platform_name,
-                        device_id,
-                        [e.entity_id for e in entities if e.domain == "sensor"],
-                    )
-
-    if not cars:
-        _LOGGER.debug("No car integrations found (Skoda/VW)")
-
-    return cars
+    _LOGGER.debug("Car device %s matched: %s", device_id, suggestions)
+    return suggestions
 
 
 def find_forecast_solar_entities(hass: HomeAssistant) -> dict[str, list[str]]:

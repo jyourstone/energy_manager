@@ -53,7 +53,7 @@ Energy Manager always does the planning. How the plans reach your hardware depen
 | Solar Appliances (any `switch`/`input_boolean`) | Yes | Yes |
 | Automations you write | None | One small one per command you follow |
 
-Optional on either path: a car integration for automatic battery-level and location detection (Skoda Connect and VW We Connect are auto-detected; any other car integration works by picking its entities manually), and a notify service for charger safety alerts.
+Optional on either path: a car integration for automatic battery-level and location detection (any car integration works -- point Energy Manager at the car's device and its entities are suggested for you), and a notify service for charger safety alerts.
 
 ## Features
 

@@ -111,7 +111,7 @@ A setup-complete summary with next steps: add your car(s) with the **Add car** b
 
 ## After Setup: Cars and Appliances
 
-**Cars.** With EV Charging enabled, each car is added separately as a **subentry** on the Energy Manager device — not part of the main wizard. For each car you give a name, battery capacity, optionally battery-level / charger-connected / location entities (auto-detected from Skoda Connect or VW We Connect if present), and how many charger phases it actually uses (1/2/3, default 3).
+**Cars.** With EV Charging enabled, each car is added separately as a **subentry** on the Energy Manager device — not part of the main wizard. Adding a car starts with an optional step where you pick the car's **device** — whichever integration created it. Energy Manager then suggests that device's battery-level, charger-connected and location entities on the next step, where you also give a name, battery capacity, and how many charger phases the car actually uses (1/2/3, default 3). Skip the device step to fill everything in by hand.
 
 **Appliances.** With Solar Appliances enabled, each appliance is likewise added as its own **subentry**: a name, the actuator entity, its rated power and phases, an optional power sensor for measured credit-back, plus priority and the on/off threshold and timing fields — all pre-filled with tuned defaults. Priority and the on/off threshold and sustain-time fields only seed that appliance's number entities; adjust them afterward per appliance without a reload. See [Solar Appliances](../user-guide/solar-appliances.md) for the full field table.
 

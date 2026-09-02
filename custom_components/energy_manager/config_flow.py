@@ -35,6 +35,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    DeviceSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -45,13 +46,13 @@ from homeassistant.helpers.selector import (
 )
 
 from .auto_detect import (
-    find_car_integrations,
     find_easee_charger_device_id,
     find_easee_entities,
     find_forecast_solar_entities,
     find_house_consumption_entity,
     find_sigenstor_ems_entities,
     find_sigenstor_entities,
+    match_car_entities,
 )
 from .const import (
     CHARGE_POWER_STEP_KW,
@@ -215,6 +216,11 @@ from .options_flow_support import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Transient car subentry form field: identifies the device whose entities
+# pre-fill the car form. Not persisted in the subentry data.
+CONF_CAR_DEVICE = "car_device"
 
 
 def _add_suggested_values(
@@ -1577,71 +1583,81 @@ class EnergyManagerOptionsFlow(OptionsFlow):
         )
 
 
+def _car_schema() -> vol.Schema:
+    """Return the car subentry form schema (shared by add and reconfigure)."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_CAR_NAME): TextSelector(),
+            vol.Optional(CONF_BATTERY_CAPACITY): NumberSelector(
+                NumberSelectorConfig(min=10, max=200, step=1, unit_of_measurement="kWh")
+            ),
+            vol.Optional(CONF_BATTERY_LEVEL_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CHARGER_CONNECTED_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="binary_sensor")
+            ),
+            vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
+                EntitySelectorConfig(domain="device_tracker")
+            ),
+            vol.Optional(
+                CONF_PHASE_CAPABILITY, default=DEFAULT_PHASE_CAPABILITY
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=["1", "2", "3"],
+                    translation_key="phase_capability",
+                )
+            ),
+        }
+    )
+
+
 class CarSubentryFlowHandler(ConfigSubentryFlow):
     """Handle subentry flow for adding and modifying a car."""
+
+    def __init__(self) -> None:
+        """Initialize the car subentry flow."""
+        self._suggested: dict[str, str] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """User flow to add a new car."""
+        """Optionally pick the car's device, to prefill the entity pickers.
+
+        The device selector is deliberately unfiltered: filtering to devices
+        that own a device_class "battery" sensor would hide any car whose SOC
+        sensor omits the class (template sensors commonly do), with no way out.
+        Skipping the step leads to the same form, unfilled.
+        """
+        if user_input is not None:
+            device_id = user_input.get(CONF_CAR_DEVICE)
+            if device_id:
+                self._suggested = match_car_entities(self.hass, device_id)
+            return await self.async_step_car()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {vol.Optional(CONF_CAR_DEVICE): DeviceSelector()}
+            ),
+        )
+
+    async def async_step_car(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Configure the car, pre-filled from the selected device."""
         if user_input is not None:
             return self.async_create_entry(
                 title=user_input[CONF_CAR_NAME],
                 data=user_input,
             )
 
-        # Auto-detect car integrations (Skoda, VW)
-        detected_cars = find_car_integrations(self.hass)
-
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_CAR_NAME): TextSelector(),
-                vol.Optional(CONF_BATTERY_CAPACITY): NumberSelector(
-                    NumberSelectorConfig(
-                        min=10, max=200, step=1, unit_of_measurement="kWh"
-                    )
-                ),
-                vol.Optional(CONF_BATTERY_LEVEL_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_CHARGER_CONNECTED_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="binary_sensor")
-                ),
-                vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="device_tracker")
-                ),
-                vol.Optional(
-                    CONF_PHASE_CAPABILITY, default=DEFAULT_PHASE_CAPABILITY
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=["1", "2", "3"],
-                        translation_key="phase_capability",
-                    )
-                ),
-            }
-        )
-
-        # Pre-fill with first detected car if available
-        if detected_cars:
-            first_car = detected_cars[0]
-            suggested: dict[str, Any] = {}
-            if first_car.get("name"):
-                suggested[CONF_CAR_NAME] = first_car["name"]
-            if first_car.get("battery_level_entity"):
-                suggested[CONF_BATTERY_LEVEL_ENTITY] = first_car[
-                    "battery_level_entity"
-                ]
-            if first_car.get("charger_connected_entity"):
-                suggested[CONF_CHARGER_CONNECTED_ENTITY] = first_car[
-                    "charger_connected_entity"
-                ]
-            if first_car.get("location_entity"):
-                suggested[CONF_LOCATION_ENTITY] = first_car["location_entity"]
-            if suggested:
-                schema = _add_suggested_values(schema, suggested)
+        schema = _car_schema()
+        if self._suggested:
+            schema = _add_suggested_values(schema, self._suggested)
 
         return self.async_show_form(
-            step_id="user",
+            step_id="car",
             data_schema=schema,
         )
 
@@ -1662,36 +1678,8 @@ class CarSubentryFlowHandler(ConfigSubentryFlow):
                 data=user_input,
             )
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_CAR_NAME): TextSelector(),
-                vol.Optional(CONF_BATTERY_CAPACITY): NumberSelector(
-                    NumberSelectorConfig(
-                        min=10, max=200, step=1, unit_of_measurement="kWh"
-                    )
-                ),
-                vol.Optional(CONF_BATTERY_LEVEL_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="sensor")
-                ),
-                vol.Optional(CONF_CHARGER_CONNECTED_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="binary_sensor")
-                ),
-                vol.Optional(CONF_LOCATION_ENTITY): EntitySelector(
-                    EntitySelectorConfig(domain="device_tracker")
-                ),
-                vol.Optional(
-                    CONF_PHASE_CAPABILITY, default=DEFAULT_PHASE_CAPABILITY
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=["1", "2", "3"],
-                        translation_key="phase_capability",
-                    )
-                ),
-            }
-        )
-
         # Pre-fill with existing subentry data
-        schema = _add_suggested_values(schema, existing_data)
+        schema = _add_suggested_values(_car_schema(), existing_data)
 
         return self.async_show_form(
             step_id="reconfigure",
