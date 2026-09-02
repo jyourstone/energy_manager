@@ -4,7 +4,8 @@ Provides a price sensor entity that exposes current electricity price
 as state. When the battery module is enabled, also provides battery
 schedule sensors showing current state, next charge, and next discharge slots.
 When the EV module is enabled, provides per-car schedule sensors showing
-the current charging action with full schedule in attributes.
+the current charging action with full schedule in attributes, plus a
+per-car diagnostic sensor showing the charge power the planner assumed.
 When the appliances module is enabled, provides per-appliance status
 sensors explaining every surplus-control decision (APPL-08).
 Downstream modules access full price slot data directly from
@@ -129,7 +130,10 @@ async def async_setup_entry(
     for subentry_id, coordinator in entry.runtime_data.car_coordinators.items():
         subentry = entry.subentries[subentry_id]
         async_add_entities(
-            [CarScheduleSensor(coordinator, entry, subentry)],
+            [
+                CarScheduleSensor(coordinator, entry, subentry),
+                CarPlannedChargePowerSensor(coordinator, entry, subentry),
+            ],
             config_subentry_id=subentry_id,
         )
 
@@ -1160,7 +1164,77 @@ class CarScheduleSensor(CarEntity, SensorEntity):
             "solar_target_soc": data.solar_target_soc,
             "is_preliminary": data.is_preliminary,
             "fallback_mode": data.fallback_mode,
+            "planning_power_kw": data.planning_power_kw,
+            "learned_power_kw": data.learned_power_kw,
             "last_calculated": data.last_calculated.isoformat(),
+        }
+
+
+class CarPlannedChargePowerSensor(CarEntity, SensorEntity):
+    """Diagnostic sensor showing the charge power the planner assumed.
+
+    State is the kW the price-slot planner sized this car's slots with:
+    the throughput measured during EM-directed grid charging when enough
+    has been learned, otherwise the Max Charge Power ceiling. The
+    attributes make the difference auditable -- learned_power_kw is what
+    was measured (None until the estimator has enough evidence) and
+    ceiling_power_kw is the number entity's value, which always caps the
+    state.
+
+    This is the only place the throughput learning is visible without
+    downloading diagnostics, and the only way a user on an existing
+    install can see that their restored 7.4 kW ceiling is holding the
+    plan below what the car actually draws.
+    """
+
+    _attr_translation_key = "car_planned_charge_power"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = "kW"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+
+    def __init__(
+        self,
+        coordinator,
+        entry: EnergyManagerConfigEntry,
+        subentry,
+    ) -> None:
+        """Initialize the planned charge power sensor.
+
+        Args:
+            coordinator: The CarChargingCoordinator for this car.
+            entry: The config entry this sensor belongs to.
+            subentry: The car subentry with car-specific configuration.
+        """
+        super().__init__(coordinator, entry, subentry)
+        self._attr_unique_id = f"{subentry.subentry_id}_planned_charge_power"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the charge power the planner used for this car."""
+        data: CarChargingData | None = self.coordinator.data
+        if data is None:
+            return None
+        return data.planning_power_kw
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the measured value, the ceiling, and which bucket was read.
+
+        "source" reports whether a measurement exists at all, not which of
+        the two won: a learned 12 kW under a 7.4 kW ceiling still reads
+        "learned" while the state shows 7.4.
+        """
+        data: CarChargingData | None = self.coordinator.data
+        if data is None:
+            return {}
+
+        return {
+            "learned_power_kw": data.learned_power_kw,
+            "ceiling_power_kw": data.max_charge_power_kw,
+            "phase_capability": data.phase_capability,
+            "source": "learned" if data.learned_power_kw is not None else "ceiling",
         }
 
 

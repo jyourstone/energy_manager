@@ -18,6 +18,7 @@ Every entity Energy Manager creates, in one place. This page is a lookup table �
 | Battery commanded discharge limit *(diagnostic)* | Discharge power limit EM sends to the battery (`0` while the discharge gate is closed; the fuse-capped export limit during export slots) |
 | Actual Electricity Price | Spot price + grid transfer fee + electricity company fee (diagnostic; no long-term statistics) |
 | Car Charging Schedule *(per car)* | Cheapest-slot charging schedule for that car |
+| Planned Charge Power *(per car, diagnostic)* | Charge power (kW) the scheduler used when it sized that car's slots: the throughput Energy Manager has measured for the car, or its Max Charge Power ceiling when there is no measurement yet or the measurement is higher. Attributes carry the measured value, the ceiling, the phase count the measurement was filed under, and `source` (`learned` once a measurement exists, `ceiling` while there is none) — see [Measured Charge Power](../user-guide/ev-charging.md#measured-charge-power) |
 | EV charger status | Easee charger decision mode (forced/scheduled/solar/idle), target amps/phase mode, fuse headroom, and more |
 | Commanded charging current *(diagnostic)* | Charging current EM commands the charger (`0` = pause/stop, above `0` but below the 6 A minimum = do not start, `>= 6` = charge at up to this limit) — the trigger surface for non-Easee automations (see [Bring Your Own Hardware](../bring-your-own-hardware/command-sensors.md)) |
 | Commanded phase mode *(diagnostic)* | Charger phase mode EM commands (`single` / `three`) |
@@ -58,7 +59,7 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 | Electricity Company Fee | Electricity company fee per kWh; used only by the Actual Electricity Price sensor |
 | Grid charging target *(per car)* | Target state of charge for scheduled price-based charging |
 | Solar charging target *(per car)* | SOC ceiling for solar-surplus charging (default 100%) |
-| Max Charge Power *(per car)* | Maximum charge power for that car (kW) |
+| Max Charge Power *(per car)* | Ceiling (kW) on that car's charge power: it caps the amps EM ever requests for the car, and caps the measured throughput the scheduler plans with. It is not the planning figure itself — see [Measured Charge Power](../user-guide/ev-charging.md#measured-charge-power). A newly added car is seeded from its configured phase count and the charger's **Maximum charging current**: at the default 16 A that is 3.7 kW for a 1-phase car, 6.4 kW for 2-phase, and 11.0 kW for 3-phase. Cars added before this seed existed keep their stored 7.4 kW |
 | Max grid charge power | Absolute ceiling on grid-charging power (kW), converted to amps for the car currently charging (default 12 kW) |
 | Solar start threshold | Minimum net solar surplus (kW), sustained past the activation delay, before EV solar charging begins (default 1.5 kW) |
 | Battery SOC gate | Minimum house-battery SOC (%) before EV solar charging starts — the battery fills first, only the surplus left over goes to the car (default 100%). Only exists when the Home Battery module is enabled |

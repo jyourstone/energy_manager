@@ -30,6 +30,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .charger_state_machine import derive_car_max_charge_power_kw
 from .const import (
     CAR_CHARGE_POWER_STEP_KW,
     CHARGE_POWER_STEP_KW,
@@ -46,9 +47,11 @@ from .const import (
     CONF_EXPORT_RESERVE_SOC_PCT,
     CONF_EXPORT_SPIKE_THRESHOLD,
     CONF_GRID_TRANSFER_FEE,
+    CONF_MAX_CHARGE_AMPS,
     CONF_MAX_CHARGE_POWER,
     CONF_MAX_GRID_CHARGE_POWER_KW,
     CONF_PEAK_GAP_HOURS,
+    CONF_PHASE_CAPABILITY,
     CONF_PRODUCTION_FACTOR,
     CONF_SOLAR_START_THRESHOLD_KW,
     DEFAULT_APPLIANCE_OFF_SUSTAIN_MINUTES,
@@ -58,19 +61,23 @@ from .const import (
     DEFAULT_APPLIANCE_PRIORITY,
     DEFAULT_BATTERY_CYCLE_COST,
     DEFAULT_BATTERY_SOC_GATE_PCT,
-    DEFAULT_CAR_MAX_CHARGE_POWER_KW,
     DEFAULT_CAR_SOLAR_TARGET_SOC_PCT,
     DEFAULT_CHARGE_BUFFER_PCT,
     DEFAULT_CHARGE_THRESHOLD,
+    DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
+    DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
+    DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
     DEFAULT_DISCHARGE_THRESHOLD,
     DEFAULT_ELECTRICITY_COMPANY_FEE,
     DEFAULT_ESTIMATED_CHARGE_POWER_KW,
     DEFAULT_EXPORT_RESERVE_SOC_PCT,
     DEFAULT_GRID_TRANSFER_FEE,
+    DEFAULT_MAX_CHARGE_AMPS,
     DEFAULT_MAX_CHARGE_POWER_KW,
     DEFAULT_MAX_GRID_CHARGE_POWER_KW,
     DEFAULT_MAX_SOC_PCT,
     DEFAULT_PEAK_GAP_HOURS,
+    DEFAULT_PHASE_CAPABILITY,
     DEFAULT_PRODUCTION_FACTOR,
     DEFAULT_SOLAR_START_THRESHOLD_KW,
     DEFAULT_TARGET_SOC_PCT,
@@ -633,9 +640,23 @@ class CarSolarTargetSOC(CarEntity, RestoreNumber):
 class CarMaxChargePower(CarEntity, RestoreNumber):
     """Number entity for per-car maximum charging power.
 
-    Allows users to specify the car's maximum charge rate. Value persists
-    across restarts via RestoreNumber. Changes trigger schedule
-    recalculation on the car's coordinator.
+    This number is a CEILING and a cold-start seed, not the figure the
+    price-slot planner uses: the planner prefers the throughput the car
+    was measured actually receiving (car_power_estimator) and only falls
+    back to this value when nothing has been learned yet. It does remain
+    the live amp ceiling -- CarChargingData.max_charge_power_kw carries it
+    into CarDemand.max_charge_kw -- so raising it raises what the charger
+    may command.
+
+    The seed is derived per car from its phase capability and the hub's
+    configured max charge amps (3.7 / 6.4 / 11.0 kW at the default 16 A)
+    rather than a flat 7.4 kW whose own comment never matched that
+    default. RestoreNumber means the seed only ever reaches a NEWLY
+    created car: an existing car keeps its stored value, and editing the
+    phase capability later does not move it.
+
+    Value persists across restarts via RestoreNumber. Changes trigger
+    schedule recalculation on the car's coordinator.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -646,8 +667,6 @@ class CarMaxChargePower(CarEntity, RestoreNumber):
     _attr_native_max_value = MAX_CAR_MAX_CHARGE_POWER_KW
     _attr_native_step = CAR_CHARGE_POWER_STEP_KW
     _attr_native_unit_of_measurement = "kW"
-
-    _default_value = DEFAULT_CAR_MAX_CHARGE_POWER_KW
 
     def __init__(
         self,
@@ -660,19 +679,39 @@ class CarMaxChargePower(CarEntity, RestoreNumber):
         Args:
             coordinator: The CarChargingCoordinator for this car.
             entry: The config entry this entity belongs to.
-            subentry: The car subentry with car-specific configuration.
+            subentry: The car subentry with car-specific configuration
+                (phase-capability seed source).
         """
         super().__init__(coordinator, entry, subentry)
         self._attr_unique_id = f"{subentry.subentry_id}_max_charge_power"
+        # CONF_PHASE_CAPABILITY is stored as the SelectSelector STRING
+        # "1"/"2"/"3", and conversion_factor_for_phase_capability compares
+        # with <= and ==, so passing it through raw would raise TypeError
+        # ('"1" <= 1') inside the helper rather than here.
+        try:
+            capability = int(
+                subentry.data.get(CONF_PHASE_CAPABILITY, DEFAULT_PHASE_CAPABILITY)
+            )
+        except (TypeError, ValueError):
+            capability = int(DEFAULT_PHASE_CAPABILITY)
+        self._seed = derive_car_max_charge_power_kw(
+            capability,
+            float(entry.options.get(CONF_MAX_CHARGE_AMPS, DEFAULT_MAX_CHARGE_AMPS)),
+            DEFAULT_CHARGER_CONVERSION_FACTOR_1PHASE,
+            DEFAULT_CHARGER_CONVERSION_FACTOR_2PHASE,
+            DEFAULT_CHARGER_CONVERSION_FACTOR_3PHASE,
+            MIN_CAR_MAX_CHARGE_POWER_KW,
+            MAX_CAR_MAX_CHARGE_POWER_KW,
+        )
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous max charge power on startup, or use default."""
+        """Restore previous max charge power on startup, or use the seed."""
         await super().async_added_to_hass()
         last_data = await self.async_get_last_number_data()
         if last_data and last_data.native_value is not None:
             self._attr_native_value = last_data.native_value
         else:
-            self._attr_native_value = self._default_value
+            self._attr_native_value = self._seed
         self.coordinator.max_charge_power_kw = self._attr_native_value
         await self.coordinator.async_request_refresh()
 

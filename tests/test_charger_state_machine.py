@@ -15,6 +15,8 @@ Tests cover all Wave A behaviors from 05-EXECUTION.md:
 - Unauthorized-charge suppression
 - Terminal-state reset (disconnected/completed/error)
 - Generic stuck-command detection
+- CarDemand.car_id and the attributable_car() <-> selected_car equivalence
+  the (unplumbed) throughput measurement path relies on
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from custom_components.energy_manager.car_power_estimator import attributable_car
 from custom_components.energy_manager.charger_state_machine import (
     MAX_PENDING_DOWNTIME_SECONDS,
     MAX_RESTORED_PENDING_AGE_SECONDS,
@@ -54,6 +57,7 @@ def _car(
     max_charge_kw: float = 22.0,
     soc_pct: float | None = None,
     solar_target_soc_pct: float = 100.0,
+    car_id: str | None = None,
 ) -> CarDemand:
     """A CarDemand with a generous max_charge_kw so it never binds unless overridden."""
     return CarDemand(
@@ -63,6 +67,7 @@ def _car(
         max_charge_kw=max_charge_kw,
         soc_pct=soc_pct,
         solar_target_soc_pct=solar_target_soc_pct,
+        car_id=car_id,
     )
 
 
@@ -886,6 +891,175 @@ class TestMultipleCarsSelection:
         inputs = _inputs(cars=(car,))
         decision = ChargerController().decide(inputs)
         assert decision.override_reason is None
+
+
+# ---------------------------------------------------------------------------
+# Car attribution -- CarDemand.car_id and the attributable_car equivalence
+# ---------------------------------------------------------------------------
+
+
+def test_car_demand_car_id_defaults_to_none_and_is_last():
+    """car_id is a trailing, defaulted field, so no existing construction moves.
+
+    The seven-argument positional form is the proof that car_id is last: if
+    it had been inserted anywhere earlier, "sub123" would have landed in
+    solar_target_soc_pct instead. CarDemand() with no arguments is not a
+    valid construction at all -- active_slot and home_and_plugged carry no
+    defaults -- so the two-argument form is the minimal one.
+    """
+    assert CarDemand(True, True).car_id is None
+
+    positional = CarDemand(True, True, 3, 7.4, 50.0, 100.0, "sub123")
+    assert positional.car_id == "sub123"
+    assert positional.solar_target_soc_pct == 100.0
+
+
+def _selected_car_id(
+    decision: ChargerDecision, cars: tuple[CarDemand, ...]
+) -> str | None:
+    """Decode which car ChargerController.decide() actually selected.
+
+    Nothing on ChargerDecision names the selection, so these fixtures give
+    every car a distinct max_charge_kw low enough to be the single binding
+    constraint on capacity: at phase_capability 3 the car cap is
+    max_charge_kw * 1.45 A, well under _inputs()'s 18 A fuse headroom,
+    16.675 A grid ceiling and 16 A max_amps. target_amps therefore reads
+    back as selected_car.max_charge_kw * 1.45. Same idiom as
+    TestModeArbitration.test_solar_selects_second_car_when_first_is_solar_satisfied.
+    """
+    matches = [
+        car.car_id
+        for car in cars
+        if decision.target_amps == pytest.approx(car.max_charge_kw * 1.45)
+    ]
+    assert len(matches) == 1, f"amp fingerprint {decision.target_amps} is not unique"
+    return matches[0]
+
+
+class TestAttributableCarMatchesControllerSelection:
+    """attributable_car() must re-derive the controller's own selected_car.
+
+    The measurement path is deliberately unplumbed: ChargerDecision was not
+    widened to carry the selection, so car_power_estimator.attributable_car
+    re-derives it from the same `cars` tuple the controller saw. That
+    equivalence is the entire basis for filing a measured sample under a car
+    id, and a drift is silent -- one car's kWh lands in another car's
+    bucket and both cars' schedules are then sized from the wrong power.
+    Every non-idle branch of decide() is covered here; the one divergent
+    branch ("idle", where forced falls back to present[0]) is rejected by
+    classify_tick's mode gate and is asserted as a refusal below.
+    """
+
+    def test_single_present_scheduled_car(self):
+        cars = (_car(car_id="a", max_charge_kw=5.0),)
+        decision = ChargerController().decide(_inputs(cars=cars))
+        assert decision.mode == "scheduled"
+        assert attributable_car(cars).car_id == "a"
+        assert _selected_car_id(decision, cars) == "a"
+
+    def test_scheduled_picks_the_demanding_car_even_when_it_is_not_first(self):
+        """The case a blanket "first present car wins" attribution would fail."""
+        cars = (
+            _car(car_id="a", max_charge_kw=5.0, active_slot=False),
+            _car(car_id="b", max_charge_kw=8.0, active_slot=True),
+        )
+        decision = ChargerController().decide(_inputs(cars=cars))
+        assert decision.mode == "scheduled"
+        assert attributable_car(cars).car_id == "b"
+        assert _selected_car_id(decision, cars) == "b"
+
+    def test_forced_with_a_single_present_car_that_is_not_demanding(self):
+        cars = (_car(car_id="a", max_charge_kw=5.0, active_slot=False),)
+        decision = ChargerController().decide(_inputs(cars=cars, force_charging=True))
+        assert decision.mode == "forced"
+        assert attributable_car(cars).car_id == "a"
+        assert _selected_car_id(decision, cars) == "a"
+
+    def test_forced_prefers_the_single_demanding_car_of_two(self):
+        cars = (
+            _car(car_id="a", max_charge_kw=5.0, active_slot=False),
+            _car(car_id="b", max_charge_kw=8.0, active_slot=True),
+        )
+        decision = ChargerController().decide(_inputs(cars=cars, force_charging=True))
+        assert decision.mode == "forced"
+        assert attributable_car(cars).car_id == "b"
+        assert _selected_car_id(decision, cars) == "b"
+
+    def test_solar_branch_selects_the_same_car(self):
+        """Solar samples are rejected by classify_tick, but the selection
+        rule must still agree -- the refusal is the mode gate's job, not
+        attributable_car's."""
+        cars = (_car(car_id="a", max_charge_kw=5.0, active_slot=False),)
+        controller = ChargerController()
+        controller._solar_tracker._active = True
+        decision = controller.decide(
+            # 20 kW surplus so the solar amp term (floor(19.5*1.45) = 28 A)
+            # never binds and the car cap stays the fingerprint.
+            _inputs(cars=cars, solar_surplus_kw=20.0, battery_soc_pct=100.0)
+        )
+        assert decision.mode == "solar"
+        assert attributable_car(cars).car_id == "a"
+        assert _selected_car_id(decision, cars) == "a"
+
+    def test_refuses_when_both_present_cars_demand(self):
+        """The controller takes demanding[0] and says so; the learner refuses
+        rather than trust a first-wins tiebreak."""
+        cars = (
+            _car(car_id="a", max_charge_kw=5.0),
+            _car(car_id="b", max_charge_kw=8.0),
+        )
+        decision = ChargerController().decide(_inputs(cars=cars))
+        assert decision.override_reason == "multiple_cars_demanding_first_selected"
+        assert attributable_car(cars) is None
+
+    def test_refuses_when_two_cars_are_present_and_neither_demands(self):
+        """forced falls back to present[0] -- an ordering rule attributable_car
+        deliberately does not replicate."""
+        cars = (
+            _car(car_id="a", max_charge_kw=5.0, active_slot=False),
+            _car(car_id="b", max_charge_kw=8.0, active_slot=False),
+        )
+        decision = ChargerController().decide(_inputs(cars=cars, force_charging=True))
+        assert decision.mode == "forced"
+        assert _selected_car_id(decision, cars) == "a"
+        assert attributable_car(cars) is None
+
+    def test_refuses_a_selected_car_that_carries_no_car_id(self):
+        """An unidentified car is charged normally and measured not at all."""
+        cars = (_car(car_id=None, max_charge_kw=5.0),)
+        decision = ChargerController().decide(_inputs(cars=cars))
+        assert decision.mode == "scheduled"
+        assert attributable_car(cars) is None
+
+    def test_a_car_that_is_away_never_wins_attribution(self):
+        """home_and_plugged is the presence gate on both sides."""
+        cars = (
+            _car(car_id="away", max_charge_kw=8.0, home_and_plugged=False),
+            _car(car_id="home", max_charge_kw=5.0),
+        )
+        decision = ChargerController().decide(_inputs(cars=cars))
+        assert decision.mode == "scheduled"
+        assert attributable_car(cars).car_id == "home"
+        assert _selected_car_id(decision, cars) == "home"
+
+    def test_attribution_never_coexists_with_the_multi_car_note(self):
+        """The controller's own ambiguity marker and the learner's refusal
+        agree on every combination of two present cars."""
+        for a_demands in (False, True):
+            for b_demands in (False, True):
+                cars = (
+                    _car(car_id="a", max_charge_kw=5.0, active_slot=a_demands),
+                    _car(car_id="b", max_charge_kw=8.0, active_slot=b_demands),
+                )
+                decision = ChargerController().decide(
+                    _inputs(cars=cars, force_charging=True)
+                )
+                attributed = attributable_car(cars)
+                if decision.override_reason == "multiple_cars_demanding_first_selected":
+                    assert attributed is None
+                if attributed is not None:
+                    assert decision.mode != "idle"
+                    assert _selected_car_id(decision, cars) == attributed.car_id
 
 
 # ---------------------------------------------------------------------------

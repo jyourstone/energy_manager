@@ -453,6 +453,9 @@
       "car_schedule": {
         "name": "Car Charging Schedule"
       },
+      "car_planned_charge_power": {
+        "name": "Planned Charge Power"
+      },
       "ev_charger_status": {
         "name": "EV charger status"
       },

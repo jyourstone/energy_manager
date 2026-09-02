@@ -95,6 +95,9 @@ class CarDemand:
         solar_target_soc_pct: SOC ceiling for solar charging. Solar mode
             skips a car at or above this level; scheduled/forced charging is
             governed by the car's normal target instead.
+        car_id: Stable identity of the car this demand came from (its HA
+            subentry_id), used to attribute a measured throughput sample.
+            None when unknown.
     """
 
     active_slot: bool
@@ -103,6 +106,7 @@ class CarDemand:
     max_charge_kw: float = 7.4
     soc_pct: float | None = None
     solar_target_soc_pct: float = 100.0
+    car_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +291,50 @@ def conversion_factor_for_phase_capability(
     if phase_capability == 2:
         return factor_2phase
     return factor_3phase
+
+
+def derive_car_max_charge_power_kw(
+    phase_capability: int,
+    max_charge_amps: float,
+    factor_1phase: float,
+    factor_2phase: float,
+    factor_3phase: float,
+    min_kw: float,
+    max_kw: float,
+) -> float:
+    """Derive a car's default max charge power from its phase capability.
+
+    The conversion factors are A/kW -- compute_charger_capacity_amps()
+    multiplies kW by one to get amps (:339-340) and phase_switch_target()
+    divides amps by one to get kW (:444) -- so going from the charger's
+    configured max amps to the kW a car of this capability can actually
+    pull *divides*. At the default 16 A that gives 3.7 / 6.4 / 11.0 kW for
+    a 1- / 2- / 3-phase car, replacing a flat 7.4 kW default whose own
+    comment ("32A * 230V") never matched the 16 A default amps.
+
+    Round first, clamp second, so the result can never land outside the
+    number entity's [min_kw, max_kw] band: 32 A 3-phase rounds to 22.1 and
+    is pulled back to 22.0. Inside the legal 6-32 A amp range only the
+    ceiling ever binds -- 6 A 1-phase already rounds to 1.4 -- so the floor
+    is purely a guard against an out-of-range max_charge_amps.
+
+    Args:
+        phase_capability: The car's phase capability (1, 2, or 3).
+        max_charge_amps: The charger's configured max amps per phase.
+        factor_1phase: A/kW conversion factor for a 1-phase car.
+        factor_2phase: A/kW conversion factor for a 2-phase car.
+        factor_3phase: A/kW conversion factor for a 3-phase car.
+        min_kw: Lower clamp bound (the number entity's native_min_value).
+        max_kw: Upper clamp bound (the number entity's native_max_value).
+
+    Returns:
+        The seed max charge power in kW, rounded to 0.1 then clamped to
+        [min_kw, max_kw].
+    """
+    factor = conversion_factor_for_phase_capability(
+        phase_capability, factor_1phase, factor_2phase, factor_3phase
+    )
+    return min(max(round(max_charge_amps / factor, 1), min_kw), max_kw)
 
 
 def compute_charger_capacity_amps(

@@ -23,18 +23,35 @@ and BATT-16 (tomorrow forecast entity derivation):
   PriceCoordinator._recent_nordpool_refresh_request().
 - _find_native_coordinator(): entity registry -> config entry -> runtime_data
   lookup behind PriceCoordinator._subscribe_native_coordinator().
+- car_throughput_storage_key(): Store key for the measured per-car charge
+  throughput payload, shared with __init__.async_remove_entry.
+
+- _restored_number(): entity registry -> restore-state store lookup that
+  lets a coordinator seed an attribute with the value its RestoreNumber
+  entity will assign seconds later, instead of a bare DEFAULT_* constant.
+
+Plus source-text guards (the same escape hatch
+TestPriceCoordinatorHasNoPollingInterval uses) over the learned-power /
+ceiling split inside CarChargingCoordinator and over the four restore
+seeds, neither of which a pure test can reach.
 """
 
 from __future__ import annotations
 
 import inspect
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from custom_components.energy_manager import coordinator as coordinator_module
+from custom_components.energy_manager.battery_scheduler import (
+    compute_effective_discharge_threshold,
+)
 from custom_components.energy_manager.const import FALLBACK_STALE_THRESHOLD_MINUTES
 from custom_components.energy_manager.coordinator import (
     CarChargingData,
@@ -47,9 +64,14 @@ from custom_components.energy_manager.coordinator import (
     _read_soc_timestamp,
     _read_sun_dawn_dusk,
     _restore_samples,
+    _restored_number,
     _serialize_samples,
     _should_sample_consumption,
+    car_throughput_storage_key,
+    consumption_storage_key,
     derive_tomorrow_forecast_entities,
+    forecast_accuracy_storage_key,
+    solar_tracker_storage_key,
     sum_solar_forecast_wh,
 )
 
@@ -672,3 +694,503 @@ class TestPriceCoordinatorHasNoPollingInterval:
         class_source = match.group(0)
         assert "update_interval=None" in class_source
         assert "update_interval=timedelta" not in class_source
+
+
+def test_car_throughput_storage_key() -> None:
+    """The fourth Store key -- distinct from the other three.
+
+    __init__.async_remove_entry deletes .storage files by these keys, so a
+    collision would make one coordinator's payload delete another's, and a
+    silent rename would strand the old file on disk forever.
+    """
+    assert (
+        car_throughput_storage_key("abc123") == "energy_manager.abc123-car-throughput"
+    )
+
+    entry_id = "abc123"
+    keys = {
+        consumption_storage_key(entry_id),
+        forecast_accuracy_storage_key(entry_id),
+        solar_tracker_storage_key(entry_id),
+        car_throughput_storage_key(entry_id),
+    }
+    assert len(keys) == 4
+
+
+class TestCarPlannerUsesLearnedPower:
+    """The learned/ceiling split inside CarChargingCoordinator.
+
+    The measured estimate must reach the price-slot planner but must NOT
+    reach CarChargingData.max_charge_power_kw, which flows on to
+    CarDemand.max_charge_kw and from there into the live amp target. Point
+    that field at the learned value and the estimate becomes
+    self-fulfilling: a throttled 4 kW measurement caps the charger at 4 kW,
+    which re-measures 4 kW forever, while every schedule it produces still
+    looks perfectly valid.
+
+    CarChargingCoordinator cannot be instantiated under the HA stub (see the
+    module docstring), so this reads the source the same way
+    TestPriceCoordinatorHasNoPollingInterval does. It is a text guard, not a
+    behavioural one -- a creative enough refactor could satisfy it and still
+    break the invariant.
+    """
+
+    @staticmethod
+    def _class_source() -> str:
+        source_path = inspect.getsourcefile(coordinator_module)
+        text = Path(source_path).read_text()
+        match = re.search(
+            r"class CarChargingCoordinator\(.*?(?=\nclass \w|\Z)", text, re.DOTALL
+        )
+        assert match is not None, "CarChargingCoordinator not found in coordinator.py"
+        return match.group(0)
+
+    def test_scheduler_gets_planning_kw_and_car_data_keeps_the_ceiling(self) -> None:
+        before_data, sep, after_data = self._class_source().partition(
+            "return CarChargingData("
+        )
+        assert sep, "CarChargingData construction not found -- guard is blind"
+
+        # Planner side: the pure scheduler is sized from the learned figure.
+        assert "max_charge_power_kw=planning_kw" in before_data
+        # Control side: the field that becomes CarDemand.max_charge_kw keeps
+        # the number entity's own value.
+        assert "max_charge_power_kw=self.max_charge_power_kw" in after_data
+        assert "max_charge_power_kw=planning_kw" not in after_data
+
+    def test_both_learned_and_planning_are_reported(self) -> None:
+        """Two fields, not one: planning == ceiling cannot distinguish
+        "learned above the ceiling" from "never learned"."""
+        _, _, after_data = self._class_source().partition("return CarChargingData(")
+        assert "learned_power_kw=learned" in after_data
+        assert "planning_power_kw=planning_kw" in after_data
+
+
+class TestThroughputSamplingSkipsBlindTicks:
+    """A tick EM cannot attribute for a STRUCTURAL reason must not be fed in.
+
+    On the first Easee refresh after a restart or a config-entry reload,
+    entry.runtime_data has not been assigned yet (__init__ awaits
+    async_config_entry_first_refresh() before assigning it), so
+    _build_car_demands() returns an empty tuple. Feeding the learner that
+    tick classifies it "reject", and the reject path CLOSES the just-restored
+    in-flight segment -- making _restore_segment's short-gap "keep
+    accumulating across a reload" branch unreachable in production.
+
+    "We cannot see the cars yet" is not evidence that the segment ended, so
+    the sampler returns before observe() when the snapshot is empty.
+
+    EaseeCoordinator cannot be instantiated under the HA stub (see the module
+    docstring), so this reads the source the same way
+    TestCarPlannerUsesLearnedPower does.
+    """
+
+    @staticmethod
+    def _method_source() -> str:
+        source_path = inspect.getsourcefile(coordinator_module)
+        text = Path(source_path).read_text()
+        match = re.search(
+            r"\n    def _sample_throughput\(.*?(?=\n    def \w|\Z)", text, re.DOTALL
+        )
+        assert match is not None, "_sample_throughput not found in coordinator.py"
+        return match.group(0)
+
+    def test_an_empty_car_snapshot_returns_before_the_learner_sees_it(self) -> None:
+        before, sep, after = self._method_source().partition("if not cars:")
+        assert sep, "no structural guard on an empty car snapshot"
+        assert "observe(" not in before, "the learner is fed before the guard"
+        assert after.lstrip().startswith("return"), (
+            "the guard must return, not merely log"
+        )
+
+    def test_the_learner_is_still_fed_every_other_tick(self) -> None:
+        """The guard is narrow: an ordinary unattributable tick (car
+        unplugged, two cars demanding, solar mode) must still reach observe(),
+        because a rejected tick is exactly what closes an open segment."""
+        source = self._method_source()
+        assert "self._throughput_learner.observe(tick)" in source
+        assert source.count("if not cars:") == 1
+
+
+# --- Restore-seeded coordinator attributes ---------------------------------
+#
+# Incident 2026-09-02 (08:05:53, 09:54:07 -> 09:54:17, 10:05:12 -> 10:05:22):
+# number.energy_manager_battery_discharge_spread_threshold published
+# 0.5 SEK/kWh and went Unavailable ~10 s later on every reload/restart.
+# Root cause: BatteryScheduleCoordinator seeds battery_cycle_cost from
+# DEFAULT_BATTERY_CYCLE_COST (0.0) and only the RestoreNumber entity's
+# async_added_to_hass assigns the user's real 1.0 -- but the coordinator's
+# FIRST refresh runs before the platforms are even forwarded
+# (__init__.py:87-128 constructs and first-refreshes every coordinator
+# before entry.runtime_data is assigned; platform forwarding follows).
+# During that window the scheduler used the manual 0.50 instead of the
+# derived cycle_cost - transfer_fee = 1.00 - 0.78 = 0.22.
+
+
+@dataclass(frozen=True)
+class _RestoredExtraData:
+    """Stand-in for homeassistant.helpers.restore_state.RestoredExtraData.
+
+    This is what StoredState.extra_data holds after a COLD RESTART: the raw
+    JSON dict rewrapped in a frozen dataclass, reachable only through
+    as_dict(). It is deliberately NOT subscriptable -- a seed helper written
+    as extra_data["native_value"] raises TypeError here, the helper's
+    never-block-setup guard swallows it, and the seed silently falls back to
+    the default. That is a fix that ships and does nothing, so the fake has
+    to be able to catch it.
+    """
+
+    json_dict: dict
+
+    def as_dict(self) -> dict:
+        return self.json_dict
+
+
+@dataclass(frozen=True)
+class _NumberExtraStoredData:
+    """Stand-in for homeassistant.components.number.NumberExtraStoredData.
+
+    This is what StoredState.extra_data holds after a config-entry RELOAD:
+    async_restore_entity_removed stores the live entity's own
+    extra_restore_state_data object, never a dict. Same as_dict() contract,
+    same non-subscriptability. Both storage paths must be covered, because
+    the reported symptom fires on reloads and on cold restarts alike.
+    """
+
+    native_value: float | None
+    native_unit_of_measurement: str | None = "SEK/kWh"
+    native_max_value: float | None = 5.0
+    native_min_value: float | None = 0.0
+    native_step: float | None = 0.01
+
+    def as_dict(self) -> dict:
+        return {
+            "native_max_value": self.native_max_value,
+            "native_min_value": self.native_min_value,
+            "native_step": self.native_step,
+            "native_unit_of_measurement": self.native_unit_of_measurement,
+            "native_value": self.native_value,
+        }
+
+
+def _hass_with_stored_number(
+    entity_id: str | None, stored: object | None
+) -> tuple[MagicMock, MagicMock, MagicMock]:
+    """Build hass + entity-registry + restore-store doubles for one lookup."""
+    hass = MagicMock()
+    registry = MagicMock()
+    registry.async_get_entity_id.return_value = entity_id
+    store = MagicMock()
+    store.last_states = {} if entity_id is None else {entity_id: stored}
+    return hass, registry, store
+
+
+def _seed(
+    registry: MagicMock,
+    store: MagicMock,
+    hass: MagicMock,
+    unique_id: str = "entry1_battery_cycle_cost",
+    default: float = 0.0,
+) -> float:
+    with (
+        patch.object(coordinator_module.er, "async_get", return_value=registry),
+        patch.object(
+            coordinator_module.restore_state, "async_get", return_value=store
+        ),
+    ):
+        return _restored_number(hass, unique_id, default)
+
+
+class TestRestoredNumber:
+    """The value a RestoreNumber will restore, read at construction time.
+
+    One shared primitive behind all four seed sites. Every miss path must
+    degrade to the caller's existing seed expression -- never raise, never
+    return None, never block config-entry setup.
+    """
+
+    def test_cold_restart_extra_data_yields_the_stored_value(self) -> None:
+        stored = SimpleNamespace(
+            extra_data=_RestoredExtraData(
+                {"native_value": 1.0, "native_unit_of_measurement": "SEK/kWh"}
+            )
+        )
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.0) == 1.0
+
+    def test_reload_extra_data_yields_the_stored_value(self) -> None:
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=1.0))
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.0) == 1.0
+
+    def test_a_stored_zero_wins_over_the_default(self) -> None:
+        """The inverse flap. A user whose cycle cost really IS 0 must keep 0.
+
+        "Nothing stored" and "stored 0.0" are different answers: confuse them
+        and the discharge-threshold entity flips the other way, Unavailable
+        -> 0.5, at every startup. This is the single most important case in
+        the suite.
+        """
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=0.0))
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.9) == 0.0
+
+    def test_a_decimal_native_value_is_read_not_dropped(self) -> None:
+        """HA serialises a Decimal native_value as its encoded form.
+
+        The entity's own NumberExtraStoredData.from_dict rebuilds the
+        Decimal, so dropping it here and falling back to the default would
+        put the seed and the entity back out of step -- reintroducing the
+        divergence this helper exists to remove, just more rarely.
+        """
+        stored = SimpleNamespace(
+            extra_data=_RestoredExtraData(
+                {
+                    "native_value": {
+                        "__type": "<class 'decimal.Decimal'>",
+                        "decimal": "0.22",
+                    }
+                }
+            )
+        )
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.0) == pytest.approx(0.22)
+
+    def test_an_unrecognised_dict_native_value_falls_back(self) -> None:
+        stored = SimpleNamespace(
+            extra_data=_RestoredExtraData({"native_value": {"unexpected": 1}})
+        )
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.9) == 0.9
+
+    def test_the_lookup_is_scoped_to_the_number_platform(self) -> None:
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=7.4))
+        hass, registry, store = _hass_with_stored_number("number.max_power", stored)
+        _seed(registry, store, hass, unique_id="sub1_max_charge_power", default=11.0)
+        registry.async_get_entity_id.assert_called_once_with(
+            "number", coordinator_module.DOMAIN, "sub1_max_charge_power"
+        )
+
+    def test_default_when_the_entity_was_never_registered(self) -> None:
+        """Fresh install, or a car subentry added this session."""
+        hass, registry, store = _hass_with_stored_number(None, None)
+        assert _seed(registry, store, hass, default=0.42) == 0.42
+
+    def test_default_when_no_stored_state_survives(self) -> None:
+        """Restore records expire (STATE_EXPIRATION, 7 days)."""
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", None)
+        assert _seed(registry, store, hass, default=0.42) == 0.42
+
+    def test_default_when_extra_data_is_missing(self) -> None:
+        stored = SimpleNamespace(extra_data=None)
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.42) == 0.42
+
+    def test_default_when_native_value_is_none(self) -> None:
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=None))
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.42) == 0.42
+
+    def test_default_when_native_value_is_not_a_number(self) -> None:
+        """HA serialises a Decimal as {"__type": ..., "decimal_str": ...}."""
+        stored = SimpleNamespace(
+            extra_data=_RestoredExtraData(
+                {"native_value": {"__type": "<class 'decimal.Decimal'>"}}
+            )
+        )
+        hass, registry, store = _hass_with_stored_number("number.cycle_cost", stored)
+        assert _seed(registry, store, hass, default=0.42) == 0.42
+
+    def test_default_when_the_registry_raises(self) -> None:
+        """Helper drift in a future HA must not block config-entry setup."""
+        hass = MagicMock()
+        registry = MagicMock()
+        registry.async_get_entity_id.side_effect = RuntimeError("registry gone")
+        store = MagicMock()
+        store.last_states = {}
+        assert _seed(registry, store, hass, default=0.42) == 0.42
+
+    def test_an_integer_stored_value_is_coerced_to_float(self) -> None:
+        stored = SimpleNamespace(
+            extra_data=_RestoredExtraData({"native_value": 11})
+        )
+        hass, registry, store = _hass_with_stored_number("number.max_power", stored)
+        seeded = _seed(registry, store, hass, default=7.4)
+        assert seeded == 11.0
+        assert isinstance(seeded, float)
+
+
+class TestSymptomADischargeThresholdSeed:
+    """Both halves of the 2026-09-02 flap die at the same place.
+
+    BatteryScheduleCoordinator cannot be instantiated under the HA stub (see
+    the module docstring), so the wiring is checked the same way
+    TestCarPlannerUsesLearnedPower checks its invariant, and the arithmetic
+    it protects is checked directly.
+    """
+
+    @staticmethod
+    def _init_source() -> str:
+        source_path = inspect.getsourcefile(coordinator_module)
+        text = Path(source_path).read_text()
+        cls = re.search(
+            r"class BatteryScheduleCoordinator\(.*?(?=\nclass \w|\Z)", text, re.DOTALL
+        )
+        assert cls is not None, "BatteryScheduleCoordinator not found"
+        init = re.search(
+            r"\n    def __init__\(.*?(?=\n    async def \w|\n    def \w|\Z)",
+            cls.group(0),
+            re.DOTALL,
+        )
+        assert init is not None, "BatteryScheduleCoordinator.__init__ not found"
+        return init.group(0)
+
+    def test_both_economics_seeds_are_needed_for_the_right_number(self) -> None:
+        """Seeding the cycle cost alone gives 1.00, not 0.22 -- wrong the
+        other way. The live values are cycle cost 1.00, transfer fee 0.78,
+        manual threshold 0.50."""
+        assert compute_effective_discharge_threshold(0.5, 1.0, 0.78) == pytest.approx(
+            0.22
+        )
+        assert compute_effective_discharge_threshold(0.5, 1.0, 0.0) == pytest.approx(
+            1.0
+        )
+        # Cycle cost 0 (the shipped default) means the MANUAL threshold is
+        # live, which is why discharge_threshold has to be seeded too.
+        assert compute_effective_discharge_threshold(0.35, 0.0, 0.78) == 0.35
+
+    def test_the_four_battery_seeds_read_the_restore_store(self) -> None:
+        # Whitespace-collapsed: a fallback expression that ruff decides to
+        # wrap differently is the same expression, and this test must not
+        # fail on a reformat that changes no behaviour.
+        init_source = re.sub(r"\s+", " ", self._init_source())
+        for unique_id, fallback in (
+            (
+                'f"{entry.entry_id}_battery_cycle_cost"',
+                "entry.options.get(CONF_BATTERY_CYCLE_COST, DEFAULT_BATTERY_CYCLE_COST)",
+            ),
+            (
+                'f"{entry.entry_id}_grid_transfer_fee"',
+                "entry.options.get(CONF_GRID_TRANSFER_FEE, DEFAULT_GRID_TRANSFER_FEE)",
+            ),
+            (
+                'f"{entry.entry_id}_discharge_price_threshold"',
+                "DEFAULT_DISCHARGE_THRESHOLD",
+            ),
+            (
+                'f"{entry.entry_id}_electricity_company_fee"',
+                (
+                    "entry.options.get( CONF_ELECTRICITY_COMPANY_FEE,"
+                    " DEFAULT_ELECTRICITY_COMPANY_FEE )"
+                ),
+            ),
+        ):
+            assert unique_id in init_source, f"{unique_id} is not seeded"
+            assert fallback in init_source, (
+                f"{unique_id} must keep the entity's own fallback expression"
+            )
+
+    def test_both_halves_of_the_fee_sum_are_seeded_together(self) -> None:
+        """grid_transfer_fee and electricity_company_fee are SUMMED by
+        battery_scheduler._mark_export_slots and by
+        ActualElectricityPriceSensor. Seeding one without the other produces
+        a total that is neither the stored one nor the default one -- a third
+        wrong answer. They move together or not at all."""
+        init_source = self._init_source()
+        assert ('f"{entry.entry_id}_grid_transfer_fee"' in init_source) == (
+            'f"{entry.entry_id}_electricity_company_fee"' in init_source
+        )
+
+    def test_the_seed_lands_before_the_first_refresh(self) -> None:
+        """Only __init__ (and _async_setup) run before the first refresh; a
+        seed read inside _async_update_data would re-apply a stale stored
+        value over every user edit, forever."""
+        source_path = inspect.getsourcefile(coordinator_module)
+        text = Path(source_path).read_text()
+        cls = re.search(
+            r"class BatteryScheduleCoordinator\(.*?(?=\nclass \w|\Z)", text, re.DOTALL
+        )
+        assert cls is not None
+        assert cls.group(0).count("= _restored_number(") == self._init_source().count(
+            "= _restored_number("
+        ), "a battery seed escaped __init__"
+
+
+class TestSymptomBCarCeilingSeed:
+    """The per-car live amp ceiling must never exceed the user's stored kW.
+
+    max_charge_power_kw is both the planning seed and the live ceiling:
+    CarChargingData.max_charge_power_kw -> CarDemand.max_charge_kw ->
+    compute_charger_capacity_amps(car_max_charge_kw=...). Seeding it from
+    the phase derivation alone can put 11.0 kW on the wire for a car the
+    user throttled to 7.4 kW, until the number entity restores.
+    """
+
+    @staticmethod
+    def _init_source() -> str:
+        source_path = inspect.getsourcefile(coordinator_module)
+        text = Path(source_path).read_text()
+        cls = re.search(
+            r"class CarChargingCoordinator\(.*?(?=\nclass \w|\Z)", text, re.DOTALL
+        )
+        assert cls is not None, "CarChargingCoordinator not found"
+        init = re.search(
+            r"\n    def __init__\(.*?(?=\n    async def \w|\n    def \w|\Z)",
+            cls.group(0),
+            re.DOTALL,
+        )
+        assert init is not None, "CarChargingCoordinator.__init__ not found"
+        return init.group(0)
+
+    def test_the_ceiling_seeds_from_the_stored_value(self) -> None:
+        init_source = self._init_source()
+        assert 'f"{subentry.subentry_id}_max_charge_power"' in init_source
+        assert init_source.count("= _restored_number(") == 1
+
+    def test_the_phase_derivation_survives_as_the_fallback(self) -> None:
+        """A NEWLY created car has nothing stored, and the just-landed
+        planning fix must still size its schedule from phase capability
+        rather than a flat constant."""
+        init_source = self._init_source()
+        assert "derive_car_max_charge_power_kw(" in init_source
+        assert init_source.index("= _restored_number(") < init_source.index(
+            "derive_car_max_charge_power_kw("
+        ), "the derivation must be the fallback argument, not the seed"
+
+    def test_the_seed_is_always_a_real_number(self) -> None:
+        """None or a sub-minimum floor would drop the car from
+        _build_car_demands / push the controller below 6 A. The helper
+        returns the caller's float on every miss path -- pinned here by the
+        signature, and behaviourally by TestRestoredNumber."""
+        signature = inspect.signature(_restored_number)
+        assert list(signature.parameters) == ["hass", "unique_id", "default"]
+        assert signature.parameters["default"].annotation == "float"
+        assert signature.return_annotation == "float"
+
+
+class TestSeedUniqueIdsMatchTheEntities:
+    """The seed duplicates each entity's unique_id. Drift re-opens the race.
+
+    Asserted in the FULL prefixed form, not on the bare suffix:
+    "_max_charge_power" is worn by BatteryMaxChargePower (entry-prefixed) as
+    well as CarMaxChargePower (subentry-prefixed), so a suffix-only check
+    would stay green after the car entity's id was renamed -- guarding
+    nothing at exactly the site it exists for.
+    """
+
+    def test_every_seeded_unique_id_exists_verbatim_in_number_py(self) -> None:
+        coordinator_path = Path(inspect.getsourcefile(coordinator_module))
+        coordinator_source = coordinator_path.read_text()
+        number_source = (coordinator_path.parent / "number.py").read_text()
+        for unique_id in (
+            'f"{entry.entry_id}_battery_cycle_cost"',
+            'f"{entry.entry_id}_grid_transfer_fee"',
+            'f"{entry.entry_id}_electricity_company_fee"',
+            'f"{entry.entry_id}_discharge_price_threshold"',
+            'f"{subentry.subentry_id}_max_charge_power"',
+        ):
+            assert unique_id in coordinator_source, f"{unique_id} not seeded"
+            assert unique_id in number_source, (
+                f"{unique_id} no longer matches any number entity -- "
+                "the seed silently misses and the flap returns"
+            )

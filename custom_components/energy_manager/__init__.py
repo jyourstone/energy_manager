@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    CAR_THROUGHPUT_STORAGE_VERSION,
     CONF_APPLIANCES_ENABLED,
     CONF_BATTERY_ENABLED,
     CONF_CHARGER_STATUS_ENTITY,
@@ -39,6 +40,7 @@ from .coordinator import (
     EnergyManagerConfigEntry,
     EnergyManagerData,
     PriceCoordinator,
+    car_throughput_storage_key,
     consumption_storage_key,
     forecast_accuracy_storage_key,
     solar_tracker_storage_key,
@@ -262,6 +264,11 @@ async def async_unload_entry(
     if easee_coordinator is not None:
         await easee_coordinator.async_shutdown()
         await easee_coordinator.async_flush_solar_tracker_store()
+        # ...and for the measured per-car charge throughput. A reload
+        # fires on ANY options or subentry save, so without this flush a
+        # user editing a setting mid-session would drop up to
+        # SEGMENT_PERSIST_INTERVAL_SECONDS of an overnight measurement.
+        await easee_coordinator.async_flush_car_throughput_store()
 
     # Repairs issues are re-detected every update cycle -- clear them all
     # last, after every await above, so an in-flight refresh landing
@@ -293,6 +300,7 @@ async def async_remove_entry(
             forecast_accuracy_storage_key(entry.entry_id),
         ),
         (SOLAR_TRACKER_STORAGE_VERSION, solar_tracker_storage_key(entry.entry_id)),
+        (CAR_THROUGHPUT_STORAGE_VERSION, car_throughput_storage_key(entry.entry_id)),
     ):
         await Store(hass, version, key).async_remove()
 
