@@ -1059,8 +1059,11 @@ class TestSymptomADischargeThresholdSeed:
         # live, which is why discharge_threshold has to be seeded too.
         assert compute_effective_discharge_threshold(0.35, 0.0, 0.78) == 0.35
 
-    def test_the_three_battery_seeds_read_the_restore_store(self) -> None:
-        init_source = self._init_source()
+    def test_the_four_battery_seeds_read_the_restore_store(self) -> None:
+        # Whitespace-collapsed: a fallback expression that ruff decides to
+        # wrap differently is the same expression, and this test must not
+        # fail on a reformat that changes no behaviour.
+        init_source = re.sub(r"\s+", " ", self._init_source())
         for unique_id, fallback in (
             (
                 'f"{entry.entry_id}_battery_cycle_cost"',
@@ -1076,7 +1079,10 @@ class TestSymptomADischargeThresholdSeed:
             ),
             (
                 'f"{entry.entry_id}_electricity_company_fee"',
-                "entry.options.get(\n                    CONF_ELECTRICITY_COMPANY_FEE, DEFAULT_ELECTRICITY_COMPANY_FEE",
+                (
+                    "entry.options.get( CONF_ELECTRICITY_COMPANY_FEE,"
+                    " DEFAULT_ELECTRICITY_COMPANY_FEE )"
+                ),
             ),
         ):
             assert unique_id in init_source, f"{unique_id} is not seeded"
@@ -1179,6 +1185,7 @@ class TestSeedUniqueIdsMatchTheEntities:
         for unique_id in (
             'f"{entry.entry_id}_battery_cycle_cost"',
             'f"{entry.entry_id}_grid_transfer_fee"',
+            'f"{entry.entry_id}_electricity_company_fee"',
             'f"{entry.entry_id}_discharge_price_threshold"',
             'f"{subentry.subentry_id}_max_charge_power"',
         ):

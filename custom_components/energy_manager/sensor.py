@@ -1233,7 +1233,7 @@ class CarPlannedChargePowerSensor(CarEntity, SensorEntity):
         return {
             "learned_power_kw": data.learned_power_kw,
             "ceiling_power_kw": data.max_charge_power_kw,
-            "phase_bucket": data.phase_capability,
+            "phase_capability": data.phase_capability,
             "source": "learned" if data.learned_power_kw is not None else "ceiling",
         }
 
