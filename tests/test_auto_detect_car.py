@@ -136,6 +136,19 @@ class TestBatteryLevelSelection:
             classed.entity_id
         )
 
+    def test_wrong_device_class_outranks_a_matching_name(self):
+        """A classed non-battery sensor is not rescued by its name.
+
+        "..._battery_level_last_updated" is a timestamp; the integration said
+        so with device_class, and that outranks the keyword match.
+        """
+        stamp = FakeEntityEntry(
+            entity_id="sensor.enyaq_battery_level_last_updated",
+            domain="sensor",
+            original_device_class="timestamp",
+        )
+        assert "battery_level_entity" not in _run_match([stamp])
+
     def test_no_battery_key_when_device_has_none(self):
         """A device with no battery-ish sensor yields no battery suggestion."""
         other = FakeEntityEntry(entity_id="sensor.enyaq_odometer", domain="sensor")
@@ -262,6 +275,19 @@ class TestChargerConnectedAndLocation:
             entity_id="binary_sensor.enyaq_charger_connected", domain="binary_sensor"
         )
         assert _run_match([plug])["charger_connected_entity"] == plug.entity_id
+
+    def test_battery_charging_is_not_rescued_by_its_name(self):
+        """The keyword fallback must not re-open the class guard's hole.
+
+        A battery_charging sensor named "..._charger_connected" is still the
+        wrong signal -- naming does not change when it turns off.
+        """
+        charging = FakeEntityEntry(
+            entity_id="binary_sensor.enyaq_charger_connected",
+            domain="binary_sensor",
+            original_device_class="battery_charging",
+        )
+        assert "charger_connected_entity" not in _run_match([charging])
 
     def test_ignores_unrelated_binary_sensors(self):
         """A door sensor on the car device must not be taken for the cable."""

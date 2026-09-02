@@ -738,16 +738,24 @@ def match_car_entities(hass: HomeAssistant, device_id: str) -> dict[str, str]:
                 suggestions.setdefault(
                     CONF_BATTERY_LEVEL_ENTITY, entity_entry.entity_id
                 )
-            elif battery_by_keyword is None and any(
-                keyword in entity_id_lower or keyword in unique_id_lower
-                for keyword in (
-                    "battery_level",
-                    "state_of_charge",
-                    "battery_percentage",
-                    "charging_level",
+            elif (
+                device_class is None
+                and battery_by_keyword is None
+                and any(
+                    keyword in entity_id_lower or keyword in unique_id_lower
+                    for keyword in (
+                        "battery_level",
+                        "state_of_charge",
+                        "battery_percentage",
+                        "charging_level",
+                    )
                 )
             ):
                 # Template sensors and some integrations omit device_class.
+                # Only then does the name get a vote: a class that is set and
+                # is not "battery" is the integration telling us this is
+                # something else (a "..._battery_level_last_updated" timestamp,
+                # say), and it outranks the name.
                 battery_by_keyword = entity_entry.entity_id
 
         elif entity_entry.domain == "binary_sensor":
@@ -760,10 +768,22 @@ def match_car_entities(hass: HomeAssistant, device_id: str) -> dict[str, str]:
                 suggestions.setdefault(
                     CONF_CHARGER_CONNECTED_ENTITY, entity_entry.entity_id
                 )
-            elif charger_by_keyword is None and any(
-                keyword in entity_id_lower or keyword in unique_id_lower
-                for keyword in ("charger_connected", "plug_connected", "charge_cable")
+            elif (
+                device_class is None
+                and charger_by_keyword is None
+                and any(
+                    keyword in entity_id_lower or keyword in unique_id_lower
+                    for keyword in (
+                        "charger_connected",
+                        "plug_connected",
+                        "charge_cable",
+                    )
+                )
             ):
+                # Same rule as above, and here it is load-bearing: a
+                # "battery_charging" sensor named "..._charger_connected" would
+                # otherwise walk straight past the class guard into the pause
+                # deadlock it exists to prevent.
                 charger_by_keyword = entity_entry.entity_id
 
         elif entity_entry.domain == "device_tracker":
