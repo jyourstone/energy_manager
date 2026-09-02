@@ -116,6 +116,12 @@ class ChargerInputs:
         measured_worst_case_signed_amps: Signed worst-case phase current in
             amps (see ems_controller.worst_case_signed_amps) -- positive is
             import, negative is export.
+        measured_amps_is_fallback: True when the value above is not a
+            measurement but the configured assumed-load fallback (grid
+            sensors unavailable). The fuse layers still treat it as real
+            -- assuming load is the safe direction -- but _overload_alert()
+            stays silent, since a static assumption is not evidence that
+            anything is actually overloaded.
         current_dynamic_limit_amps: The charger's currently configured Easee
             dynamic limit in amps (added back so the charger's own draw
             never counts against its own headroom).
@@ -200,6 +206,7 @@ class ChargerInputs:
     battery_soc_gate_pct: float = 100.0
     soc_round_up: bool = True
     emergency_margin_amps: float = 2.0
+    measured_amps_is_fallback: bool = False
     amp_increase_delay_s: float = 120.0
     amp_decrease_delay_s: float = 5.0
     phase_sequence_step_timeout_s: float = 15.0
@@ -766,9 +773,17 @@ class ChargerController:
         drawing: the worst case -- house load alone above the fuse rating
         with the charger already paused -- is exactly the case Layer 1's
         is_drawing gate can never see.
+
+        A fallback reading never alerts: an assumed load configured at or
+        above fuse + margin would otherwise look like a permanent overload
+        and claim a phase current that was never measured. The grid-sensor
+        outage behind it already raises its own Repairs issue.
         """
         threshold = inputs.fuse_rating_amps + inputs.emergency_margin_amps
-        if inputs.measured_worst_case_signed_amps < threshold:
+        if (
+            inputs.measured_amps_is_fallback
+            or inputs.measured_worst_case_signed_amps < threshold
+        ):
             self._overload_since = None
             self._overload_alerted = False
             return ()
@@ -782,12 +797,14 @@ class ChargerController:
             return ()
         self._overload_alerted = True
         return (
-            "Överlast kvarstår: uppmätt fasström "
-            f"{inputs.measured_worst_case_signed_amps:.1f} A överskrider "
-            f"säkringsgränsen ({inputs.fuse_rating_amps:.0f} A + "
-            f"{inputs.emergency_margin_amps:.0f} A marginal) sedan "
-            f"{elapsed / 60:.0f} min. Lastbalanseringen räcker inte till – "
-            "minska övrig förbrukning.",
+            (
+                "Överlast kvarstår: uppmätt fasström "
+                f"{inputs.measured_worst_case_signed_amps:.1f} A överskrider "
+                f"säkringsgränsen ({inputs.fuse_rating_amps:.0f} A + "
+                f"{inputs.emergency_margin_amps:.0f} A marginal) sedan "
+                f"{elapsed / 60:.0f} min. Lastbalanseringen räcker inte till – "
+                "minska övrig förbrukning."
+            ),
         )
 
     def _decide(self, inputs: ChargerInputs) -> ChargerDecision:

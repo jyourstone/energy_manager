@@ -1943,6 +1943,17 @@ class FuseSensorReader:
                 self._mismatch_tracker.flagged = False
                 self._mismatch_tracker.mismatch_since_ts = None
 
+    @property
+    def sensor_fallback_active(self) -> bool:
+        """Whether the last read used the fail-behavior fallback.
+
+        Consumers use this to tell an assumed load apart from a measured
+        one -- the fuse math treats them identically (assuming load is the
+        safe direction), but a user-facing alert must not report an
+        assumption as a measurement.
+        """
+        return self._fallback_since is not None
+
     def _note_read_success(self) -> None:
         """Reset fallback tracking and clear the Repairs issue after a good read."""
         self._sensor_warned = False
@@ -3984,6 +3995,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             charger_status=charger_status,
             charger_power_kw=charger_power_kw,
             measured_worst_case_signed_amps=0.0 if sensor_blocked else l_current,
+            measured_amps_is_fallback=self._fuse_reader.sensor_fallback_active,
             current_dynamic_limit_amps=current_dynamic_limit_amps,
             force_charging=self._is_force_charging(),
             solar_surplus_kw=solar_surplus_kw,

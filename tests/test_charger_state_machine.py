@@ -1254,6 +1254,29 @@ class TestPersistentOverloadAlert:
         assert first.critical_notifications == ()
         assert len(alerting.critical_notifications) == 1
 
+    def test_fallback_reading_never_alerts(self):
+        """An assumed load at or above fuse+margin is not evidence of an
+        overload -- it is a static config value standing in for a dead
+        sensor, and would otherwise alert forever."""
+        controller = ChargerController()
+        controller.decide(self._overloaded(T0, measured_amps_is_fallback=True))
+        later = controller.decide(
+            self._overloaded(
+                T0 + timedelta(seconds=600), measured_amps_is_fallback=True
+            )
+        )
+        assert later.critical_notifications == ()
+
+    def test_clock_starts_fresh_when_the_sensors_recover(self):
+        """A fallback stretch must not count toward the delay -- the first
+        real reading starts the clock."""
+        controller = ChargerController()
+        controller.decide(self._overloaded(T0, measured_amps_is_fallback=True))
+        real = controller.decide(self._overloaded(T0 + timedelta(seconds=600)))
+        assert real.critical_notifications == ()
+        alerting = controller.decide(self._overloaded(T0 + timedelta(seconds=720)))
+        assert len(alerting.critical_notifications) == 1
+
     def test_alerts_even_when_the_car_is_disconnected(self):
         """Terminal status returns early from _decide() -- the alert is
         attached outside it, so it still fires."""
