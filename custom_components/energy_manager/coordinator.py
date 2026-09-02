@@ -1747,6 +1747,53 @@ def _read_net_house_consumption_kw(
     return house_consumption_kw - excluded_power_kw
 
 
+async def _dispatch_notifications(
+    hass,
+    notify_service: str,
+    prefix: str,
+    notifications: tuple[str, ...],
+    critical_notifications: tuple[str, ...],
+) -> None:
+    """Send safety notifications, one service call per message.
+
+    critical_notifications carry the mobile_app payload that breaks
+    through silent mode / Do Not Disturb: an unclearable fuse overload
+    needs a human now. The payload holds both the iOS
+    (push.sound.critical) and Android (channel/priority) keys -- each
+    platform ignores the other's. iOS also requires the companion app's
+    "Critical Alerts" permission to be granted, otherwise it degrades to a
+    normal notification.
+
+    Never raises. It runs in the `finally` of the command dispatch, so an
+    exception here would mask the very command failure the alert exists to
+    report -- and a notify backend that is down is not a reason to fail a
+    control tick.
+    """
+    if not (notifications or critical_notifications) or not notify_service:
+        return
+
+    domain, _, service = notify_service.partition(".")
+    if not domain or not service:
+        _LOGGER.warning(
+            "Invalid notify_service '%s' -- expected 'notify.<service>'",
+            notify_service,
+        )
+        return
+
+    payloads = [{"message": f"{prefix}{m}"} for m in notifications]
+    payloads += [
+        {"message": f"{prefix}{m}", "data": CRITICAL_NOTIFICATION_DATA}
+        for m in critical_notifications
+    ]
+    for payload in payloads:
+        try:
+            await hass.services.async_call(domain, service, payload, blocking=True)
+        except Exception:  # notify backends raise anything
+            _LOGGER.exception(
+                "Failed to send safety notification via %s", notify_service
+            )
+
+
 class FuseSensorReader:
     """Shared grid-current sensor read + fallback logic.
 
@@ -4042,10 +4089,18 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 ),
                 SOLAR_TRACKER_SAVE_DELAY_SECONDS,
             )
-        await self._execute_commands(decision.commands)
-        await self._send_notifications(
-            decision.notifications, decision.critical_notifications
-        )
+        try:
+            await self._execute_commands(decision.commands)
+        finally:
+            # Dispatched even when a command raised: an unreachable charger
+            # during a persistent overload is exactly when the alert matters
+            # most, and the controller's alert latch has already fired for
+            # this episode -- a skipped send is a lost alert, not a delayed
+            # one. _send_notifications() never raises, so the command
+            # failure still propagates untouched.
+            await self._send_notifications(
+                decision.notifications, decision.critical_notifications
+            )
 
         fuse_headroom_amps = (
             0.0
@@ -4258,43 +4313,17 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         conditions, e.g. a persistent fuse overload) -- prefixed with
         "[observe-only] " when device control is disabled (EASE-08).
 
-        critical_notifications additionally carry the mobile_app payload
-        that breaks through silent mode / Do Not Disturb: an unclearable
-        fuse overload needs a human now. The payload holds both the iOS
-        (push.sound.critical) and Android (channel/priority) keys -- each
-        platform ignores the other's. iOS also requires the companion app's
-        "Critical Alerts" permission to be granted, otherwise it degrades
-        to a normal notification.
+        Never raises; see _dispatch_notifications(), which holds the logic
+        so it is reachable from tests (EaseeCoordinator itself cannot be
+        instantiated under the HA stubs).
         """
-        if not (notifications or critical_notifications) or not self._notify_service:
-            return
-
-        domain, _, service = self._notify_service.partition(".")
-        if not domain or not service:
-            _LOGGER.warning(
-                "Invalid notify_service '%s' -- expected 'notify.<service>'",
-                self._notify_service,
-            )
-            return
-
-        prefix = "" if self._is_control_enabled() else "[observe-only] "
-        for message in notifications:
-            await self.hass.services.async_call(
-                domain,
-                service,
-                {"message": f"{prefix}{message}"},
-                blocking=True,
-            )
-        for message in critical_notifications:
-            await self.hass.services.async_call(
-                domain,
-                service,
-                {
-                    "message": f"{prefix}{message}",
-                    "data": CRITICAL_NOTIFICATION_DATA,
-                },
-                blocking=True,
-            )
+        await _dispatch_notifications(
+            self.hass,
+            self._notify_service,
+            "" if self._is_control_enabled() else "[observe-only] ",
+            notifications,
+            critical_notifications,
+        )
 
 
 @dataclass(frozen=True, slots=True)
