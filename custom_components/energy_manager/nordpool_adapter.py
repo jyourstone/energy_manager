@@ -221,6 +221,40 @@ def _get_hacs_prices(
     return raw_today, raw_tomorrow
 
 
+def _covers_local_tomorrow(slots: list[dict], now: datetime) -> bool:
+    """Whether ``slots`` run all the way to the end of the local tomorrow.
+
+    Nord Pool delivery days are CET, the planning window is local, and
+    ``split_by_local_day`` drops whatever falls outside. A cache holding CET
+    days up to today therefore leaves the local tomorrow bucket empty for a
+    CET user but one hour long for an EET one (Finland, Baltics) -- the last
+    CET hour of today is already their tomorrow. Testing emptiness would
+    read that single boundary hour as a full day and leave those users with
+    a 1-hour horizon, so coverage is measured against the local day's end.
+
+    Slots are assumed sorted, as both producers return them.
+    """
+    if not slots:
+        return False
+
+    end = slots[-1].get("end")
+    try:
+        end_dt = end if isinstance(end, datetime) else datetime.fromisoformat(end)
+    except (TypeError, ValueError):
+        return False
+
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=now.tzinfo)
+
+    # Wall-clock midnight that ends the local tomorrow, derived from the
+    # date rather than by adding 48h, so a DST shift in between cannot
+    # move it off the intended day.
+    end_of_tomorrow = datetime.combine(
+        now.date() + timedelta(days=2), datetime.min.time(), tzinfo=now.tzinfo
+    )
+    return end_dt.astimezone(now.tzinfo) >= end_of_tomorrow
+
+
 async def _async_get_native_prices(
     hass: HomeAssistant, entity_id: str
 ) -> tuple[list[dict], list[dict]]:
@@ -239,31 +273,36 @@ async def _async_get_native_prices(
 
     config_entry_id = entity_entry.config_entry_id
 
+    cached: tuple[list[dict], list[dict]] | None = None
+
     config_entry = hass.config_entries.async_get_entry(config_entry_id)
     if config_entry is not None:
         result = _get_native_coordinator_prices(config_entry)
         if result is not None:
             raw_today, raw_tomorrow = result
-            if not raw_tomorrow:
-                # The cache carries tomorrow only once the native
-                # coordinator's own refresh has picked it up, and answers
-                # "today complete, tomorrow empty" until then -- with no way
-                # to tell that apart from "not published yet". Taking it as
-                # final ends every planning window at local midnight, so a
-                # car with an 07:00 departure books the cheapest evening
-                # slots instead of the cheap night ones. Ask the service,
-                # which serves tomorrow as soon as Nord Pool publishes it.
-                now = dt_util.now()
-                fetched = await _async_fetch_native_date(
-                    hass, config_entry_id, now.date() + timedelta(days=1)
+            # The cache carries a delivery day only once the native
+            # coordinator's own refresh has picked it up, and answers
+            # "today complete, tomorrow short" until then -- with no way to
+            # tell that apart from "not published yet". Taking it as final
+            # ends the planning window early, so a car with an 07:00
+            # departure books the cheapest evening slots instead of the
+            # cheap night ones. Short horizon: use the service calls below,
+            # which serve tomorrow as soon as Nord Pool publishes it.
+            if _covers_local_tomorrow(raw_tomorrow, dt_util.now()):
+                _LOGGER.debug(
+                    "Read prices from native coordinator cache: today=%d, tomorrow=%d",
+                    len(raw_today),
+                    len(raw_tomorrow),
                 )
-                _, raw_tomorrow = split_by_local_day(fetched, now)
+                return raw_today, raw_tomorrow
+
+            cached = result
             _LOGGER.debug(
-                "Read prices from native coordinator cache: today=%d, tomorrow=%d",
-                len(raw_today),
+                "Native coordinator cache holds only %d slot(s) for tomorrow, "
+                "not reaching the end of the local day -- falling back to "
+                "service calls",
                 len(raw_tomorrow),
             )
-            return raw_today, raw_tomorrow
 
     _LOGGER.debug("Falling back to service calls for native Nord Pool prices")
     now = dt_util.now()
@@ -273,7 +312,20 @@ async def _async_get_native_prices(
     raw_today = await _async_fetch_native_date(hass, config_entry_id, today)
     raw_tomorrow = await _async_fetch_native_date(hass, config_entry_id, tomorrow)
 
-    return split_by_local_day(raw_today + raw_tomorrow, now)
+    fetched_today, fetched_tomorrow = split_by_local_day(
+        raw_today + raw_tomorrow, now
+    )
+
+    if not fetched_today and cached is not None:
+        # A short cache is still better than nothing: an empty today makes
+        # the price coordinator raise UpdateFailed, which takes every EM
+        # entity unavailable and stops the control loop. Reaching here means
+        # the service calls came up empty (transport error, or Nord Pool
+        # gapping), so keep what the coordinator had cached.
+        _LOGGER.debug("Service calls returned no prices -- keeping cached horizon")
+        return cached
+
+    return fetched_today, fetched_tomorrow
 
 
 def _get_native_coordinator_prices(
