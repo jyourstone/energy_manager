@@ -28,12 +28,23 @@ import pytest
 from custom_components.energy_manager.nordpool_adapter import (
     _async_fetch_native_date,
     _async_get_native_prices,
+    _covers_local_tomorrow,
     _get_native_coordinator_prices,
     split_by_local_day,
 )
 
 CET = timezone(timedelta(hours=1))
 EET = timezone(timedelta(hours=3))  # Finland/Baltics in summer, ahead of CEST
+
+
+def _native_slot(start: str, price_mwh: float, hours: int = 1) -> dict:
+    """One slot shaped like the native get_prices_for_date response."""
+    start_dt = datetime.fromisoformat(start)
+    return {
+        "start": start,
+        "end": (start_dt + timedelta(hours=hours)).isoformat(),
+        "price": price_mwh,
+    }
 
 
 def _entry(start: datetime, end: datetime, price_mwh: float) -> SimpleNamespace:
@@ -394,3 +405,165 @@ class TestAsyncGetNativePricesFallback:
         assert len(raw_today) == 24
         assert len(raw_tomorrow) == 24
         hass.services.async_call.assert_not_called()
+
+    def test_cache_short_of_tomorrow_falls_back_to_service_calls(self):
+        """A cache holding only today must not truncate the planning window.
+
+        The native coordinator carries a delivery day only once its own
+        refresh has picked it up, and until then answers with today complete
+        and tomorrow empty. Accepting that as final ends every schedule at
+        local midnight, so the service calls -- which do serve tomorrow --
+        run instead.
+        """
+        registry = MagicMock()
+        entity_entry = MagicMock()
+        entity_entry.config_entry_id = "entry_id"
+        registry.async_get.return_value = entity_entry
+
+        hass = MagicMock()
+        # Cache holds today only -- tomorrow has not landed in it yet.
+        config_entry = _config_entry(["SE4"], [_cet_day(12)])
+        hass.config_entries.async_get_entry.return_value = config_entry
+
+        hass.services.async_call = AsyncMock(
+            side_effect=[
+                {"SE4": [_native_slot("2026-03-12T00:00:00+01:00", 500.0)]},
+                {"SE4": [_native_slot("2026-03-13T00:00:00+01:00", 300.0)]},
+            ]
+        )
+
+        now = datetime(2026, 3, 12, 14, 0, tzinfo=CET)
+
+        with (
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.er.async_get",
+                return_value=registry,
+            ),
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.dt_util.now",
+                return_value=now,
+            ),
+        ):
+            raw_today, raw_tomorrow = asyncio.run(
+                _async_get_native_prices(hass, "sensor.nordpool_se4")
+            )
+
+        assert [c.args[2]["date"] for c in hass.services.async_call.await_args_list] == [
+            "2026-03-12",
+            "2026-03-13",
+        ]
+        assert len(raw_today) == 1
+        assert raw_today[0]["value"] == pytest.approx(0.5)
+        assert len(raw_tomorrow) == 1
+        assert raw_tomorrow[0]["value"] == pytest.approx(0.3)
+
+    def test_eet_boundary_hour_is_not_mistaken_for_a_full_tomorrow(self):
+        """One CET hour bucketed into local tomorrow is not a horizon.
+
+        For a user ahead of CET, today's last CET hours already belong to
+        their tomorrow, so a cache holding CET days up to today leaves the
+        tomorrow bucket a few hours long -- non-empty, but not a horizon.
+        Reading that as "tomorrow is present" would leave EET users
+        (Finland, Baltics) planning against those few hours alone.
+        """
+        registry = MagicMock()
+        entity_entry = MagicMock()
+        entity_entry.config_entry_id = "entry_id"
+        registry.async_get.return_value = entity_entry
+
+        hass = MagicMock()
+        config_entry = _config_entry(["SE4"], [_cet_day(11), _cet_day(12)])
+        hass.config_entries.async_get_entry.return_value = config_entry
+        hass.services.async_call = AsyncMock(
+            side_effect=[
+                {"SE4": [_native_slot("2026-03-12T00:00:00+01:00", 500.0)]},
+                {"SE4": [_native_slot("2026-03-13T00:00:00+01:00", 300.0)]},
+            ]
+        )
+
+        # EET is an hour ahead of CET: local tomorrow starts at 23:00 CET.
+        now = datetime(2026, 3, 12, 16, 0, tzinfo=EET)
+
+        with (
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.er.async_get",
+                return_value=registry,
+            ),
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.dt_util.now",
+                return_value=now,
+            ),
+        ):
+            # Precondition: the cache really does leave a sliver -- non-empty,
+            # so an emptiness test would pass it, but nowhere near a day.
+            cached = _get_native_coordinator_prices(config_entry)
+            assert cached is not None
+            assert 0 < len(cached[1]) < 24
+
+            asyncio.run(_async_get_native_prices(hass, "sensor.nordpool_se4"))
+
+        assert hass.services.async_call.await_count == 2
+
+    def test_empty_service_response_keeps_the_cached_horizon(self):
+        """Before publication the service has nothing -- the cache still stands.
+
+        An empty today makes the price coordinator raise UpdateFailed, which
+        takes every EM entity unavailable, so a short cache beats no cache.
+        """
+        registry = MagicMock()
+        entity_entry = MagicMock()
+        entity_entry.config_entry_id = "entry_id"
+        registry.async_get.return_value = entity_entry
+
+        hass = MagicMock()
+        config_entry = _config_entry(["SE4"], [_cet_day(12)])
+        hass.config_entries.async_get_entry.return_value = config_entry
+        hass.services.async_call = AsyncMock(return_value={})
+
+        now = datetime(2026, 3, 12, 9, 0, tzinfo=CET)
+
+        with (
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.er.async_get",
+                return_value=registry,
+            ),
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.dt_util.now",
+                return_value=now,
+            ),
+        ):
+            raw_today, raw_tomorrow = asyncio.run(
+                _async_get_native_prices(hass, "sensor.nordpool_se4")
+            )
+
+        assert len(raw_today) == 24
+        assert raw_tomorrow == []
+
+
+class TestCoversLocalTomorrow:
+    """The coverage test that decides whether the cached horizon is enough."""
+
+    @staticmethod
+    def _slots(*ends: str) -> list[dict]:
+        return [{"start": end, "end": end} for end in ends]
+
+    def test_empty_is_not_covered(self):
+        assert _covers_local_tomorrow([], datetime(2026, 3, 12, 14, 0, tzinfo=CET)) is False
+
+    def test_reaching_local_midnight_is_covered(self):
+        slots = self._slots("2026-03-14T00:00:00+01:00")
+        assert _covers_local_tomorrow(slots, datetime(2026, 3, 12, 14, 0, tzinfo=CET))
+
+    def test_one_hour_short_is_not_covered(self):
+        slots = self._slots("2026-03-13T23:00:00+01:00")
+        assert not _covers_local_tomorrow(slots, datetime(2026, 3, 12, 14, 0, tzinfo=CET))
+
+    def test_naive_end_is_read_as_local(self):
+        slots = self._slots("2026-03-14T00:00:00")
+        assert _covers_local_tomorrow(slots, datetime(2026, 3, 12, 14, 0, tzinfo=CET))
+
+    def test_malformed_end_is_not_covered(self):
+        assert not _covers_local_tomorrow(
+            [{"start": "x", "end": "not-a-date"}],
+            datetime(2026, 3, 12, 14, 0, tzinfo=CET),
+        )
