@@ -244,6 +244,20 @@ async def _async_get_native_prices(
         result = _get_native_coordinator_prices(config_entry)
         if result is not None:
             raw_today, raw_tomorrow = result
+            if not raw_tomorrow:
+                # The cache carries tomorrow only once the native
+                # coordinator's own refresh has picked it up, and answers
+                # "today complete, tomorrow empty" until then -- with no way
+                # to tell that apart from "not published yet". Taking it as
+                # final ends every planning window at local midnight, so a
+                # car with an 07:00 departure books the cheapest evening
+                # slots instead of the cheap night ones. Ask the service,
+                # which serves tomorrow as soon as Nord Pool publishes it.
+                now = dt_util.now()
+                fetched = await _async_fetch_native_date(
+                    hass, config_entry_id, now.date() + timedelta(days=1)
+                )
+                _, raw_tomorrow = split_by_local_day(fetched, now)
             _LOGGER.debug(
                 "Read prices from native coordinator cache: today=%d, tomorrow=%d",
                 len(raw_today),

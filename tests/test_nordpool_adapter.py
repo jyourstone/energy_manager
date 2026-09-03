@@ -394,3 +394,87 @@ class TestAsyncGetNativePricesFallback:
         assert len(raw_today) == 24
         assert len(raw_tomorrow) == 24
         hass.services.async_call.assert_not_called()
+
+    def test_cache_without_tomorrow_fetches_tomorrow_from_service(self):
+        """A cache holding only today must not truncate the planning window.
+
+        The native coordinator caches tomorrow only once its own refresh picks
+        it up; until then it answers with today complete and tomorrow silently
+        empty. Accepting that as final ends every schedule at local midnight,
+        so tomorrow is fetched from the service that does have it.
+        """
+        registry = MagicMock()
+        entity_entry = MagicMock()
+        entity_entry.config_entry_id = "entry_id"
+        registry.async_get.return_value = entity_entry
+
+        hass = MagicMock()
+        # Cache holds today only -- tomorrow has not landed in it yet.
+        config_entry = _config_entry(["SE4"], [_cet_day(12)])
+        hass.config_entries.async_get_entry.return_value = config_entry
+
+        tomorrow_response = {
+            "SE4": [
+                {
+                    "start": "2026-03-13T00:00:00+01:00",
+                    "end": "2026-03-13T01:00:00+01:00",
+                    "price": 300.0,
+                },
+            ]
+        }
+        hass.services.async_call = AsyncMock(return_value=tomorrow_response)
+
+        now = datetime(2026, 3, 12, 14, 0, tzinfo=CET)
+
+        with (
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.er.async_get",
+                return_value=registry,
+            ),
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.dt_util.now",
+                return_value=now,
+            ),
+        ):
+            raw_today, raw_tomorrow = asyncio.run(
+                _async_get_native_prices(hass, "sensor.nordpool_se4")
+            )
+
+        # Today still comes from the cache, not from a second service call.
+        assert len(raw_today) == 24
+        assert hass.services.async_call.await_count == 1
+        assert hass.services.async_call.await_args.args[2]["date"] == "2026-03-13"
+
+        assert len(raw_tomorrow) == 1
+        assert raw_tomorrow[0]["value"] == pytest.approx(0.3)
+
+    def test_cache_without_tomorrow_survives_an_empty_service_response(self):
+        """Before publication the service has nothing -- tomorrow stays empty."""
+        registry = MagicMock()
+        entity_entry = MagicMock()
+        entity_entry.config_entry_id = "entry_id"
+        registry.async_get.return_value = entity_entry
+
+        hass = MagicMock()
+        config_entry = _config_entry(["SE4"], [_cet_day(12)])
+        hass.config_entries.async_get_entry.return_value = config_entry
+        hass.services.async_call = AsyncMock(return_value={})
+
+        now = datetime(2026, 3, 12, 9, 0, tzinfo=CET)
+
+        with (
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.er.async_get",
+                return_value=registry,
+            ),
+            patch(
+                "custom_components.energy_manager.nordpool_adapter.dt_util.now",
+                return_value=now,
+            ),
+        ):
+            raw_today, raw_tomorrow = asyncio.run(
+                _async_get_native_prices(hass, "sensor.nordpool_se4")
+            )
+
+        assert len(raw_today) == 24
+        assert raw_tomorrow == []
