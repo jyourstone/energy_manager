@@ -232,6 +232,15 @@ def _covers_local_tomorrow(slots: list[dict], now: datetime) -> bool:
     read that single boundary hour as a full day and leave those users with
     a 1-hour horizon, so coverage is measured against the local day's end.
 
+    Zones *behind* CET are the one case this cannot satisfy: their local
+    tomorrow ends inside the CET day after tomorrow, which Nord Pool has
+    not published yet (D+1 is the last day that exists). They come up one
+    slot short at that edge -- the tradeoff split_by_local_day already
+    documents -- and keep taking the service-call path on every refresh,
+    which is what v0.18.0 did unconditionally. Fixable only by carrying a
+    partial horizon over from the previous day's fetch; not worth it until
+    someone actually runs EM west of CET.
+
     Slots are assumed sorted, as both producers return them.
     """
     if not slots:
