@@ -23,7 +23,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.energy_manager.charger_state_machine import ChargerCommand
+from custom_components.energy_manager.charger_state_machine import (
+    ChargerCommand,
+    ChargerController,
+)
 from custom_components.energy_manager.coordinator import (
     EASEE_PHASE_MODE_MAP,
     FuseSensorReader,
@@ -37,6 +40,8 @@ from custom_components.energy_manager.coordinator import (
     _read_power_kw,
     build_easee_service_call,
 )
+from custom_components.energy_manager.ems_controller import build_command_decision
+from tests.test_charger_state_machine import _inputs
 
 # ---------------------------------------------------------------------------
 # build_easee_service_call()
@@ -193,6 +198,78 @@ def test_read_control_enabled_true() -> None:
 def test_read_control_enabled_runtime_data_missing_attr_defaults_false() -> None:
     entry = SimpleNamespace(runtime_data=SimpleNamespace())
     assert _read_control_enabled(entry) is False
+
+
+# ---------------------------------------------------------------------------
+# CORE-14 restart-safety chain: the suspected "restart briefly stops an
+# in-progress charge" bug. On EaseeCoordinator's first refresh, runtime_data
+# is unassigned, so _build_car_demands() returns () and the idle branch
+# (charger_state_machine.py, mode == "idle") emits set_dynamic_limit 0.0 +
+# stop for a car that is actually still drawing. These tests pin that the
+# bug is benign: every outgoing command passes through
+# build_command_decision(control_enabled=_read_control_enabled(entry), ...)
+# before it reaches the charger, and control_enabled reads False (observe-
+# only) exactly while runtime_data is unset. If a future refactor moves
+# control_enabled off runtime_data (or defaults it to True), these are the
+# tests that fail first.
+# ---------------------------------------------------------------------------
+
+
+def test_idle_branch_emits_stop_and_zero_limit_when_cars_empty_but_drawing() -> None:
+    """Empty car snapshot + a charger still drawing hits the idle-suppress
+    branch and really does emit set_dynamic_limit 0.0 + stop -- confirming
+    the first half of the suspected restart bug is real."""
+    controller = ChargerController()
+    inputs = _inputs(cars=(), charger_status="charging")
+    decision = controller.decide(inputs)
+    assert decision.mode == "idle"
+    assert decision.commands == (
+        ChargerCommand("set_dynamic_limit", 0.0),
+        ChargerCommand("stop"),
+    )
+
+
+def test_idle_suppress_commands_blocked_when_runtime_data_unset() -> None:
+    """The exact commands the idle branch emits during the restart window
+    (no runtime_data yet) are suppressed at the CORE-14 choke point --
+    the second half of the chain that makes the suspected bug benign."""
+    entry = SimpleNamespace()
+    control_enabled = _read_control_enabled(entry)
+    assert control_enabled is False
+    for command in (
+        ChargerCommand("set_dynamic_limit", 0.0),
+        ChargerCommand("stop"),
+    ):
+        decision = build_command_decision(
+            control_enabled=control_enabled,
+            service_domain="easee",
+            service_name="action_command",
+            entity_id="dev1",
+            value=command.value if command.value is not None else command.action,
+        )
+        assert decision.should_send is False
+
+
+def test_idle_suppress_commands_sent_once_runtime_data_control_enabled() -> None:
+    """Negative control for the two tests above: once runtime_data exists
+    with control_enabled True (post-startup, switch restored on), the same
+    commands ARE sent -- proving the prior test pins real suppression, not
+    a broken import or a always-False build_command_decision."""
+    entry = SimpleNamespace(runtime_data=SimpleNamespace(control_enabled=True))
+    control_enabled = _read_control_enabled(entry)
+    assert control_enabled is True
+    for command in (
+        ChargerCommand("set_dynamic_limit", 0.0),
+        ChargerCommand("stop"),
+    ):
+        decision = build_command_decision(
+            control_enabled=control_enabled,
+            service_domain="easee",
+            service_name="action_command",
+            entity_id="dev1",
+            value=command.value if command.value is not None else command.action,
+        )
+        assert decision.should_send is True
 
 
 def test_read_force_charging_no_runtime_data_defaults_false() -> None:

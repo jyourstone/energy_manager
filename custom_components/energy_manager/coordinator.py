@@ -134,6 +134,7 @@ from .const import (
     CONF_HOUSE_CONSUMPTION_ENTITY,
     CONF_LOCATION_ENTITY,
     CONF_MAX_CHARGE_AMPS,
+    CONF_MAX_CHARGE_POWER,
     CONF_MAX_ESS_CHARGE_AMPS,
     CONF_MAX_GRID_CHARGE_POWER_KW,
     CONF_MIN_CHARGE_AMPS,
@@ -863,7 +864,15 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
         self._price_coordinator = price_coordinator
 
         # Mutable thresholds -- updated by NumberEntity instances after setup
-        self.charge_threshold: float = DEFAULT_CHARGE_THRESHOLD
+        # Restore-seeded (see _restored_number): this one governs the FIRST
+        # battery charge decision of every restart, so leaving it on the
+        # constant plans that first schedule at 0.50 instead of the user's
+        # stored value.
+        self.charge_threshold: float = _restored_number(
+            hass,
+            f"{entry.entry_id}_charge_price_threshold",
+            DEFAULT_CHARGE_THRESHOLD,
+        )
         # Restore-seeded (see _restored_number): this one is the LIVE
         # threshold whenever battery_cycle_cost is 0, which is the shipped
         # default, so leaving it on the constant plans the first schedule
@@ -873,11 +882,17 @@ class BatteryScheduleCoordinator(DataUpdateCoordinator[BatteryScheduleData]):
             f"{entry.entry_id}_discharge_price_threshold",
             DEFAULT_DISCHARGE_THRESHOLD,
         )
-        # NOT restore-seeded, deliberately: the entity stores kW and writes
-        # WATTS here (number.py:347 multiplies by 1000), so a seed added
-        # later must be _restored_number(...) * 1000 or it caps battery
-        # charging at ~11 W.
-        self.max_charge_power_w: float = DEFAULT_MAX_CHARGE_POWER_KW * 1000
+        # Restore-seeded (see _restored_number): the entity stores kW and
+        # writes WATTS here (number.py:347 multiplies by 1000), so the seed
+        # must be _restored_number(...) * 1000 or it caps battery charging
+        # at ~11 W.
+        self.max_charge_power_w: float = _restored_number(
+            hass,
+            f"{entry.entry_id}_max_charge_power",
+            float(
+                entry.options.get(CONF_MAX_CHARGE_POWER, DEFAULT_MAX_CHARGE_POWER_KW)
+            ),
+        ) * 1000
         # BATT-17 export arbitrage -- number entities like their sibling
         # knobs; 0 = feature off
         self.export_spike_threshold: float = 0.0
@@ -3496,10 +3511,16 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
 
         # Mutable attributes -- updated by entity instances after setup.
         self.departure_time: time = time(7, 0)  # Default 07:00
-        # NOT restore-seeded, deliberately: the entity rounds before
-        # assigning (number.py:562), so a seed added later must round too or
-        # it disagrees with what the entity restores a moment afterwards.
-        self.target_soc: float = DEFAULT_TARGET_SOC_PCT
+        # Restore-seeded (see _restored_number): the entity rounds before
+        # assigning (number.py:562), so this seed is wrapped in round() too,
+        # mirroring the entity so seed and entity agree.
+        self.target_soc: float = round(
+            _restored_number(
+                hass,
+                f"{subentry.subentry_id}_target_soc",
+                DEFAULT_TARGET_SOC_PCT,
+            )
+        )
         # max_charge_power_kw is not only the planning seed -- it is also
         # the LIVE amp ceiling (CarChargingData.max_charge_power_kw ->
         # CarDemand.max_charge_kw -> compute_charger_capacity_amps), and

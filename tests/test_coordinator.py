@@ -52,7 +52,12 @@ from custom_components.energy_manager import coordinator as coordinator_module
 from custom_components.energy_manager.battery_scheduler import (
     compute_effective_discharge_threshold,
 )
-from custom_components.energy_manager.const import FALLBACK_STALE_THRESHOLD_MINUTES
+from custom_components.energy_manager.const import (
+    DEFAULT_CHARGE_THRESHOLD,
+    DEFAULT_MAX_CHARGE_POWER_KW,
+    DEFAULT_TARGET_SOC_PCT,
+    FALLBACK_STALE_THRESHOLD_MINUTES,
+)
 from custom_components.energy_manager.coordinator import (
     CarChargingData,
     EMSData,
@@ -1143,9 +1148,15 @@ class TestSymptomBCarCeilingSeed:
         return init.group(0)
 
     def test_the_ceiling_seeds_from_the_stored_value(self) -> None:
+        """The ceiling seeds from the stored value. target_soc seeds too:
+        the entity rounds before assigning (number.py:562), so its seed
+        wraps the same _restored_number call in round() -- a naive
+        "= _restored_number(" count would stay 1 and miss it, so this
+        counts the bare call instead."""
         init_source = self._init_source()
         assert 'f"{subentry.subentry_id}_max_charge_power"' in init_source
-        assert init_source.count("= _restored_number(") == 1
+        assert 'f"{subentry.subentry_id}_target_soc"' in init_source
+        assert init_source.count("_restored_number(") == 2
 
     def test_the_phase_derivation_survives_as_the_fallback(self) -> None:
         """A NEWLY created car has nothing stored, and the just-landed
@@ -1188,9 +1199,105 @@ class TestSeedUniqueIdsMatchTheEntities:
             'f"{entry.entry_id}_electricity_company_fee"',
             'f"{entry.entry_id}_discharge_price_threshold"',
             'f"{subentry.subentry_id}_max_charge_power"',
+            'f"{entry.entry_id}_charge_price_threshold"',
+            'f"{entry.entry_id}_max_charge_power"',
+            'f"{subentry.subentry_id}_target_soc"',
         ):
             assert unique_id in coordinator_source, f"{unique_id} not seeded"
             assert unique_id in number_source, (
                 f"{unique_id} no longer matches any number entity -- "
                 "the seed silently misses and the flap returns"
             )
+
+
+class TestTheThreeNewlySeededAttributes:
+    """Behaviour tests for charge_threshold, max_charge_power_w, and
+    target_soc -- the three attributes newly seeded alongside the four
+    covered by TestRestoredNumber/TestSymptomA/TestSymptomB.
+
+    BatteryScheduleCoordinator and CarChargingCoordinator cannot be
+    instantiated under the HA stubs (see the module docstring), so these
+    exercise _restored_number directly via the file's _seed helper,
+    composed exactly the way each constructor composes it
+    (`_seed(...) * 1000` for the watts conversion, `round(_seed(...))` for
+    the SOC rounding) -- not full coordinator construction.
+    """
+
+    def test_charge_threshold_seed_returns_the_stored_value(self) -> None:
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=0.65))
+        hass, registry, store = _hass_with_stored_number(
+            "number.charge_threshold", stored
+        )
+        seeded = _seed(
+            registry,
+            store,
+            hass,
+            unique_id="entry1_charge_price_threshold",
+            default=DEFAULT_CHARGE_THRESHOLD,
+        )
+        assert seeded == 0.65
+        assert seeded != DEFAULT_CHARGE_THRESHOLD
+
+    def test_max_charge_power_w_seed_converts_stored_kw_to_watts(self) -> None:
+        """The unit trap: the entity stores kW, but max_charge_power_w is
+        WATTS (number.py:347 multiplies by 1000). A stored 7.4 kW must
+        become 7400.0 W here, not 7.4 -- the ~11 W cap this change exists
+        to fix."""
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=7.4))
+        hass, registry, store = _hass_with_stored_number(
+            "number.max_charge_power", stored
+        )
+        seeded_w = (
+            _seed(
+                registry,
+                store,
+                hass,
+                unique_id="entry1_max_charge_power",
+                default=DEFAULT_MAX_CHARGE_POWER_KW,
+            )
+            * 1000
+        )
+        assert seeded_w == 7400.0
+
+    def test_the_watts_conversion_survives_in_the_constructor(self) -> None:
+        """The composed assertion above is self-fulfilling -- it multiplies
+        by 1000 itself, so it stays green even if the constructor stops
+        doing so. This one reads the production source: the seed for
+        max_charge_power_w must still carry its * 1000, or the battery is
+        capped at ~11 W on the first refresh of every restart."""
+        init_source = TestSymptomADischargeThresholdSeed._init_source()
+        seed_start = init_source.index('f"{entry.entry_id}_max_charge_power"')
+        tail = init_source[seed_start : seed_start + 400]
+        assert "* 1000" in tail, (
+            "max_charge_power_w seeds kW into a WATTS attribute -- the "
+            "* 1000 is the conversion, not decoration"
+        )
+
+    def test_the_rounding_survives_in_the_constructor(self) -> None:
+        """Same trap as the watts conversion: round() applied in the test
+        proves nothing about the constructor. The entity rounds before
+        assigning (number.py:562), so the seed must round too or the two
+        disagree the moment the entity restores."""
+        init_source = TestSymptomBCarCeilingSeed._init_source()
+        seed_start = init_source.index("self.target_soc")
+        tail = init_source[seed_start : seed_start + 300]
+        assert "round(" in tail, "the target_soc seed must mirror the entity's round()"
+
+    def test_target_soc_seed_rounds_like_the_entity(self) -> None:
+        """The entity rounds before assigning (number.py:562), so a stored
+        80.4 must seed 80 here too, matching what the entity itself would
+        assign a moment afterwards."""
+        stored = SimpleNamespace(extra_data=_NumberExtraStoredData(native_value=80.4))
+        hass, registry, store = _hass_with_stored_number(
+            "number.target_soc", stored
+        )
+        seeded = round(
+            _seed(
+                registry,
+                store,
+                hass,
+                unique_id="sub1_target_soc",
+                default=DEFAULT_TARGET_SOC_PCT,
+            )
+        )
+        assert seeded == 80
