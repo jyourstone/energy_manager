@@ -18,11 +18,15 @@ EMSCoordinator themselves. Covers:
 from __future__ import annotations
 
 import asyncio
+import inspect
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.energy_manager import coordinator as coordinator_module
 from custom_components.energy_manager.charger_state_machine import (
     ChargerCommand,
     ChargerController,
@@ -248,6 +252,45 @@ def test_idle_suppress_commands_blocked_when_runtime_data_unset() -> None:
             value=command.value if command.value is not None else command.action,
         )
         assert decision.should_send is False
+
+
+def test_execute_one_command_actually_routes_through_the_choke_point() -> None:
+    """The two tests above compose the gate themselves, so they would stay
+    green if EaseeCoordinator._execute_one_command stopped consulting it --
+    the same self-fulfilling trap that hid a broken guard elsewhere in this
+    change. This one reads the production source.
+
+    It has to. EaseeCoordinator cannot be exercised behaviourally under the
+    HA stubs: DataUpdateCoordinator is patched to a MagicMock, so the class
+    statement produces a MagicMock *instance* rather than a type --
+    `isinstance(EaseeCoordinator, type)` is False, and even
+    `object.__new__(EaseeCoordinator)` raises TypeError. Driving
+    _async_update_data() -> _execute_commands() -> _execute_one_command()
+    is therefore not available here; asserting on the source is.
+
+    Pinned: the decision is built from self._is_control_enabled(), and the
+    outgoing hass.services.async_call sits AFTER the should_send early
+    return, so an observe-only tick cannot reach the charger.
+    """
+    source_path = Path(inspect.getsourcefile(coordinator_module))
+    text = source_path.read_text()
+    body = re.search(
+        r"\n    async def _execute_one_command\(.*?(?=\n    async def \w|\n    def \w|\Z)",
+        text,
+        re.DOTALL,
+    )
+    assert body is not None, "_execute_one_command not found"
+    body_text = body.group(0)
+
+    assert "control_enabled=self._is_control_enabled()" in body_text, (
+        "the choke point must read the live switch state, not a constant"
+    )
+    gate = body_text.index("if not decision.should_send:")
+    send = body_text.index("hass.services.async_call")
+    assert gate < send, (
+        "the suppression check must precede the service call -- otherwise "
+        "an observe-only tick reaches the charger"
+    )
 
 
 def test_idle_suppress_commands_sent_once_runtime_data_control_enabled() -> None:
