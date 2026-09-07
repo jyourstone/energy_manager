@@ -526,6 +526,7 @@ class ForecastAccuracySensor(EnergyManagerEntity, SensorEntity):
     _attr_translation_key = "forecast_accuracy"
     _attr_icon = "mdi:chart-line"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 2
 
     def __init__(
