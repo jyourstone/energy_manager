@@ -581,6 +581,7 @@ class EffectiveDischargeThresholdSensor(PriceUnitEntity, EnergyManagerEntity, Se
     """
 
     _attr_translation_key = "battery_effective_discharge_threshold"
+    _attr_device_class = SensorDeviceClass.MONETARY
     _attr_icon = "mdi:battery-arrow-down-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_suggested_display_precision = 2
