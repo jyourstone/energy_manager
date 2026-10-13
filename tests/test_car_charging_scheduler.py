@@ -1181,6 +1181,10 @@ def _t(day: int, hour: int, minute: int) -> datetime:
     return datetime(2026, 2, day, hour, minute, tzinfo=UTC)
 
 
+# Plugged in the evening before every departure in these tests.
+PLUGGED = datetime(2026, 1, 1, 22, 0, tzinfo=UTC)
+
+
 @pytest.mark.parametrize(
     ("now", "departure", "below_target", "expected"),
     [
@@ -1197,7 +1201,24 @@ def _t(day: int, hour: int, minute: int) -> datetime:
 def test_resolve_departure(now, departure, below_target, expected):
     """The deadline must not roll to tomorrow the instant it passes while the
     car is still short -- that is what stopped a car charging at 13:00."""
-    assert resolve_departure(now, departure, GRACE, below_target) == expected
+    assert resolve_departure(now, departure, GRACE, below_target, PLUGGED) == expected
+
+
+@pytest.mark.parametrize(
+    ("plugged_since", "overdue"),
+    [
+        pytest.param(_t(15, 13, 0), True, id="plugged-at-departure"),
+        pytest.param(_t(15, 13, 1), False, id="replugged-after-departure"),
+        pytest.param(None, False, id="unplugged-or-unknown"),
+    ],
+)
+def test_resolve_departure_grace_needs_car_plugged_since_departure(
+    plugged_since, overdue
+):
+    """A car that left around departure and came back within the grace
+    window must not charge price-blind."""
+    _, is_overdue = resolve_departure(_t(15, 13, 30), DEP_13, GRACE, True, plugged_since)
+    assert is_overdue is overdue
 
 
 def test_resolve_departure_grace_is_elapsed_time_across_dst():
@@ -1206,7 +1227,7 @@ def test_resolve_departure_grace_is_elapsed_time_across_dst():
     until 01:30 + 60 min real time = 03:30 CEST."""
     sthlm = ZoneInfo("Europe/Stockholm")
     now = datetime(2026, 3, 29, 3, 5, tzinfo=sthlm)
-    deadline, overdue = resolve_departure(now, time(1, 30), GRACE, True)
+    deadline, overdue = resolve_departure(now, time(1, 30), GRACE, True, PLUGGED)
     assert overdue
     assert deadline == datetime(2026, 3, 29, 3, 30, tzinfo=sthlm)
 
@@ -1224,7 +1245,7 @@ def test_resolve_departure_grace_is_elapsed_time_across_dst_fall_back(fold, over
     02:30 is inside it, the repeated one is not."""
     sthlm = ZoneInfo("Europe/Stockholm")
     now = datetime(2026, 10, 25, 2, 30, fold=fold, tzinfo=sthlm)
-    deadline, is_overdue = resolve_departure(now, time(2, 0), GRACE, True)
+    deadline, is_overdue = resolve_departure(now, time(2, 0), GRACE, True, PLUGGED)
     assert is_overdue is overdue
     if overdue:
         assert deadline.astimezone(UTC) == datetime(2026, 10, 25, 1, 0, tzinfo=UTC)

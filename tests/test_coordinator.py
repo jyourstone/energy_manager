@@ -797,6 +797,19 @@ class TestCarDepartureGraceWiring:
             "resolve_departure("
         )
         assert "overdue=overdue" in flat
+        assert "plugged_since=self._plugged_since" in flat
+
+    def test_plugged_streak_resets_whenever_car_is_away(self) -> None:
+        """The grace gate is only as good as the reset: a car seen away or
+        unplugged must lose its streak, and the streak must be updated
+        BEFORE the deadline is resolved."""
+        flat = " ".join(TestCarPlannerUsesLearnedPower._class_source().split())
+        reset = (
+            "if not home_and_plugged: self._plugged_since = None"
+            " elif self._plugged_since is None: self._plugged_since = dt_util.utcnow()"
+        )
+        assert reset in flat
+        assert flat.index(reset) < flat.index("resolve_departure(")
 
 
 class TestThroughputSamplingSkipsBlindTicks:

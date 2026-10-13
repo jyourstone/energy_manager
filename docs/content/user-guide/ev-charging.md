@@ -6,7 +6,7 @@ Energy Manager builds a price-optimized charging schedule for each car you add, 
 
 Each car gets its own schedule: the cheapest available hours between now and its departure time that deliver enough energy to reach its **Grid charging target** SOC, given its battery capacity and the charge power it actually achieves (see [Measured Charge Power](#measured-charge-power)). The scheduler is duration-aware (it works whether Nordpool is publishing hourly or 15-minute slots) and always includes the slot in progress, so a schedule computed mid-hour still drives the charger correctly.
 
-If the departure time arrives and the car is still below its target (the real charge power fell a little short of the plan), it does not stop and wait for tomorrow: for up to **one hour** after departure it keeps charging regardless of price until the target is reached. A departure of 13:00 therefore charges at most until 13:59. This only applies when the car reports its SOC.
+If the departure time arrives and the car is still below its target (the real charge power fell a little short of the plan), it does not stop and wait for tomorrow: for up to **one hour** after departure it keeps charging regardless of price until the target is reached. A departure of 13:00 therefore charges at most until 13:59. This only applies when the car reports its SOC and has stayed plugged in since before the departure time — a car that was unplugged and comes back within the hour charges by the normal price schedule.
 
 On top of the price schedule, **solar-surplus charging** can divert live PV surplus to the car outside its scheduled hours, up to its separate **Solar charging target** ceiling:
 

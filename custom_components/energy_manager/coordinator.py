@@ -3563,6 +3563,10 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # SOC staleness tracking for fallback detection
         self._soc_last_updated: datetime | None = None
 
+        # Start of the current home-and-plugged-in streak, as seen by
+        # refreshes; gates the departure grace (see resolve_departure).
+        self._plugged_since: datetime | None = None
+
     async def _async_setup(self) -> None:
         """Register listeners for coordinator chaining and SOC state changes.
 
@@ -3622,6 +3626,15 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # staleness timestamp it reads)
         fallback_mode = self._detect_fallback_needed()
 
+        # 2c. Track the plugged-in streak. Any refresh that sees the car away
+        # or unplugged resets it, so a car that drove off and came back never
+        # gets the departure grace. Fail-safe: a restart also resets it.
+        home_and_plugged = self._is_home_and_plugged_in()
+        if not home_and_plugged:
+            self._plugged_since = None
+        elif self._plugged_since is None:
+            self._plugged_since = dt_util.utcnow()
+
         # 3. Convert departure_time (local time-of-day) to UTC datetime.
         # Only this car's known SOC can hold the deadline open past
         # departure -- never the assumed 50%, and never in fallback mode,
@@ -3635,6 +3648,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
                 and current_soc is not None
                 and current_soc < self.target_soc
             ),
+            plugged_since=self._plugged_since,
         )
         departure_utc = dt_util.as_utc(deadline)
 
@@ -3688,7 +3702,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc=current_soc,
             target_soc=self.target_soc,
             last_calculated=dt_util.utcnow(),
-            home_and_plugged=self._is_home_and_plugged_in(),
+            home_and_plugged=home_and_plugged,
             phase_capability=self._phase_capability,
             # Deliberately NOT planning_kw -- this field is the live amp
             # ceiling (see the CarChargingData docstring). Pointing it at the

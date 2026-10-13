@@ -232,6 +232,7 @@ def resolve_departure(
     departure: time,
     grace: timedelta,
     below_target: bool,
+    plugged_since: datetime | None,
 ) -> tuple[datetime, bool]:
     """Resolve the local charging deadline for a daily departure time-of-day.
 
@@ -241,6 +242,11 @@ def resolve_departure(
     deadline rolls to tomorrow the instant it passes, the window suddenly
     holds a day of cheaper slots, and a car the plan left a few % short
     (e.g. charge power overestimated) stops charging at the deadline.
+
+    Grace applies only to a car plugged in continuously since at or before
+    that departure (`plugged_since`, None when unknown or unplugged). A car
+    unplugged around departure has left; if it returns within the grace
+    window it must not charge price-blind.
 
     Returns:
         (deadline in now_local's timezone, overdue flag).
@@ -258,8 +264,14 @@ def resolve_departure(
     previous = (
         today if today.astimezone(timezone.utc) <= now_utc else today - timedelta(days=1)
     )
-    grace_end = previous.astimezone(timezone.utc) + grace
-    if below_target and now_utc < grace_end:
+    previous_utc = previous.astimezone(timezone.utc)
+    grace_end = previous_utc + grace
+    if (
+        below_target
+        and plugged_since is not None
+        and plugged_since <= previous_utc
+        and now_utc < grace_end
+    ):
         return grace_end.astimezone(now_local.tzinfo), True
     return previous + timedelta(days=1), False
 
