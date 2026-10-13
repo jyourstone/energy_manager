@@ -771,6 +771,47 @@ class TestCarPlannerUsesLearnedPower:
         assert "planning_power_kw=planning_kw" in after_data
 
 
+class TestCarDepartureGraceWiring:
+    """The grace window must reach the scheduler, and only for a KNOWN SOC
+    outside fallback mode.
+
+    Text guard for the same reason as TestCarPlannerUsesLearnedPower
+    (whitespace-normalised so a reformat doesn't break it). Unknown SOC is
+    assumed 50% for slot sizing, and in fallback mode the SOC is a stale
+    reading of an absent car; letting either hold the deadline open would
+    shrink the plan to the grace window on a guess.
+    """
+
+    def test_overdue_flag_reaches_scheduler_from_known_soc_only(self) -> None:
+        before_data, sep, _ = TestCarPlannerUsesLearnedPower._class_source().partition(
+            "return CarChargingData("
+        )
+        assert sep, "CarChargingData construction not found -- guard is blind"
+        flat = " ".join(before_data.split())
+        assert (
+            "below_target=( not fallback_mode and current_soc is not None"
+            " and current_soc < self.target_soc )" in flat
+        )
+        # fallback_mode must be known before the deadline is resolved
+        assert flat.index("fallback_mode = self._detect_fallback_needed()") < flat.index(
+            "resolve_departure("
+        )
+        assert "overdue=overdue" in flat
+        assert "plugged_since=self._plugged_since" in flat
+
+    def test_plugged_streak_resets_whenever_car_is_away(self) -> None:
+        """The grace gate is only as good as the reset: a car seen away or
+        unplugged must lose its streak, and the streak must be updated
+        BEFORE the deadline is resolved."""
+        flat = " ".join(TestCarPlannerUsesLearnedPower._class_source().split())
+        reset = (
+            "if not home_and_plugged: self._plugged_since = None"
+            " elif self._plugged_since is None: self._plugged_since = dt_util.utcnow()"
+        )
+        assert reset in flat
+        assert flat.index(reset) < flat.index("resolve_departure(")
+
+
 class TestThroughputSamplingSkipsBlindTicks:
     """A tick EM cannot attribute for a STRUCTURAL reason must not be fed in.
 

@@ -18,15 +18,18 @@ Algorithm overview:
     5. Select cheapest slots, accumulating each slot's deliverable energy
        (slot_duration_hours * max_charge_power_kw), until energy_needed_kwh
        is met -- duration-aware so it works for 15-min, 30-min, hourly, or
-       mixed-duration slot lists
+       mixed-duration slot lists. Fallback mode targets half the window's
+       deliverable energy; overdue mode (departure just passed, car still
+       short -- see resolve_departure) selects every slot regardless of price
     6. Build chronological schedule with "charge", "idle", or "solar_charge" actions
     7. Derive current_action from which slot contains 'now'
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -102,6 +105,7 @@ def build_car_charging_schedule(
     fallback_mode: bool = False,
     is_preliminary: bool = False,
     solar_surplus_available: bool = False,
+    overdue: bool = False,
 ) -> CarScheduleResult:
     """Build a price-optimized charging schedule for one car.
 
@@ -121,6 +125,9 @@ def build_car_charging_schedule(
             data (tomorrow's prices not yet available).
         solar_surplus_available: If True, mark charge slots as "solar_charge"
             instead of "charge" (flag pass-through for Phase 5 PV surplus).
+        overdue: If True, departure has passed with the car still short of
+            target (see resolve_departure), so every remaining slot charges
+            regardless of price until target is reached.
 
     Returns:
         CarScheduleResult with the complete schedule and derived state.
@@ -168,6 +175,8 @@ def build_car_charging_schedule(
             _slot_energy_kwh(s, max_charge_power_kw, now) for s in available
         )
         target_energy = total_energy / 2.0
+    elif overdue:
+        target_energy = math.inf if energy_needed_kwh > 0 else 0.0
     else:
         # Normal mode: select cheapest slots until deliverable energy meets
         # energy_needed_kwh (rounding up to a whole slot if needed).
@@ -216,6 +225,55 @@ def build_car_charging_schedule(
         current_action=current_action,
         is_preliminary=is_preliminary,
     )
+
+
+def resolve_departure(
+    now_local: datetime,
+    departure: time,
+    grace: timedelta,
+    below_target: bool,
+    plugged_since: datetime | None,
+) -> tuple[datetime, bool]:
+    """Resolve the local charging deadline for a daily departure time-of-day.
+
+    Normally the next occurrence of departure. But while the car is still
+    below target within `grace` after the departure just passed, the deadline
+    is held at that departure + grace and flagged overdue. Without this, the
+    deadline rolls to tomorrow the instant it passes, the window suddenly
+    holds a day of cheaper slots, and a car the plan left a few % short
+    (e.g. charge power overestimated) stops charging at the deadline.
+
+    Grace applies only to a car plugged in continuously since at or before
+    that departure (`plugged_since`, None when unknown or unplugged). A car
+    unplugged around departure has left; if it returns within the grace
+    window it must not charge price-blind.
+
+    Returns:
+        (deadline in now_local's timezone, overdue flag).
+    """
+    # Compare instants in UTC throughout: same-zone comparison ignores fold,
+    # and aware local + timedelta is wall-clock arithmetic, so either would
+    # skew around a DST change. fold=0 pins an ambiguous departure (the
+    # repeated hour on fall-back day) to its first occurrence.
+    now_utc = now_local.astimezone(timezone.utc)
+    today = now_local.replace(
+        hour=departure.hour, minute=departure.minute, second=0, microsecond=0, fold=0
+    )
+    # Most recent departure at or before now -- may be yesterday's when a
+    # late-evening departure's grace runs past midnight.
+    previous = (
+        today if today.astimezone(timezone.utc) <= now_utc else today - timedelta(days=1)
+    )
+    previous_utc = previous.astimezone(timezone.utc)
+    grace_end = previous_utc + grace
+    if (
+        below_target
+        and plugged_since is not None
+        and plugged_since <= previous_utc
+        and now_utc < grace_end
+    ):
+        return grace_end.astimezone(now_local.tzinfo), True
+    return previous + timedelta(days=1), False
 
 
 # ---------------------------------------------------------------------------

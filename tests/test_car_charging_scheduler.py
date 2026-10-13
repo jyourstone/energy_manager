@@ -13,7 +13,8 @@ planning figure rests on).
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -21,6 +22,7 @@ from custom_components.energy_manager.car_charging_scheduler import (
     CarScheduleResult,
     CarScheduleSlot,
     build_car_charging_schedule,
+    resolve_departure,
 )
 
 # ---------------------------------------------------------------------------
@@ -1165,3 +1167,120 @@ def test_fallback_mode_is_invariant_with_a_prorated_in_progress_slot():
         return [(s.start, s.action) for s in result.schedule]
 
     assert _plan(3.7) == _plan(11.0)
+
+
+# ---------------------------------------------------------------------------
+# Departure grace window
+# ---------------------------------------------------------------------------
+
+GRACE = timedelta(minutes=60)
+DEP_13 = time(13, 0)
+
+
+def _t(day: int, hour: int, minute: int) -> datetime:
+    return datetime(2026, 2, day, hour, minute, tzinfo=UTC)
+
+
+# Plugged in the evening before every departure in these tests.
+PLUGGED = datetime(2026, 1, 1, 22, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("now", "departure", "below_target", "expected"),
+    [
+        pytest.param(_t(15, 12, 30), DEP_13, True, (_t(15, 13, 0), False), id="before"),
+        pytest.param(_t(15, 13, 0), DEP_13, True, (_t(15, 14, 0), True), id="at-departure"),
+        pytest.param(_t(15, 13, 59), DEP_13, True, (_t(15, 14, 0), True), id="grace-end"),
+        pytest.param(_t(15, 13, 5), DEP_13, False, (_t(16, 13, 0), False), id="at-target"),
+        pytest.param(_t(15, 14, 0), DEP_13, True, (_t(16, 13, 0), False), id="grace-over"),
+        pytest.param(
+            _t(16, 0, 10), time(23, 30), True, (_t(16, 0, 30), True), id="past-midnight"
+        ),
+    ],
+)
+def test_resolve_departure(now, departure, below_target, expected):
+    """The deadline must not roll to tomorrow the instant it passes while the
+    car is still short -- that is what stopped a car charging at 13:00."""
+    assert resolve_departure(now, departure, GRACE, below_target, PLUGGED) == expected
+
+
+@pytest.mark.parametrize(
+    ("plugged_since", "overdue"),
+    [
+        pytest.param(_t(15, 13, 0), True, id="plugged-at-departure"),
+        pytest.param(_t(15, 13, 1), False, id="replugged-after-departure"),
+        pytest.param(None, False, id="unplugged-or-unknown"),
+    ],
+)
+def test_resolve_departure_grace_needs_car_plugged_since_departure(
+    plugged_since, overdue
+):
+    """A car that left around departure and came back within the grace
+    window must not charge price-blind."""
+    _, is_overdue = resolve_departure(_t(15, 13, 30), DEP_13, GRACE, True, plugged_since)
+    assert is_overdue is overdue
+
+
+def test_resolve_departure_grace_is_elapsed_time_across_dst():
+    """Stockholm springs forward 02:00 -> 03:00 on 2026-03-29. At 03:05 only
+    35 real minutes have passed since a 01:30 departure, so grace still runs
+    until 01:30 + 60 min real time = 03:30 CEST."""
+    sthlm = ZoneInfo("Europe/Stockholm")
+    now = datetime(2026, 3, 29, 3, 5, tzinfo=sthlm)
+    deadline, overdue = resolve_departure(now, time(1, 30), GRACE, True, PLUGGED)
+    assert overdue
+    assert deadline == datetime(2026, 3, 29, 3, 30, tzinfo=sthlm)
+
+
+@pytest.mark.parametrize(
+    ("fold", "overdue"),
+    [
+        pytest.param(0, True, id="first-02:30-30min-elapsed"),
+        pytest.param(1, False, id="repeated-02:30-90min-elapsed"),
+    ],
+)
+def test_resolve_departure_grace_is_elapsed_time_across_dst_fall_back(fold, overdue):
+    """Stockholm falls back 03:00 -> 02:00 on 2026-10-25, so 02:30 happens
+    twice. A 02:00 departure (00:00 UTC) has grace until 01:00 UTC: the first
+    02:30 is inside it, the repeated one is not."""
+    sthlm = ZoneInfo("Europe/Stockholm")
+    now = datetime(2026, 10, 25, 2, 30, fold=fold, tzinfo=sthlm)
+    deadline, is_overdue = resolve_departure(now, time(2, 0), GRACE, True, PLUGGED)
+    assert is_overdue is overdue
+    if overdue:
+        assert deadline.astimezone(UTC) == datetime(2026, 10, 25, 1, 0, tzinfo=UTC)
+
+
+class TestOverdueCharging:
+    """Overdue: every slot left in the grace window charges, price-blind."""
+
+    # 13:00-14:00 in quarters, the last one cheapest -- a normal plan for a
+    # small gap would idle until 13:45.
+    SLOTS = _make_quarter_slots([(52, 3.0), (53, 2.0), (54, 1.5), (55, 0.5)])
+    NOW = datetime(2026, 2, 15, 13, 2, tzinfo=UTC)
+    DEADLINE = datetime(2026, 2, 15, 14, 0, tzinfo=UTC)
+
+    def _plan(self, current_soc: float, overdue: bool) -> CarScheduleResult:
+        return build_car_charging_schedule(
+            price_slots=self.SLOTS,
+            departure_time_utc=self.DEADLINE,
+            current_soc_pct=current_soc,
+            target_soc_pct=80.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=11.0,
+            now=self.NOW,
+            overdue=overdue,
+        )
+
+    def test_overdue_charges_every_slot_now(self):
+        result = self._plan(78.0, overdue=True)
+        assert [s.action for s in result.schedule] == ["charge"] * 4
+        assert result.current_action == "charge"
+
+    def test_not_overdue_waits_for_cheapest_slot(self):
+        result = self._plan(78.0, overdue=False)
+        assert result.current_action == "idle"
+
+    def test_overdue_at_target_charges_nothing(self):
+        result = self._plan(80.0, overdue=True)
+        assert result.charging_slot_count == 0

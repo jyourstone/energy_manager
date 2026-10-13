@@ -59,7 +59,11 @@ from .battery_scheduler import (
     build_battery_schedule,
     compute_effective_discharge_threshold,
 )
-from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
+from .car_charging_scheduler import (
+    CarScheduleResult,
+    build_car_charging_schedule,
+    resolve_departure,
+)
 from .car_power_estimator import (
     CarThroughputLearner,
     ThroughputTick,
@@ -209,6 +213,7 @@ from .const import (
     DEFAULT_SOLAR_SAFETY_BUFFER_KW,
     DEFAULT_SOLAR_START_THRESHOLD_KW,
     DEFAULT_TARGET_SOC_PCT,
+    DEPARTURE_GRACE_MINUTES,
     DOMAIN,
     EASEE_UPDATE_INTERVAL_SECONDS,
     EMS_MISMATCH_WARNING_INTERVAL_SECONDS,
@@ -3558,6 +3563,10 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         # SOC staleness tracking for fallback detection
         self._soc_last_updated: datetime | None = None
 
+        # Start of the current home-and-plugged-in streak, as seen by
+        # refreshes; gates the departure grace (see resolve_departure).
+        self._plugged_since: datetime | None = None
+
     async def _async_setup(self) -> None:
         """Register listeners for coordinator chaining and SOC state changes.
 
@@ -3613,8 +3622,35 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc if current_soc is not None else DEFAULT_ASSUMED_CAR_SOC_PCT
         )
 
-        # 3. Convert departure_time (local time-of-day) to UTC datetime
-        departure_utc = self._departure_to_utc()
+        # 2b. Detect fallback mode (after _read_car_soc, which refreshes the
+        # staleness timestamp it reads)
+        fallback_mode = self._detect_fallback_needed()
+
+        # 2c. Track the plugged-in streak. Any refresh that sees the car away
+        # or unplugged resets it, so a car that drove off and came back never
+        # gets the departure grace. Fail-safe: a restart also resets it.
+        home_and_plugged = self._is_home_and_plugged_in()
+        if not home_and_plugged:
+            self._plugged_since = None
+        elif self._plugged_since is None:
+            self._plugged_since = dt_util.utcnow()
+
+        # 3. Convert departure_time (local time-of-day) to UTC datetime.
+        # Only this car's known SOC can hold the deadline open past
+        # departure -- never the assumed 50%, and never in fallback mode,
+        # where the SOC is a stale reading of a car that isn't plugged in.
+        deadline, overdue = resolve_departure(
+            dt_util.now(),
+            self.departure_time,
+            timedelta(minutes=DEPARTURE_GRACE_MINUTES),
+            below_target=(
+                not fallback_mode
+                and current_soc is not None
+                and current_soc < self.target_soc
+            ),
+            plugged_since=self._plugged_since,
+        )
+        departure_utc = dt_util.as_utc(deadline)
 
         # 4. Check if tomorrow's prices are available
         is_preliminary = len(price_data.tomorrow) == 0
@@ -3624,9 +3660,6 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             {"start": slot.start, "end": slot.end, "price": slot.price}
             for slot in price_data.today + price_data.tomorrow
         ]
-
-        # 6. Detect fallback mode
-        fallback_mode = self._detect_fallback_needed()
 
         # 6b. Size the plan with the throughput actually measured for this
         # car's phase bucket, falling back to the number entity's ceiling
@@ -3654,6 +3687,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             fallback_mode=fallback_mode,
             is_preliminary=is_preliminary,
             solar_surplus_available=self._read_solar_surplus_available(),
+            overdue=overdue,
         )
 
         # 8. Return CarChargingData
@@ -3668,7 +3702,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc=current_soc,
             target_soc=self.target_soc,
             last_calculated=dt_util.utcnow(),
-            home_and_plugged=self._is_home_and_plugged_in(),
+            home_and_plugged=home_and_plugged,
             phase_capability=self._phase_capability,
             # Deliberately NOT planning_kw -- this field is the live amp
             # ceiling (see the CarChargingData docstring). Pointing it at the
@@ -3713,28 +3747,6 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             return soc
         except (ValueError, TypeError):
             return None
-
-    def _departure_to_utc(self) -> datetime:
-        """Convert departure_time (local time-of-day) to UTC datetime.
-
-        If departure time has already passed today, assumes tomorrow.
-
-        Returns:
-            UTC-aware datetime for the next occurrence of departure_time.
-        """
-        local_now = dt_util.now()
-        local_departure = local_now.replace(
-            hour=self.departure_time.hour,
-            minute=self.departure_time.minute,
-            second=0,
-            microsecond=0,
-        )
-
-        # If departure is in the past, roll to tomorrow
-        if local_departure <= local_now:
-            local_departure += timedelta(days=1)
-
-        return dt_util.as_utc(local_departure)
 
     def _detect_fallback_needed(self) -> bool:
         """Detect if fallback charging mode is needed (EV-08).
