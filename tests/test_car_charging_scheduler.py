@@ -13,7 +13,7 @@ planning figure rests on).
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 import pytest
 
@@ -21,6 +21,7 @@ from custom_components.energy_manager.car_charging_scheduler import (
     CarScheduleResult,
     CarScheduleSlot,
     build_car_charging_schedule,
+    resolve_departure,
 )
 
 # ---------------------------------------------------------------------------
@@ -1165,3 +1166,69 @@ def test_fallback_mode_is_invariant_with_a_prorated_in_progress_slot():
         return [(s.start, s.action) for s in result.schedule]
 
     assert _plan(3.7) == _plan(11.0)
+
+
+# ---------------------------------------------------------------------------
+# Departure grace window
+# ---------------------------------------------------------------------------
+
+GRACE = timedelta(minutes=60)
+DEP_13 = time(13, 0)
+
+
+def _t(day: int, hour: int, minute: int) -> datetime:
+    return datetime(2026, 2, day, hour, minute, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("now", "departure", "below_target", "expected"),
+    [
+        pytest.param(_t(15, 12, 30), DEP_13, True, (_t(15, 13, 0), False), id="before"),
+        pytest.param(_t(15, 13, 0), DEP_13, True, (_t(15, 14, 0), True), id="at-departure"),
+        pytest.param(_t(15, 13, 59), DEP_13, True, (_t(15, 14, 0), True), id="grace-end"),
+        pytest.param(_t(15, 13, 5), DEP_13, False, (_t(16, 13, 0), False), id="at-target"),
+        pytest.param(_t(15, 14, 0), DEP_13, True, (_t(16, 13, 0), False), id="grace-over"),
+        pytest.param(
+            _t(16, 0, 10), time(23, 30), True, (_t(16, 0, 30), True), id="past-midnight"
+        ),
+    ],
+)
+def test_resolve_departure(now, departure, below_target, expected):
+    """The deadline must not roll to tomorrow the instant it passes while the
+    car is still short -- that is what stopped a car charging at 13:00."""
+    assert resolve_departure(now, departure, GRACE, below_target) == expected
+
+
+class TestOverdueCharging:
+    """Overdue: every slot left in the grace window charges, price-blind."""
+
+    # 13:00-14:00 in quarters, the last one cheapest -- a normal plan for a
+    # small gap would idle until 13:45.
+    SLOTS = _make_quarter_slots([(52, 3.0), (53, 2.0), (54, 1.5), (55, 0.5)])
+    NOW = datetime(2026, 2, 15, 13, 2, tzinfo=UTC)
+    DEADLINE = datetime(2026, 2, 15, 14, 0, tzinfo=UTC)
+
+    def _plan(self, current_soc: float, overdue: bool) -> CarScheduleResult:
+        return build_car_charging_schedule(
+            price_slots=self.SLOTS,
+            departure_time_utc=self.DEADLINE,
+            current_soc_pct=current_soc,
+            target_soc_pct=80.0,
+            battery_capacity_kwh=DEFAULT_CAPACITY,
+            max_charge_power_kw=11.0,
+            now=self.NOW,
+            overdue=overdue,
+        )
+
+    def test_overdue_charges_every_slot_now(self):
+        result = self._plan(78.0, overdue=True)
+        assert [s.action for s in result.schedule] == ["charge"] * 4
+        assert result.current_action == "charge"
+
+    def test_not_overdue_waits_for_cheapest_slot(self):
+        result = self._plan(78.0, overdue=False)
+        assert result.current_action == "idle"
+
+    def test_overdue_at_target_charges_nothing(self):
+        result = self._plan(80.0, overdue=True)
+        assert result.charging_slot_count == 0

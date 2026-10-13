@@ -59,7 +59,11 @@ from .battery_scheduler import (
     build_battery_schedule,
     compute_effective_discharge_threshold,
 )
-from .car_charging_scheduler import CarScheduleResult, build_car_charging_schedule
+from .car_charging_scheduler import (
+    CarScheduleResult,
+    build_car_charging_schedule,
+    resolve_departure,
+)
 from .car_power_estimator import (
     CarThroughputLearner,
     ThroughputTick,
@@ -209,6 +213,7 @@ from .const import (
     DEFAULT_SOLAR_SAFETY_BUFFER_KW,
     DEFAULT_SOLAR_START_THRESHOLD_KW,
     DEFAULT_TARGET_SOC_PCT,
+    DEPARTURE_GRACE_MINUTES,
     DOMAIN,
     EASEE_UPDATE_INTERVAL_SECONDS,
     EMS_MISMATCH_WARNING_INTERVAL_SECONDS,
@@ -3613,8 +3618,16 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc if current_soc is not None else DEFAULT_ASSUMED_CAR_SOC_PCT
         )
 
-        # 3. Convert departure_time (local time-of-day) to UTC datetime
-        departure_utc = self._departure_to_utc()
+        # 3. Convert departure_time (local time-of-day) to UTC datetime.
+        # Only a known SOC can hold the deadline open past departure --
+        # never force price-blind charging on the assumed fallback SOC.
+        deadline, overdue = resolve_departure(
+            dt_util.now(),
+            self.departure_time,
+            timedelta(minutes=DEPARTURE_GRACE_MINUTES),
+            below_target=current_soc is not None and current_soc < self.target_soc,
+        )
+        departure_utc = dt_util.as_utc(deadline)
 
         # 4. Check if tomorrow's prices are available
         is_preliminary = len(price_data.tomorrow) == 0
@@ -3654,6 +3667,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             fallback_mode=fallback_mode,
             is_preliminary=is_preliminary,
             solar_surplus_available=self._read_solar_surplus_available(),
+            overdue=overdue,
         )
 
         # 8. Return CarChargingData
@@ -3713,28 +3727,6 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             return soc
         except (ValueError, TypeError):
             return None
-
-    def _departure_to_utc(self) -> datetime:
-        """Convert departure_time (local time-of-day) to UTC datetime.
-
-        If departure time has already passed today, assumes tomorrow.
-
-        Returns:
-            UTC-aware datetime for the next occurrence of departure_time.
-        """
-        local_now = dt_util.now()
-        local_departure = local_now.replace(
-            hour=self.departure_time.hour,
-            minute=self.departure_time.minute,
-            second=0,
-            microsecond=0,
-        )
-
-        # If departure is in the past, roll to tomorrow
-        if local_departure <= local_now:
-            local_departure += timedelta(days=1)
-
-        return dt_util.as_utc(local_departure)
 
     def _detect_fallback_needed(self) -> bool:
         """Detect if fallback charging mode is needed (EV-08).

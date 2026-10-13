@@ -771,6 +771,26 @@ class TestCarPlannerUsesLearnedPower:
         assert "planning_power_kw=planning_kw" in after_data
 
 
+class TestCarDepartureGraceWiring:
+    """The grace window must reach the scheduler, and only for a KNOWN SOC.
+
+    Text guard for the same reason as TestCarPlannerUsesLearnedPower. Unknown
+    SOC is assumed 50% for slot sizing; letting that hold the deadline open
+    would charge price-blind on a guess.
+    """
+
+    def test_overdue_flag_reaches_scheduler_from_known_soc_only(self) -> None:
+        before_data, sep, _ = TestCarPlannerUsesLearnedPower._class_source().partition(
+            "return CarChargingData("
+        )
+        assert sep, "CarChargingData construction not found -- guard is blind"
+        assert (
+            "below_target=current_soc is not None and current_soc < self.target_soc"
+            in before_data
+        )
+        assert "overdue=overdue" in before_data
+
+
 class TestThroughputSamplingSkipsBlindTicks:
     """A tick EM cannot attribute for a STRUCTURAL reason must not be fed in.
 

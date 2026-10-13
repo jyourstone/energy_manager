@@ -265,6 +265,11 @@ MAX_TARGET_SOC_PCT = 100.0
 TARGET_SOC_STEP_PCT = 1.0
 DEFAULT_CAR_SOLAR_TARGET_SOC_PCT = 100.0
 
+# Grace after the departure time during which a car still short of its
+# target keeps charging regardless of price, instead of the deadline
+# rolling straight to tomorrow and the charger stopping at the deadline.
+DEPARTURE_GRACE_MINUTES = 60
+
 # Car schedule update interval (minutes) -- polling fallback
 CAR_SCHEDULE_UPDATE_INTERVAL_MINUTES = 5
 
