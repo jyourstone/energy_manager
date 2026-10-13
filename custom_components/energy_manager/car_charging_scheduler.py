@@ -245,14 +245,22 @@ def resolve_departure(
     Returns:
         (deadline in now_local's timezone, overdue flag).
     """
+    # Compare instants in UTC throughout: same-zone comparison ignores fold,
+    # and aware local + timedelta is wall-clock arithmetic, so either would
+    # skew around a DST change. fold=0 pins an ambiguous departure (the
+    # repeated hour on fall-back day) to its first occurrence.
+    now_utc = now_local.astimezone(timezone.utc)
     today = now_local.replace(
-        hour=departure.hour, minute=departure.minute, second=0, microsecond=0
+        hour=departure.hour, minute=departure.minute, second=0, microsecond=0, fold=0
     )
     # Most recent departure at or before now -- may be yesterday's when a
     # late-evening departure's grace runs past midnight.
-    previous = today if today <= now_local else today - timedelta(days=1)
-    if below_target and now_local < previous + grace:
-        return previous + grace, True
+    previous = (
+        today if today.astimezone(timezone.utc) <= now_utc else today - timedelta(days=1)
+    )
+    grace_end = previous.astimezone(timezone.utc) + grace
+    if below_target and now_utc < grace_end:
+        return grace_end.astimezone(now_local.tzinfo), True
     return previous + timedelta(days=1), False
 
 

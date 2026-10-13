@@ -772,11 +772,14 @@ class TestCarPlannerUsesLearnedPower:
 
 
 class TestCarDepartureGraceWiring:
-    """The grace window must reach the scheduler, and only for a KNOWN SOC.
+    """The grace window must reach the scheduler, and only for a KNOWN SOC
+    outside fallback mode.
 
-    Text guard for the same reason as TestCarPlannerUsesLearnedPower. Unknown
-    SOC is assumed 50% for slot sizing; letting that hold the deadline open
-    would charge price-blind on a guess.
+    Text guard for the same reason as TestCarPlannerUsesLearnedPower
+    (whitespace-normalised so a reformat doesn't break it). Unknown SOC is
+    assumed 50% for slot sizing, and in fallback mode the SOC is a stale
+    reading of an absent car; letting either hold the deadline open would
+    shrink the plan to the grace window on a guess.
     """
 
     def test_overdue_flag_reaches_scheduler_from_known_soc_only(self) -> None:
@@ -784,11 +787,16 @@ class TestCarDepartureGraceWiring:
             "return CarChargingData("
         )
         assert sep, "CarChargingData construction not found -- guard is blind"
+        flat = " ".join(before_data.split())
         assert (
-            "below_target=current_soc is not None and current_soc < self.target_soc"
-            in before_data
+            "below_target=( not fallback_mode and current_soc is not None"
+            " and current_soc < self.target_soc )" in flat
         )
-        assert "overdue=overdue" in before_data
+        # fallback_mode must be known before the deadline is resolved
+        assert flat.index("fallback_mode = self._detect_fallback_needed()") < flat.index(
+            "resolve_departure("
+        )
+        assert "overdue=overdue" in flat
 
 
 class TestThroughputSamplingSkipsBlindTicks:

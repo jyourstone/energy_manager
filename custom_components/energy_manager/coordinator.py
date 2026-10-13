@@ -3618,14 +3618,23 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             current_soc if current_soc is not None else DEFAULT_ASSUMED_CAR_SOC_PCT
         )
 
+        # 2b. Detect fallback mode (after _read_car_soc, which refreshes the
+        # staleness timestamp it reads)
+        fallback_mode = self._detect_fallback_needed()
+
         # 3. Convert departure_time (local time-of-day) to UTC datetime.
-        # Only a known SOC can hold the deadline open past departure --
-        # never force price-blind charging on the assumed fallback SOC.
+        # Only this car's known SOC can hold the deadline open past
+        # departure -- never the assumed 50%, and never in fallback mode,
+        # where the SOC is a stale reading of a car that isn't plugged in.
         deadline, overdue = resolve_departure(
             dt_util.now(),
             self.departure_time,
             timedelta(minutes=DEPARTURE_GRACE_MINUTES),
-            below_target=current_soc is not None and current_soc < self.target_soc,
+            below_target=(
+                not fallback_mode
+                and current_soc is not None
+                and current_soc < self.target_soc
+            ),
         )
         departure_utc = dt_util.as_utc(deadline)
 
@@ -3637,9 +3646,6 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             {"start": slot.start, "end": slot.end, "price": slot.price}
             for slot in price_data.today + price_data.tomorrow
         ]
-
-        # 6. Detect fallback mode
-        fallback_mode = self._detect_fallback_needed()
 
         # 6b. Size the plan with the throughput actually measured for this
         # car's phase bucket, falling back to the number entity's ceiling

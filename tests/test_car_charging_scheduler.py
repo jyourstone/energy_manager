@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1197,6 +1198,36 @@ def test_resolve_departure(now, departure, below_target, expected):
     """The deadline must not roll to tomorrow the instant it passes while the
     car is still short -- that is what stopped a car charging at 13:00."""
     assert resolve_departure(now, departure, GRACE, below_target) == expected
+
+
+def test_resolve_departure_grace_is_elapsed_time_across_dst():
+    """Stockholm springs forward 02:00 -> 03:00 on 2026-03-29. At 03:05 only
+    35 real minutes have passed since a 01:30 departure, so grace still runs
+    until 01:30 + 60 min real time = 03:30 CEST."""
+    sthlm = ZoneInfo("Europe/Stockholm")
+    now = datetime(2026, 3, 29, 3, 5, tzinfo=sthlm)
+    deadline, overdue = resolve_departure(now, time(1, 30), GRACE, True)
+    assert overdue
+    assert deadline == datetime(2026, 3, 29, 3, 30, tzinfo=sthlm)
+
+
+@pytest.mark.parametrize(
+    ("fold", "overdue"),
+    [
+        pytest.param(0, True, id="first-02:30-30min-elapsed"),
+        pytest.param(1, False, id="repeated-02:30-90min-elapsed"),
+    ],
+)
+def test_resolve_departure_grace_is_elapsed_time_across_dst_fall_back(fold, overdue):
+    """Stockholm falls back 03:00 -> 02:00 on 2026-10-25, so 02:30 happens
+    twice. A 02:00 departure (00:00 UTC) has grace until 01:00 UTC: the first
+    02:30 is inside it, the repeated one is not."""
+    sthlm = ZoneInfo("Europe/Stockholm")
+    now = datetime(2026, 10, 25, 2, 30, fold=fold, tzinfo=sthlm)
+    deadline, is_overdue = resolve_departure(now, time(2, 0), GRACE, True)
+    assert is_overdue is overdue
+    if overdue:
+        assert deadline.astimezone(UTC) == datetime(2026, 10, 25, 1, 0, tzinfo=UTC)
 
 
 class TestOverdueCharging:
