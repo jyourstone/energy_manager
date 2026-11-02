@@ -870,11 +870,21 @@ class TestCarRefreshesOnPresenceChange:
         assert "self.hass, entities, self._handle_input_update" in setup
 
     def test_car_refresh_never_awaits(self) -> None:
-        """The debouncer drops refresh requests that land mid-refresh. That is
-        only harmless while the car refresh finishes in one event-loop step;
-        an await would silently lose a plug-in event again."""
+        """The debouncer drops SOC requests that land mid-refresh, and direct
+        presence refreshes would interleave. Both are only harmless while the
+        car refresh finishes in one event-loop step."""
         src = _method_source("CarChargingCoordinator", "_async_update_data")
         assert not re.search(r"\bawait\b", src)
+
+    def test_presence_inputs_bypass_the_debouncer(self) -> None:
+        """Inside the debounce cooldown an unplug + replug would fold into one
+        refresh that never sees the car unplugged (keeping _plugged_since)."""
+        src = _method_source("CarChargingCoordinator", "_handle_input_update")
+        assert (
+            'if event.data.get("entity_id") == self._battery_level_entity:'
+            " self.hass.async_create_task(self.async_request_refresh())"
+            " else: self.hass.async_create_task(self.async_refresh())"
+        ) in src
 
     @pytest.mark.parametrize(
         ("old", "new", "expected"),

@@ -3595,10 +3595,10 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         )
         self.config_entry.async_on_unload(lambda: unsub_price())
 
-        # Recalculate on SOC and on every _is_home_and_plugged_in() input. The
-        # first change refreshes at once; the request_refresh debouncer folds
-        # stragglers into one more refresh ~10 s later. It drops calls that land
-        # mid-refresh, which is safe only while _async_update_data never awaits.
+        # Recalculate on SOC and on every _is_home_and_plugged_in() input (see
+        # _handle_input_update). Direct refreshes and the debouncer's habit of
+        # dropping calls that land mid-refresh are both safe only while
+        # _async_update_data never awaits.
         entities = [
             e
             for e in (
@@ -3623,9 +3623,19 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
 
     @callback
     def _handle_input_update(self, event) -> None:
-        """Handle car SOC/plug/location state changes for immediate recalculation."""
-        if _is_state_value_change(event):
+        """Handle car SOC/plug/location state changes for immediate recalculation.
+
+        Presence inputs bypass the request_refresh debouncer: inside its 10 s
+        cooldown an unplug and replug would fold into one refresh that never
+        sees the car unplugged, and a cable change right after an SOC write
+        would wait ~10 s. SOC changes stay debounced.
+        """
+        if not _is_state_value_change(event):
+            return
+        if event.data.get("entity_id") == self._battery_level_entity:
             self.hass.async_create_task(self.async_request_refresh())
+        else:
+            self.hass.async_create_task(self.async_refresh())
 
     async def _async_update_data(self) -> CarChargingData:
         """Fetch inputs, run pure scheduler, and return CarChargingData.
