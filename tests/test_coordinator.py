@@ -38,6 +38,7 @@ seeds, neither of which a pure test can reach.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ from custom_components.energy_manager import coordinator as coordinator_module
 from custom_components.energy_manager.battery_scheduler import (
     compute_effective_discharge_threshold,
 )
+from custom_components.energy_manager.car_charging_scheduler import CarScheduleSlot
 from custom_components.energy_manager.const import (
     DEFAULT_CHARGE_THRESHOLD,
     DEFAULT_MAX_CHARGE_POWER_KW,
@@ -82,6 +84,7 @@ from custom_components.energy_manager.coordinator import (
 )
 
 UTC = timezone.utc
+_COMPONENT_DIR = Path(inspect.getsourcefile(coordinator_module)).parent
 
 
 class FakeState:
@@ -858,6 +861,59 @@ class TestCarRefreshesOnPresenceChange:
     def test_added_or_removed_entity_triggers(self) -> None:
         assert _is_state_value_change(self._event(None, FakeState("home")))
         assert _is_state_value_change(self._event(FakeState("home"), None))
+
+
+class TestCarScheduleRecorderChurn:
+    """An unchanged car plan must not notify listeners or hit the recorder.
+
+    always_update=False only skips listeners when two refreshes compare
+    equal; a fresh last_calculated on every refresh defeated that, so the
+    car schedule sensor wrote its 48-slot schedule to the recorder every
+    5 minutes per car.
+    """
+
+    def test_refreshes_differing_only_in_last_calculated_are_equal(self) -> None:
+        first = _minimal_car_charging_data()
+        later = _minimal_car_charging_data(
+            last_calculated=first.last_calculated + timedelta(minutes=5)
+        )
+        assert first == later
+
+    def test_a_real_plan_change_is_still_unequal(self) -> None:
+        slot = CarScheduleSlot(
+            start=datetime(2026, 8, 12, 12, 0, tzinfo=UTC),
+            end=datetime(2026, 8, 12, 12, 15, tzinfo=UTC),
+            price=1.0,
+            action="idle",
+        )
+        idle = _minimal_car_charging_data(schedule=[slot])
+        charge = _minimal_car_charging_data(
+            schedule=[CarScheduleSlot(slot.start, slot.end, slot.price, "charge")]
+        )
+        assert idle != charge
+
+    def test_car_coordinator_skips_unchanged_updates(self) -> None:
+        flat = " ".join(TestCarPlannerUsesLearnedPower._class_source().split())
+        assert "always_update=False" in flat
+
+    @pytest.mark.parametrize("sensor_class", ["CarScheduleSensor", "BatteryStatusSensor"])
+    def test_schedule_attribute_is_not_recorded(self, sensor_class: str) -> None:
+        tree = ast.parse((_COMPONENT_DIR / "sensor.py").read_text())
+        cls = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == sensor_class
+        )
+        unrecorded = next(
+            node.value
+            for node in cls.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "_unrecorded_attributes"
+                for t in node.targets
+            )
+        )
+        assert "schedule" in ast.literal_eval(unrecorded.args[0])
 
 
 class TestThroughputSamplingSkipsBlindTicks:

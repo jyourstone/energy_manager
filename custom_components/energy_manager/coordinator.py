@@ -3415,7 +3415,10 @@ class CarChargingData:
         current_soc: Current state of charge percentage, or None when the
             SOC sensor is unavailable (solar eligibility stays fail-open).
         target_soc: Target state of charge percentage.
-        last_calculated: UTC timestamp of last calculation.
+        last_calculated: UTC timestamp of last calculation. Excluded from
+            equality so an unchanged result does not notify listeners
+            (always_update=False); the car schedule sensor would otherwise
+            write a new recorder row every refresh.
         home_and_plugged: Whether the car is currently home and plugged in
             (see CarChargingCoordinator._is_home_and_plugged_in()).
         phase_capability: How many phases this car draws on when the
@@ -3458,7 +3461,7 @@ class CarChargingData:
     car_name: str
     current_soc: float | None
     target_soc: float
-    last_calculated: datetime
+    last_calculated: datetime = field(compare=False)
     home_and_plugged: bool
     phase_capability: int
     max_charge_power_kw: float

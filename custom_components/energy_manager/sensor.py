@@ -223,6 +223,9 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
 
     _attr_translation_key = "battery_status"
     _attr_icon = "mdi:home-battery"
+    # Live attribute only: the 30 s EMS re-render would otherwise store the
+    # 48-slot schedule in the recorder on every EMS attribute change.
+    _unrecorded_attributes = frozenset({"schedule"})
 
     def __init__(
         self,
@@ -1107,6 +1110,8 @@ class CarScheduleSensor(CarEntity, SensorEntity):
 
     _attr_translation_key = "car_schedule"
     _attr_icon = "mdi:car-electric"
+    # Live attribute only: keeps the 48-slot schedule out of the recorder.
+    _unrecorded_attributes = frozenset({"schedule"})
 
     def __init__(
         self,
