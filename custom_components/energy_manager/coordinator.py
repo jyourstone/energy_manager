@@ -4093,7 +4093,8 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
     """Coordinator that orchestrates real-time Easee charger control.
 
     ~30s poll + state-change listeners on the charger status/power
-    entities. Builds a ChargerInputs snapshot each tick (reusing the shared
+    entities, chained to every CarChargingCoordinator. Builds a
+    ChargerInputs snapshot each tick (reusing the shared
     FuseSensorReader -- same grid-sensor formula as EMSCoordinator, see
     05-RESEARCH.md "shared fuse arbiter"), calls the pure ChargerController,
     and executes the returned commands via the easee.* services through the
@@ -4104,12 +4105,18 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
     see _read_solar_surplus_kw()).
     """
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        car_coordinators: dict[str, CarChargingCoordinator],
+    ) -> None:
         """Initialize the Easee coordinator.
 
         Args:
             hass: Home Assistant instance.
             entry: The config entry for this integration.
+            car_coordinators: The CarChargingCoordinators to chain to.
         """
         super().__init__(
             hass,
@@ -4120,6 +4127,9 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             always_update=False,
         )
         self._controller = ChargerController()
+        # ponytail: listened to only. Reads stay on runtime_data, whose empty
+        # first-tick snapshot _sample_throughput relies on.
+        self._car_coordinators = car_coordinators
 
         # Solar-activation latch persistence -- restored in _async_setup,
         # saved (delayed) whenever a tick changes the latch state, so a
@@ -4285,7 +4295,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         self._logged_terminal_status_while_drawing = False
 
     async def _async_setup(self) -> None:
-        """Register listeners for immediate response to charger state changes.
+        """Register listeners for immediate response to charger and car changes.
 
         Called once during async_config_entry_first_refresh. Force-charging
         and master-switch toggles cannot be listened for here (they are
@@ -4330,9 +4340,22 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 )
             )
 
+        # Chain to every CarChargingCoordinator: act on a plug-in or SOC
+        # change as soon as the car schedule is recomputed, not on the next
+        # 30 s tick. Car coordinators never listen back, so no refresh loop.
+        for car_coordinator in self._car_coordinators.values():
+            self.config_entry.async_on_unload(
+                car_coordinator.async_add_listener(self._handle_car_update)
+            )
+
     @callback
     def _handle_charger_update(self, event) -> None:
         """Handle charger status/power state changes for immediate response."""
+        self.hass.async_create_task(self.async_request_refresh())
+
+    @callback
+    def _handle_car_update(self) -> None:
+        """Handle CarChargingCoordinator data updates via coordinator chaining."""
         self.hass.async_create_task(self.async_request_refresh())
 
     async def _async_update_data(self) -> EaseeData:

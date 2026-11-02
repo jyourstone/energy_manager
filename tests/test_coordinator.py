@@ -906,6 +906,59 @@ class TestThroughputSamplingSkipsBlindTicks:
         assert source.count("if not cars:") == 1
 
 
+class TestEaseeRefreshesOnCarUpdate:
+    """EaseeCoordinator must refresh as soon as a car coordinator publishes.
+
+    It acts on each car's home_and_plugged / current_action snapshot but
+    re-read it only on its own 30 s tick or a charger event, so after a
+    plug-in forced or scheduled charging sat idle up to ~40 s (car debounce
+    trailing refresh + Easee tick). Text guard for the same reason as
+    TestCarPlannerUsesLearnedPower, whitespace-normalised.
+    """
+
+    @staticmethod
+    def _easee_method(name: str) -> str:
+        text = Path(inspect.getsourcefile(coordinator_module)).read_text()
+        cls = re.search(r"class EaseeCoordinator\(.*?(?=\nclass \w|\Z)", text, re.DOTALL)
+        assert cls is not None, "EaseeCoordinator not found in coordinator.py"
+        match = re.search(
+            rf"\n    (?:async )?def {name}\(.*?(?=\n    async def \w|\n    def \w|\Z)",
+            cls.group(0),
+            re.DOTALL,
+        )
+        assert match is not None, f"{name} not found -- guard is blind"
+        return " ".join(match.group(0).split())
+
+    def test_setup_chains_to_every_car_coordinator(self) -> None:
+        # Direct unsub, not `lambda: unsub()`: a lambda in a loop late-binds
+        # and would unsubscribe only the last car on unload.
+        assert (
+            "for car_coordinator in self._car_coordinators.values():"
+            " self.config_entry.async_on_unload("
+            " car_coordinator.async_add_listener(self._handle_car_update) )"
+        ) in self._easee_method("_async_setup")
+
+    def test_car_update_requests_a_refresh(self) -> None:
+        assert self._easee_method("_handle_car_update").endswith(
+            "self.hass.async_create_task(self.async_request_refresh())"
+        )
+
+    def test_setup_hands_easee_the_car_coordinators_after_building_them(self) -> None:
+        init_path = Path(inspect.getsourcefile(coordinator_module)).parent / "__init__.py"
+        flat = " ".join(init_path.read_text().split())
+        built = "car_coordinators[subentry_id] = car_coordinator"
+        easee = "EaseeCoordinator(hass, entry, car_coordinators)"
+        assert built in flat and easee in flat
+        assert flat.index(built) < flat.index(easee)
+
+    def test_car_coordinators_never_listen_back(self) -> None:
+        """Car -> Easee is one-way. A car coordinator listening to Easee or
+        EMS would ping-pong refreshes: last_calculated defeats its
+        always_update=False, so every car refresh notifies."""
+        car = TestCarPlannerUsesLearnedPower._class_source()
+        assert re.findall(r"(\w+)\.async_add_listener\(", car) == ["_price_coordinator"]
+
+
 # --- Restore-seeded coordinator attributes ---------------------------------
 #
 # Incident 2026-09-02 (08:05:53, 09:54:07 -> 09:54:17, 10:05:12 -> 10:05:22):
