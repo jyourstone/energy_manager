@@ -3386,6 +3386,20 @@ def _read_soc_timestamp(state) -> datetime:
     return state.last_reported
 
 
+def _is_state_value_change(event) -> bool:
+    """Return True unless a state_changed event only touched attributes.
+
+    A device_tracker rewrites its GPS attributes on every poll while the
+    car is away; recalculating the schedule for those would only churn
+    the recorder. Added or removed entities (a None side) count as a change.
+    """
+    old_state = event.data.get("old_state")
+    new_state = event.data.get("new_state")
+    if old_state is None or new_state is None:
+        return True
+    return old_state.state != new_state.state
+
+
 @dataclass(frozen=True, slots=True)
 class CarChargingData:
     """Output of the car charging coordinator.
@@ -3568,7 +3582,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self._plugged_since: datetime | None = None
 
     async def _async_setup(self) -> None:
-        """Register listeners for coordinator chaining and SOC state changes.
+        """Register listeners for coordinator chaining and car input state changes.
 
         Called once during async_config_entry_first_refresh.
         """
@@ -3578,13 +3592,24 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         )
         self.config_entry.async_on_unload(lambda: unsub_price())
 
-        # Listen for battery_level_entity state changes for immediate SOC updates
-        if self._battery_level_entity:
+        # Recalculate on SOC and on every _is_home_and_plugged_in() input. The
+        # first change refreshes at once; the request_refresh debouncer folds
+        # stragglers into one more refresh ~10 s later. It drops calls that land
+        # mid-refresh, which is safe only while _async_update_data never awaits.
+        entities = [
+            e
+            for e in (
+                self._battery_level_entity,
+                self._charger_status_entity,
+                self._charger_connected_entity,
+                self._location_entity,
+            )
+            if e
+        ]
+        if entities:
             self.config_entry.async_on_unload(
                 async_track_state_change_event(
-                    self.hass,
-                    [self._battery_level_entity],
-                    self._handle_soc_update,
+                    self.hass, entities, self._handle_input_update
                 )
             )
 
@@ -3594,9 +3619,10 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self.hass.async_create_task(self.async_request_refresh())
 
     @callback
-    def _handle_soc_update(self, event) -> None:
-        """Handle car SOC entity state changes for immediate recalculation."""
-        self.hass.async_create_task(self.async_request_refresh())
+    def _handle_input_update(self, event) -> None:
+        """Handle car SOC/plug/location state changes for immediate recalculation."""
+        if _is_state_value_change(event):
+            self.hass.async_create_task(self.async_request_refresh())
 
     async def _async_update_data(self) -> CarChargingData:
         """Fetch inputs, run pure scheduler, and return CarChargingData.

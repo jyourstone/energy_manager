@@ -65,6 +65,7 @@ from custom_components.energy_manager.coordinator import (
     _cancel_unsub,
     _find_native_coordinator,
     _is_recent_nordpool_refresh,
+    _is_state_value_change,
     _prune_samples,
     _read_soc_timestamp,
     _read_sun_dawn_dusk,
@@ -810,6 +811,53 @@ class TestCarDepartureGraceWiring:
         )
         assert reset in flat
         assert flat.index(reset) < flat.index("resolve_departure(")
+
+
+class TestCarRefreshesOnPresenceChange:
+    """home_and_plugged is only recomputed on a car-coordinator refresh.
+
+    Listening to SOC alone left it stale for up to 5 minutes after a
+    plug-in: mySkoda wrote SOC 25 ms before the cable and location sensors,
+    so the SOC-triggered refresh saw the car away and forced charging stayed
+    idle. Every input of _is_home_and_plugged_in() must trigger a refresh.
+    """
+
+    @staticmethod
+    def _method_source(name: str) -> str:
+        match = re.search(
+            rf"\n    (?:async )?def {name}\(.*?(?=\n    async def \w|\n    def \w|\Z)",
+            TestCarPlannerUsesLearnedPower._class_source(),
+            re.DOTALL,
+        )
+        assert match is not None, f"{name} not found -- guard is blind"
+        return " ".join(match.group(0).split())
+
+    def test_every_presence_input_is_listened_to(self) -> None:
+        inputs = set(
+            re.findall(r"self\.(_\w+_entity)\b", self._method_source("_is_home_and_plugged_in"))
+        )
+        assert inputs, "no presence inputs found -- guard is blind"
+        setup = self._method_source("_async_setup")
+        for attr in inputs | {"_battery_level_entity"}:
+            assert f"self.{attr}" in setup, attr
+        assert "self.hass, entities, self._handle_input_update" in setup
+
+    @staticmethod
+    def _event(old: FakeState | None, new: FakeState | None) -> SimpleNamespace:
+        return SimpleNamespace(data={"old_state": old, "new_state": new})
+
+    def test_value_change_triggers(self) -> None:
+        assert _is_state_value_change(self._event(FakeState("not_home"), FakeState("home")))
+
+    def test_attribute_only_change_is_ignored(self) -> None:
+        """A tracker's GPS attributes update while the state stays not_home."""
+        old = FakeState("not_home", {"latitude": 55.70})
+        new = FakeState("not_home", {"latitude": 55.71})
+        assert not _is_state_value_change(self._event(old, new))
+
+    def test_added_or_removed_entity_triggers(self) -> None:
+        assert _is_state_value_change(self._event(None, FakeState("home")))
+        assert _is_state_value_change(self._event(FakeState("home"), None))
 
 
 class TestThroughputSamplingSkipsBlindTicks:
