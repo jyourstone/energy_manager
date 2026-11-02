@@ -113,7 +113,7 @@ async def async_setup_entry(
     if entry.options.get(CONF_EV_ENABLED) and entry.options.get(
         CONF_CHARGER_STATUS_ENTITY
     ):
-        easee_coordinator = EaseeCoordinator(hass, entry)
+        easee_coordinator = EaseeCoordinator(hass, entry, car_coordinators)
         await easee_coordinator.async_config_entry_first_refresh()
 
     # Phase 8: Appliance coordinator (if appliances module enabled). One

@@ -3386,6 +3386,20 @@ def _read_soc_timestamp(state) -> datetime:
     return state.last_reported
 
 
+def _is_state_value_change(event) -> bool:
+    """Return True unless a state_changed event only touched attributes.
+
+    A device_tracker rewrites its GPS attributes on every poll while the
+    car is away; recalculating the schedule for those would only churn
+    the recorder. Added or removed entities (a None side) count as a change.
+    """
+    old_state = event.data.get("old_state")
+    new_state = event.data.get("new_state")
+    if old_state is None or new_state is None:
+        return True
+    return old_state.state != new_state.state
+
+
 @dataclass(frozen=True, slots=True)
 class CarChargingData:
     """Output of the car charging coordinator.
@@ -3401,7 +3415,10 @@ class CarChargingData:
         current_soc: Current state of charge percentage, or None when the
             SOC sensor is unavailable (solar eligibility stays fail-open).
         target_soc: Target state of charge percentage.
-        last_calculated: UTC timestamp of last calculation.
+        last_calculated: UTC timestamp of last calculation. Excluded from
+            equality so an unchanged result does not notify listeners
+            (always_update=False); the car schedule sensor would otherwise
+            write a new recorder row every refresh.
         home_and_plugged: Whether the car is currently home and plugged in
             (see CarChargingCoordinator._is_home_and_plugged_in()).
         phase_capability: How many phases this car draws on when the
@@ -3444,7 +3461,7 @@ class CarChargingData:
     car_name: str
     current_soc: float | None
     target_soc: float
-    last_calculated: datetime
+    last_calculated: datetime = field(compare=False)
     home_and_plugged: bool
     phase_capability: int
     max_charge_power_kw: float
@@ -3568,7 +3585,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self._plugged_since: datetime | None = None
 
     async def _async_setup(self) -> None:
-        """Register listeners for coordinator chaining and SOC state changes.
+        """Register listeners for coordinator chaining and car input state changes.
 
         Called once during async_config_entry_first_refresh.
         """
@@ -3578,13 +3595,24 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         )
         self.config_entry.async_on_unload(lambda: unsub_price())
 
-        # Listen for battery_level_entity state changes for immediate SOC updates
-        if self._battery_level_entity:
+        # Recalculate on SOC and on every _is_home_and_plugged_in() input (see
+        # _handle_input_update). Direct refreshes and the debouncer's habit of
+        # dropping calls that land mid-refresh are both safe only while
+        # _async_update_data never awaits.
+        entities = [
+            e
+            for e in (
+                self._battery_level_entity,
+                self._charger_status_entity,
+                self._charger_connected_entity,
+                self._location_entity,
+            )
+            if e
+        ]
+        if entities:
             self.config_entry.async_on_unload(
                 async_track_state_change_event(
-                    self.hass,
-                    [self._battery_level_entity],
-                    self._handle_soc_update,
+                    self.hass, entities, self._handle_input_update
                 )
             )
 
@@ -3594,9 +3622,20 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         self.hass.async_create_task(self.async_request_refresh())
 
     @callback
-    def _handle_soc_update(self, event) -> None:
-        """Handle car SOC entity state changes for immediate recalculation."""
-        self.hass.async_create_task(self.async_request_refresh())
+    def _handle_input_update(self, event) -> None:
+        """Handle car SOC/plug/location state changes for immediate recalculation.
+
+        Presence inputs bypass the request_refresh debouncer: inside its 10 s
+        cooldown an unplug and replug would fold into one refresh that never
+        sees the car unplugged, and a cable change right after an SOC write
+        would wait ~10 s. SOC changes stay debounced.
+        """
+        if not _is_state_value_change(event):
+            return
+        if event.data.get("entity_id") == self._battery_level_entity:
+            self.hass.async_create_task(self.async_request_refresh())
+        else:
+            self.hass.async_create_task(self.async_refresh())
 
     async def _async_update_data(self) -> CarChargingData:
         """Fetch inputs, run pure scheduler, and return CarChargingData.
@@ -3628,11 +3667,13 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
 
         # 2c. Track the plugged-in streak. Any refresh that sees the car away
         # or unplugged resets it, so a car that drove off and came back never
-        # gets the departure grace. Fail-safe: a restart also resets it.
-        home_and_plugged = self._is_home_and_plugged_in()
-        if not home_and_plugged:
+        # gets the departure grace. Fail-safe: a restart also resets it. An
+        # unknown charger status (None) holds it: an Easee blip is not an unplug.
+        presence = self._is_home_and_plugged_in()
+        home_and_plugged = presence is True
+        if presence is False:
             self._plugged_since = None
-        elif self._plugged_since is None:
+        elif home_and_plugged and self._plugged_since is None:
             self._plugged_since = dt_util.utcnow()
 
         # 3. Convert departure_time (local time-of-day) to UTC datetime.
@@ -3839,7 +3880,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             self._subentry.subentry_id, self._phase_capability
         )
 
-    def _is_home_and_plugged_in(self) -> bool:
+    def _is_home_and_plugged_in(self) -> bool | None:
         """Derive whether the car is home and plugged in from available signals.
 
         Combines up to three signals:
@@ -3852,19 +3893,24 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
         If location is available, the car must be in the "home" zone.
 
         Returns:
-            True if the car appears to be home and plugged in.
+            True if the car appears to be home and plugged in, False if not,
+            None when the charger status is unavailable/unknown and the car's
+            own signals don't contradict. Only the plugged-in streak tells
+            None from False; every other caller treats it as False.
         """
         # Signal 1: Easee charger status (shared across all cars)
-        charger_connected = False
+        charger_connected: bool | None = False
         if self._charger_status_entity:
             state = self.hass.states.get(self._charger_status_entity)
-            if state is not None and state.state not in ("unavailable", "unknown"):
+            if state is None or state.state in ("unavailable", "unknown"):
+                charger_connected = None
+            else:
                 charger_connected = state.state.lower() not in (
                     "disconnected",
                     "offline",
                 )
 
-        if not charger_connected:
+        if charger_connected is False:
             return False
 
         # Signal 2: Car's own charger_connected binary sensor (if available)
@@ -3887,7 +3933,7 @@ class CarChargingCoordinator(DataUpdateCoordinator[CarChargingData]):
             ):
                 return False
 
-        return True
+        return charger_connected
 
 
 # ---------------------------------------------------------------------------
@@ -4067,7 +4113,8 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
     """Coordinator that orchestrates real-time Easee charger control.
 
     ~30s poll + state-change listeners on the charger status/power
-    entities. Builds a ChargerInputs snapshot each tick (reusing the shared
+    entities, chained to every CarChargingCoordinator. Builds a
+    ChargerInputs snapshot each tick (reusing the shared
     FuseSensorReader -- same grid-sensor formula as EMSCoordinator, see
     05-RESEARCH.md "shared fuse arbiter"), calls the pure ChargerController,
     and executes the returned commands via the easee.* services through the
@@ -4078,12 +4125,18 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
     see _read_solar_surplus_kw()).
     """
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        car_coordinators: dict[str, CarChargingCoordinator],
+    ) -> None:
         """Initialize the Easee coordinator.
 
         Args:
             hass: Home Assistant instance.
             entry: The config entry for this integration.
+            car_coordinators: The CarChargingCoordinators to chain to.
         """
         super().__init__(
             hass,
@@ -4094,6 +4147,9 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
             always_update=False,
         )
         self._controller = ChargerController()
+        # Listened to only. Reads stay on runtime_data, whose empty first-tick
+        # snapshot _sample_throughput relies on.
+        self._car_coordinators = car_coordinators
 
         # Solar-activation latch persistence -- restored in _async_setup,
         # saved (delayed) whenever a tick changes the latch state, so a
@@ -4259,7 +4315,7 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
         self._logged_terminal_status_while_drawing = False
 
     async def _async_setup(self) -> None:
-        """Register listeners for immediate response to charger state changes.
+        """Register listeners for immediate response to charger and car changes.
 
         Called once during async_config_entry_first_refresh. Force-charging
         and master-switch toggles cannot be listened for here (they are
@@ -4304,10 +4360,30 @@ class EaseeCoordinator(DataUpdateCoordinator[EaseeData]):
                 )
             )
 
+        # Chain to every CarChargingCoordinator: act on a plug-in or SOC
+        # change as soon as the car schedule is recomputed, not on the next
+        # 30 s tick. Car coordinators never listen back directly; the indirect
+        # path (an Easee command changes the charger status, which refreshes
+        # the cars) ends because those statuses leave car data unchanged.
+        for car_coordinator in self._car_coordinators.values():
+            self.config_entry.async_on_unload(
+                car_coordinator.async_add_listener(self._handle_car_update)
+            )
+
     @callback
     def _handle_charger_update(self, event) -> None:
         """Handle charger status/power state changes for immediate response."""
         self.hass.async_create_task(self.async_request_refresh())
+
+    @callback
+    def _handle_car_update(self) -> None:
+        """Handle CarChargingCoordinator data updates via coordinator chaining.
+
+        Not eager: a shared charger-status change refreshes every car in turn,
+        and an eager run here would decide on the first car's new data plus
+        the rest's old, then (mid-await) drop the later cars' requests.
+        """
+        self.hass.async_create_task(self.async_request_refresh(), eager_start=False)
 
     async def _async_update_data(self) -> EaseeData:
         """Build ChargerInputs, call the pure controller, execute, and return EaseeData.

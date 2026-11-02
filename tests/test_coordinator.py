@@ -65,6 +65,7 @@ from custom_components.energy_manager.coordinator import (
     _cancel_unsub,
     _find_native_coordinator,
     _is_recent_nordpool_refresh,
+    _is_state_value_change,
     _prune_samples,
     _read_soc_timestamp,
     _read_sun_dawn_dusk,
@@ -81,6 +82,26 @@ from custom_components.energy_manager.coordinator import (
 )
 
 UTC = timezone.utc
+_COMPONENT_DIR = Path(inspect.getsourcefile(coordinator_module)).parent
+
+
+def _class_source(name: str, module: str = "coordinator.py") -> str:
+    """Source of one top-level class, for text guards over code the HA stubs can't run."""
+    text = (_COMPONENT_DIR / module).read_text()
+    match = re.search(rf"class {name}\(.*?(?=\nclass \w|\Z)", text, re.DOTALL)
+    assert match is not None, f"{name} not found in {module}"
+    return match.group(0)
+
+
+def _method_source(class_name: str, name: str) -> str:
+    """Whitespace-normalised source of one coordinator method."""
+    match = re.search(
+        rf"\n    (?:async )?def {name}\(.*?(?=\n    async def \w|\n    def \w|\Z)",
+        _class_source(class_name),
+        re.DOTALL,
+    )
+    assert match is not None, f"{name} not found -- guard is blind"
+    return " ".join(match.group(0).split())
 
 
 class FakeState:
@@ -805,11 +826,119 @@ class TestCarDepartureGraceWiring:
         BEFORE the deadline is resolved."""
         flat = " ".join(TestCarPlannerUsesLearnedPower._class_source().split())
         reset = (
-            "if not home_and_plugged: self._plugged_since = None"
-            " elif self._plugged_since is None: self._plugged_since = dt_util.utcnow()"
+            "presence = self._is_home_and_plugged_in() home_and_plugged = presence is True"
+            " if presence is False: self._plugged_since = None"
+            " elif home_and_plugged and self._plugged_since is None:"
+            " self._plugged_since = dt_util.utcnow()"
         )
         assert reset in flat
         assert flat.index(reset) < flat.index("resolve_departure(")
+
+    def test_charger_blip_is_unknown_not_unplugged(self) -> None:
+        """An unavailable/unknown Easee status yields None (holds the streak),
+        but a known car-side 'unplugged'/'away' still returns False first."""
+        src = _method_source("CarChargingCoordinator", "_is_home_and_plugged_in")
+        assert (
+            'if state is None or state.state in ("unavailable", "unknown"):'
+            " charger_connected = None"
+        ) in src
+        assert "if charger_connected is False: return False" in src
+        # The final return, after the Signal 3 veto, passes None through.
+        assert '!= "home" ): return False return charger_connected' in src
+
+
+class TestCarRefreshesOnPresenceChange:
+    """home_and_plugged is only recomputed on a car-coordinator refresh.
+
+    Listening to SOC alone left it stale for up to 5 minutes after a
+    plug-in: mySkoda wrote SOC 25 ms before the cable and location sensors,
+    so the SOC-triggered refresh saw the car away and forced charging stayed
+    idle. Every input of _is_home_and_plugged_in() must trigger a refresh.
+    """
+
+    def test_every_presence_input_is_listened_to(self) -> None:
+        inputs = set(
+            re.findall(
+                r"self\.(_\w+_entity)\b",
+                _method_source("CarChargingCoordinator", "_is_home_and_plugged_in"),
+            )
+        )
+        assert inputs, "no presence inputs found -- guard is blind"
+        setup = _method_source("CarChargingCoordinator", "_async_setup")
+        for attr in inputs | {"_battery_level_entity"}:
+            assert f"self.{attr}" in setup, attr
+        assert "self.hass, entities, self._handle_input_update" in setup
+
+    def test_car_refresh_never_awaits(self) -> None:
+        """The debouncer drops SOC requests that land mid-refresh, and direct
+        presence refreshes would interleave. Both are only harmless while the
+        car refresh finishes in one event-loop step."""
+        src = _method_source("CarChargingCoordinator", "_async_update_data")
+        assert not re.search(r"\bawait\b", src)
+
+    def test_presence_inputs_bypass_the_debouncer(self) -> None:
+        """Inside the debounce cooldown an unplug + replug would fold into one
+        refresh that never sees the car unplugged (keeping _plugged_since)."""
+        src = _method_source("CarChargingCoordinator", "_handle_input_update")
+        assert (
+            'if event.data.get("entity_id") == self._battery_level_entity:'
+            " self.hass.async_create_task(self.async_request_refresh())"
+            " else: self.hass.async_create_task(self.async_refresh())"
+        ) in src
+
+    @pytest.mark.parametrize(
+        ("old", "new", "expected"),
+        [
+            (FakeState("not_home"), FakeState("home"), True),
+            # A tracker's GPS attributes update while the state stays not_home
+            (
+                FakeState("not_home", {"latitude": 55.70}),
+                FakeState("not_home", {"latitude": 55.71}),
+                False,
+            ),
+            (None, FakeState("home"), True),
+            (FakeState("home"), None, True),
+            # A blip is a value change; the tri-state presence holds the streak
+            (FakeState("awaiting_start"), FakeState("unavailable"), True),
+        ],
+        ids=["value_change", "attribute_only", "added", "removed", "to_unavailable"],
+    )
+    def test_refresh_filter(
+        self, old: FakeState | None, new: FakeState | None, expected: bool
+    ) -> None:
+        event = SimpleNamespace(data={"old_state": old, "new_state": new})
+        assert _is_state_value_change(event) is expected
+
+
+class TestCarScheduleRecorderChurn:
+    """An unchanged car plan must not notify listeners or hit the recorder.
+
+    always_update=False only skips listeners when two refreshes compare
+    equal; a fresh last_calculated on every refresh defeated that, so the
+    car schedule sensor wrote its 48-slot schedule to the recorder every
+    5 minutes per car.
+    """
+
+    def test_refreshes_differing_only_in_last_calculated_are_equal(self) -> None:
+        first = _minimal_car_charging_data()
+        later = _minimal_car_charging_data(
+            last_calculated=first.last_calculated + timedelta(minutes=5)
+        )
+        assert first == later
+
+    def test_a_real_plan_change_is_still_unequal(self) -> None:
+        assert _minimal_car_charging_data(current_action="charge") != (
+            _minimal_car_charging_data()
+        )
+
+    def test_car_coordinator_skips_unchanged_updates(self) -> None:
+        assert "always_update=False" in TestCarPlannerUsesLearnedPower._class_source()
+
+    @pytest.mark.parametrize("sensor_class", ["CarScheduleSensor", "BatteryStatusSensor"])
+    def test_schedule_attribute_is_not_recorded(self, sensor_class: str) -> None:
+        assert '_unrecorded_attributes = frozenset({"schedule"})' in _class_source(
+            sensor_class, "sensor.py"
+        )
 
 
 class TestThroughputSamplingSkipsBlindTicks:
@@ -856,6 +985,46 @@ class TestThroughputSamplingSkipsBlindTicks:
         source = self._method_source()
         assert "self._throughput_learner.observe(tick)" in source
         assert source.count("if not cars:") == 1
+
+
+class TestEaseeRefreshesOnCarUpdate:
+    """EaseeCoordinator must refresh as soon as a car coordinator publishes.
+
+    It acts on each car's home_and_plugged / current_action snapshot but
+    re-read it only on its own 30 s tick or a charger event, so after a
+    plug-in forced or scheduled charging sat idle up to ~40 s (car debounce
+    trailing refresh + Easee tick). Text guard for the same reason as
+    TestCarPlannerUsesLearnedPower, whitespace-normalised.
+    """
+
+    def test_setup_chains_to_every_car_coordinator(self) -> None:
+        # Direct unsub, not `lambda: unsub()`: a lambda in a loop late-binds
+        # and would unsubscribe only the last car on unload.
+        assert (
+            "for car_coordinator in self._car_coordinators.values():"
+            " self.config_entry.async_on_unload("
+            " car_coordinator.async_add_listener(self._handle_car_update) )"
+        ) in _method_source("EaseeCoordinator", "_async_setup")
+
+    def test_car_update_requests_a_deferred_refresh(self) -> None:
+        """Deferred, so it runs after every car has refreshed for the same
+        charger-status change instead of on a half-updated car list."""
+        assert _method_source("EaseeCoordinator", "_handle_car_update").endswith(
+            "self.hass.async_create_task(self.async_request_refresh(), eager_start=False)"
+        )
+
+    def test_setup_hands_easee_the_car_coordinators_after_building_them(self) -> None:
+        flat = " ".join((_COMPONENT_DIR / "__init__.py").read_text().split())
+        built = "car_coordinators[subentry_id] = car_coordinator"
+        easee = "EaseeCoordinator(hass, entry, car_coordinators)"
+        assert built in flat and easee in flat
+        assert flat.index(built) < flat.index(easee)
+
+    def test_car_coordinators_never_listen_back(self) -> None:
+        """Car -> Easee is one-way. A car coordinator listening to Easee or
+        EMS would ping-pong refreshes whenever either side's data changes."""
+        car = TestCarPlannerUsesLearnedPower._class_source()
+        assert re.findall(r"(\w+)\.async_add_listener\(", car) == ["_price_coordinator"]
 
 
 # --- Restore-seeded coordinator attributes ---------------------------------
