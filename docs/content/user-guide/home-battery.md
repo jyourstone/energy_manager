@@ -6,6 +6,8 @@ The Home Battery module charges your battery during cheap Nordpool hours and dis
 
 Energy Manager doesn't just watch the current price and react to it. It reads the full Nordpool horizon (today, plus tomorrow once tomorrow's prices are published) and plans several charge/discharge cycles ahead: it identifies the expensive peaks worth covering, works out how much energy each one needs, and picks the cheapest available slots — solar or grid — to fill that need before the peak arrives.
 
+Within a peak the plan follows the battery through time. A slot is only scheduled to discharge energy the battery will actually hold at that point: a spike ahead of a cheap stretch can drain the battery when that stretch refills it for the next spike, and a slot ahead of all charging is never promised energy that only arrives later.
+
 That forward planning is what makes the schedule stable. A slot's role (charge, discharge, idle) is decided against the whole horizon, not re-decided every time a new price ticks in, so the plan doesn't flip-flop hour to hour.
 
 Optionally, the same schedule can also sell battery energy to the grid during extreme price spikes — see [Battery to Grid Export Arbitrage](battery-export-arbitrage.md).
@@ -31,8 +33,8 @@ Four number entities (seeded from the wizard's answers on first setup) shape how
 
 Two number entities control how aggressively the battery charges and discharges:
 
-- **Battery charge spread threshold** — a slot becomes a charge candidate for a given peak when a later slot of that peak is priced more than this value above it. Candidates are every slot from the end of the previous peak up to the peak's last slot: the idle gap before the peak, idle stretches inside it, and the peak's own cheaper dips — so on a high-spread day where a low discharge threshold bridges the whole horizon into one peak, the cheap night hours inside it can still be scheduled for grid charging. Cheapest slots are picked first, wherever they lie.
-- **Battery discharge spread threshold** — a slot discharges when its price minus the horizon's minimum price exceeds this value.
+- **Battery charge spread threshold** — a slot becomes a charge candidate for a given peak when a later slot of that peak is priced more than this value above it. Candidates are every slot from the end of the previous peak up to the peak's last slot: the idle gap before the peak, idle stretches inside it, and the peak's own cheaper dips — so on a high-spread day where a low discharge threshold bridges the whole horizon into one peak, the cheap night hours inside it can still be scheduled for grid charging. Cheapest slots are picked first, wherever they lie. When a peak outlasts one battery charge, the plan may also recharge in the middle of it; such an extra recharge is only planned for a slot priced more than this value above the recharge slot.
+- **Battery discharge spread threshold** — a slot discharges when its price minus the horizon's minimum price exceeds this value. When charging is planned before the next scheduled discharge or export, an idle slot is measured against the highest price of that charging instead, however far ahead it lies, so the battery does not discharge only to buy the same energy back.
 
 The discharge threshold can be overridden automatically. When **Battery Cycle Cost** is set above 0, the effective discharge threshold becomes `max(0, battery_cycle_cost − grid_transfer_fee)` — the wear cost of one charge/discharge cycle, net of the grid transfer fee you'd otherwise pay to import that energy instead. While the formula is active, the manual **Battery discharge spread threshold** entity shows as **unavailable** in Home Assistant, since the scheduler is ignoring it in favor of the derived value. If the transfer fee exceeds the cycle cost, the formula clamps to 0, meaning any spread above the horizon minimum qualifies for discharge.
 
