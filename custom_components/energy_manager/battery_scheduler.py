@@ -330,6 +330,7 @@ def build_battery_schedule(
             min_soc_pct=min_soc_pct,
             max_soc_pct=max_soc_pct,
             charge_power_kw=min(estimated_charge_power_kw, max_charge_power_w / 1000.0),
+            solar_windows=solar_windows,
         )
 
     # Step 7: Build the final schedule
@@ -870,11 +871,14 @@ def _walk_window(
     energy_kwh: float,
     min_energy_kwh: float,
     max_energy_kwh: float,
+    solar_kwh: list[float] | None = None,
 ) -> tuple[int, list[float]]:
     """Simulate one peak's window chronologically (BATT-20).
 
     A charge slot adds its energy, capped at the battery's ceiling; a
-    discharge slot draws its house-consumption need.
+    discharge slot draws its house-consumption need. ``solar_kwh``, when
+    given, is forecast solar arriving in each slot, added before the slot's
+    own role and capped the same way.
 
     Returns:
         The index of the first discharge slot that would take the battery
@@ -883,6 +887,8 @@ def _walk_window(
     """
     levels: list[float] = []
     for i, role in enumerate(roles):
+        if solar_kwh:
+            energy_kwh = min(energy_kwh + solar_kwh[i], max_energy_kwh)
         if role == _CHARGE:
             energy_kwh = min(energy_kwh + charge_kwh[i], max_energy_kwh)
         elif role == _DISCHARGE:
@@ -1106,7 +1112,6 @@ def _optimize_schedule(
         )
         planned = _walk_window(roles, *sim)[1]  # levels of the accepted plan
         served_kwh = 0.0
-        rescue_slots: set[int] = set()
 
         for dslot in sorted(peak, key=lambda s: s.price, reverse=True):
             d = position[id(dslot)]
@@ -1143,9 +1148,10 @@ def _optimize_schedule(
             # Draining ahead of a charge slot the ceiling had clipped makes
             # it take in more -- that is buying there to serve this slot. The
             # slot is refused when such re-buying at too thin a spread would
-            # cover its whole need: the charge spread for an earlier rescue
-            # slot, the discharge spread (one extra cycle) for a
-            # deficit-sized slot, which was bought for the whole peak anyway.
+            # cover its whole need: the charge spread for a rescue slot, the
+            # discharge spread (one extra cycle) for a deficit-sized slot,
+            # which was bought for the whole peak anyway. Only deficit-sized
+            # slots carry the "charge" action yet; rescues get it below.
             thin_kwh = 0.0
             if short < 0:
                 for i, role in enumerate(roles):
@@ -1154,15 +1160,13 @@ def _optimize_schedule(
                     grown = _charged_in(levels, i, virtual_energy) - _charged_in(
                         planned, i, virtual_energy
                     )
-                    spread = (
-                        charge_threshold if i in rescue_slots else discharge_threshold
-                    )
+                    sized = window[i].action == "charge"
+                    spread = discharge_threshold if sized else charge_threshold
                     if grown > slack and dslot.price - window[i].price <= spread:
                         thin_kwh += grown
             if short < 0 and thin_kwh < need_kwh[d] - slack:
                 planned = levels
                 served_kwh += need_kwh[d]
-                rescue_slots.update(rescued)
             else:
                 roles[d] = _HOLD
                 for j in rescued:
@@ -1205,6 +1209,7 @@ def _mark_export_slots(
     min_soc_pct: float,
     max_soc_pct: float,
     charge_power_kw: float,
+    solar_windows: list[tuple[tuple[datetime, datetime], float]],
 ) -> None:
     """Mark qualifying spike slots as "export" (BATT-17 post-pass).
 
@@ -1290,9 +1295,17 @@ def _mark_export_slots(
     # is also walked chronologically, like the plan it is added to.
     future = [s for s in slots if s.end > now]
     charge_kwh = [charge_power_kw * s.duration_hours for s in future]
+    # Forecast solar arriving in each slot. The plan above credits solar
+    # more cautiously (a lump before each peak, and intra-peak solar only as
+    # reduced need), so this walk never holds less than the plan assumed;
+    # without it a solar-backed plan would fail before any export is added.
+    solar_kwh = [
+        _solar_energy_kwh(max(s.start, now), s.end, solar_windows) for s in future
+    ]
+    max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
 
-    def first_shortfall() -> int:
-        """Index in ``future`` of the first slot the plan cannot serve, or -1."""
+    def walk_plan() -> tuple[int, list[float]]:
+        """First slot of ``future`` the plan cannot serve (-1: none), and levels."""
         roles = [
             _CHARGE
             if s.action in ("charge", "solar_charge")
@@ -1312,12 +1325,13 @@ def _mark_export_slots(
             needs,
             (current_soc_pct / 100.0) * battery_capacity_kwh,
             min_energy_kwh,
-            (max_soc_pct / 100.0) * battery_capacity_kwh,
-        )[0]
+            max_energy_kwh,
+            solar_kwh,
+        )
 
-    # A plan that leans on forecast solar does not survive this walk even
-    # before any export; the pooled budget alone decides then, as before.
-    walkable = first_shortfall() < 0
+    # Should the plan fail this walk even before any export, the walk has
+    # nothing to say about exports: the pooled budget alone decides then.
+    walkable = walk_plan()[0] < 0
     # Number of recharge slots up to each future slot: two slots share a
     # charge-free stretch exactly when their counts match.
     recharges: dict[int, int] = {}
@@ -1367,13 +1381,14 @@ def _mark_export_slots(
 
         # Chronological check: where the walk still falls short, demote the
         # cheapest less-valuable slot that feeds that shortfall -- one at or
-        # before it with no recharge in between. None left: no export.
-        short = first_shortfall() if walkable else -1
+        # before it, back to the last point where the battery was full
+        # (nothing saved earlier gets past that). None left: no export.
+        short, levels = walk_plan() if walkable else (-1, [])
         while short >= 0:
             fix = None
             for j in range(short, -1, -1):
                 d = future[j]
-                if d.action in ("charge", "solar_charge"):
+                if j < short and levels[j] >= max_energy_kwh - _ENERGY_EPSILON_KWH:
                     break
                 if (
                     d.action == "discharge"
@@ -1386,7 +1401,7 @@ def _mark_export_slots(
             fix.action = "idle"
             demoted.append(fix)
             freed += mean_consumption_kw * fix.duration_hours
-            short = first_shortfall()
+            short, levels = walk_plan()
         if short >= 0:
             c.action = was
             for d in demoted:
@@ -1400,8 +1415,10 @@ def _mark_export_slots(
             for d in sorted(demoted, key=lambda d: d.price, reverse=True):
                 if recharges[id(d)] != recharges[id(c)]:
                     d.action = "discharge"
-                    if first_shortfall() >= 0:
+                    if walk_plan()[0] >= 0:
                         d.action = "idle"
+                    else:
+                        freed -= mean_consumption_kw * d.duration_hours
         budget += freed - need
 
 
