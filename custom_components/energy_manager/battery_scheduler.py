@@ -11,9 +11,15 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
     1. Classify discharge candidates by SPREAD against the period's minimum
        price: a slot is profitable discharge when
        ``price - min_price > discharge_threshold``. Charge candidates are
-       peak-relative (a slot is worth charging for a given peak when
-       ``peak_max_price - price > charge_threshold``) and are therefore only
-       evaluated while processing that peak, not up front.
+       peak-relative (a slot is worth charging for a given peak when a
+       LATER slot of that peak is priced more than ``charge_threshold``
+       above it) and are therefore only evaluated while processing that
+       peak, not up front. Candidates are every future slot from the end
+       of the previous peak up to this peak's last slot: the idle gap
+       before it (every peak slot is later there, so the comparison is
+       against the peak's max), idle stretches inside it and its own
+       cheaper dips (BATT-19), so a horizon bridged into a single peak can
+       still charge in its cheap stretches.
     2. Group discharge candidates into peaks separated by configurable gaps.
     3. Energy needed to serve a peak is sized from house consumption
        (``len(peak_slots) * mean_consumption_kw * slot_duration``), not from
@@ -25,7 +31,11 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
        own upcoming recharge so an early cheap peak cannot starve a later,
        pricier one (BATT-15b), then a cheapest-first charge deficit (with
        buffer) is scheduled, and finally discharge is marked
-       most-expensive-first while consumption energy remains.
+       most-expensive-first for the slots the battery can serve AT THAT
+       TIME (BATT-20): each peak is walked chronologically, so a slot never
+       spends energy that is only charged later, and a spike ahead of a
+       cheap stretch may drain the battery when that stretch refills it
+       for the spike after.
     5. Charge slots that fall within a resolved solar window (today's, and
        tomorrow's when a tomorrow forecast is available -- BATT-16) are
        relabeled "solar_charge" -- a cosmetic distinction only (EMS treats
@@ -34,7 +44,8 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
        export spike threshold is configured, qualifying spike slots are
        relabeled "export" after optimization -- funded by a reserve-floored
        energy budget and a unified merit order that may demote cheaper
-       discharge slots to idle.
+       discharge slots to idle, and checked chronologically against the
+       plan like any other slot (BATT-20).
     7. Derive current action and EMS mode from the slot containing 'now'.
 """
 
@@ -183,8 +194,8 @@ def build_battery_schedule(
         price_slots: List of dicts with "start" (datetime), "end" (datetime),
             "price" (float) keys.
         charge_threshold: Spread threshold in SEK/kWh -- a slot is a charge
-            candidate for a given peak when ``peak_max_price - price``
-            exceeds this value (BATT-15).
+            candidate for a given peak when a later slot of that peak is
+            priced more than this value above it (BATT-15 / BATT-19).
         discharge_threshold: Spread threshold in SEK/kWh -- a slot discharges
             when ``price - min_price`` exceeds this value (BATT-15). Callers
             implementing the BATT-14 economics derivation should pass the
@@ -285,13 +296,14 @@ def build_battery_schedule(
     )
 
     # Step 6: Virtual energy tracking -- optimize charge/discharge allocation
-    _optimize_schedule(
+    solar_credit = _optimize_schedule(
         slots=slots,
         peaks=peaks,
         now=now,
         battery_capacity_kwh=battery_capacity_kwh,
         current_soc_pct=current_soc_pct,
         charge_threshold=charge_threshold,
+        discharge_threshold=discharge_threshold,
         mean_consumption_kw=mean_consumption_kw,
         estimated_charge_power_kw=estimated_charge_power_kw,
         max_charge_power_w=max_charge_power_w,
@@ -316,6 +328,9 @@ def build_battery_schedule(
             battery_capacity_kwh=battery_capacity_kwh,
             current_soc_pct=current_soc_pct,
             min_soc_pct=min_soc_pct,
+            max_soc_pct=max_soc_pct,
+            charge_power_kw=min(estimated_charge_power_kw, max_charge_power_w / 1000.0),
+            solar_credit=solar_credit,
         )
 
     # Step 7: Build the final schedule
@@ -358,6 +373,7 @@ def build_battery_schedule(
         min_soc_pct=min_soc_pct,
         solar_windows=solar_windows,
         export_power_kw=export_power_kw,
+        charge_power_kw=min(estimated_charge_power_kw, max_charge_power_w / 1000.0),
     )
 
     return BatteryScheduleResult(
@@ -419,6 +435,7 @@ def compute_discharge_gate(
     min_soc_pct: float = 10.0,
     solar_windows: list[tuple[tuple[datetime, datetime], float]] | None = None,
     export_power_kw: float = 0.0,
+    charge_power_kw: float = float("inf"),
 ) -> DischargeGate:
     """Determine whether self-consumption discharge is currently allowed.
 
@@ -427,10 +444,13 @@ def compute_discharge_gate(
     the current slot's price spread against the period minimum clears the
     effective discharge threshold. This scheduler improves on that
     AppDaemon behavior with a reservation check: energy already earmarked
-    for a scheduled discharge peak later today (before the next planned
-    recharge) is protected from being drained by idle-period
-    self-consumption, so an early self-consumption drain cannot starve a
-    later, already-planned peak.
+    for scheduled discharge later is protected from being drained by
+    idle-period self-consumption, so an early self-consumption drain cannot
+    starve an already-planned peak. A planned recharge on the way covers the
+    discharge after it only up to what it can add, and energy that would
+    just be re-bought in that recharge has to beat ITS price by the
+    threshold, not the period minimum (BATT-20) -- otherwise the battery
+    would cycle in the idle gaps between charge slots.
 
     Args:
         schedule: Ordered list of schedule slots (as produced by
@@ -452,6 +472,9 @@ def compute_discharge_gate(
             slots (kW). Future export slots reserve at
             (export_power_kw + mean_consumption_kw); 0.0 (the default)
             still reserves an export slot's house-load share.
+        charge_power_kw: Charge rate (kW) a planned charge slot adds; its
+            energy offsets the discharge scheduled after it. The default
+            (infinite) treats any recharge as a full refill.
 
     Returns:
         DischargeGate describing whether discharge is currently allowed.
@@ -478,32 +501,41 @@ def compute_discharge_gate(
         )
 
     # Idle slot: gate self-consumption discharge on price spread, then on
-    # energy reserved for an upcoming scheduled discharge peak.
-    min_price = min(s.price for s in schedule)
-    spread = current_slot.price - min_price
+    # energy reserved for upcoming scheduled discharge.
+    # Energy drained now is worth the period minimum -- or, when a recharge
+    # is planned before anything else uses the battery, the price it would
+    # be bought back at there (BATT-20). Measured against the priciest slot
+    # of that recharge, so a thin cycle never slips through.
+    refill_price = min(s.price for s in schedule)
+    recharge_comes_first = True
 
     reserved_energy_kwh = 0.0
     needed_energy_kwh = 0.0
     for slot in schedule:
         if slot.start < now:
             continue
+        duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
         if slot.action in ("charge", "solar_charge"):
-            # A planned recharge resets the reservation -- discharging
-            # before a refill is fine.
-            break
+            # A planned recharge covers the discharge after it, up to the
+            # energy it can add (BATT-20: mid-peak recharges are sized for
+            # single slots, not for everything that follows).
+            needed_energy_kwh -= charge_power_kw * duration_hours
+            if recharge_comes_first:
+                refill_price = max(refill_price, slot.price)
+            continue
         # Future "export" slots reserve like discharge slots, at their full
         # rate (export power + house load served by the battery). Without
         # this, gate-open self-consumption on idle slots could spend the
         # above-reserve-floor energy the export plan counted on, and the
         # runtime SOC check would then cancel the sale (lost revenue).
         if slot.action in ("discharge", "export"):
-            duration_hours = (slot.end - slot.start).total_seconds() / 3600.0
+            recharge_comes_first = False
             rate_kw = mean_consumption_kw
             if slot.action == "export":
                 rate_kw += export_power_kw
             needed_energy_kwh += rate_kw * duration_hours
             if solar_windows is None:
-                reserved_energy_kwh = needed_energy_kwh
+                reserved_energy_kwh = max(reserved_energy_kwh, needed_energy_kwh)
             else:
                 # BATT-16 prefix-max net-of-solar reservation: the energy
                 # needed NOW is the max over future discharge slots of
@@ -516,7 +548,7 @@ def compute_discharge_gate(
                     - _solar_energy_kwh(now, slot.start, solar_windows),
                 )
 
-    if spread <= effective_discharge_threshold:
+    if current_slot.price - refill_price <= effective_discharge_threshold:
         return DischargeGate(
             allowed=False,
             reason="below_threshold",
@@ -825,6 +857,53 @@ def _solar_energy_kwh(
     )
 
 
+# BATT-20 roles of a slot while one peak's window is simulated.
+_HOLD, _CHARGE, _DISCHARGE = 0, 1, 2
+# Float slack for energy comparisons (a nano-kWh): the chronological walk
+# and the deficit arithmetic round differently in the last bit.
+_ENERGY_EPSILON_KWH = 1e-9
+
+
+def _walk_window(
+    roles: list[int],
+    charge_kwh: list[float],
+    need_kwh: list[float],
+    energy_kwh: float,
+    min_energy_kwh: float,
+    max_energy_kwh: float,
+    solar_kwh: list[float] | None = None,
+) -> tuple[int, list[float]]:
+    """Simulate one peak's window chronologically (BATT-20).
+
+    A charge slot adds its energy, capped at the battery's ceiling; a
+    discharge slot draws its house-consumption need. ``solar_kwh``, when
+    given, is forecast solar arriving in each slot, added before the slot's
+    own role and capped the same way.
+
+    Returns:
+        The index of the first discharge slot that would take the battery
+        below its floor (-1 when every discharge slot is covered), and the
+        energy level after each slot walked before that point.
+    """
+    levels: list[float] = []
+    for i, role in enumerate(roles):
+        if solar_kwh:
+            energy_kwh = min(energy_kwh + solar_kwh[i], max_energy_kwh)
+        if role == _CHARGE:
+            energy_kwh = min(energy_kwh + charge_kwh[i], max_energy_kwh)
+        elif role == _DISCHARGE:
+            energy_kwh -= need_kwh[i]
+            if energy_kwh < min_energy_kwh - _ENERGY_EPSILON_KWH:
+                return i, levels
+        levels.append(energy_kwh)
+    return -1, levels
+
+
+def _charged_in(levels: list[float], i: int, start_kwh: float) -> float:
+    """Energy slot ``i`` took in during a walk (0 for a slot on hold)."""
+    return levels[i] - (levels[i - 1] if i else start_kwh)
+
+
 def _optimize_schedule(
     slots: list[_SlotInfo],
     peaks: list[list[_SlotInfo]],
@@ -832,6 +911,7 @@ def _optimize_schedule(
     battery_capacity_kwh: float,
     current_soc_pct: float,
     charge_threshold: float,
+    discharge_threshold: float,
     mean_consumption_kw: float,
     estimated_charge_power_kw: float,
     max_charge_power_w: float,
@@ -839,7 +919,7 @@ def _optimize_schedule(
     solar_windows: list[tuple[tuple[datetime, datetime], float]],
     min_soc_pct: float,
     max_soc_pct: float,
-) -> None:
+) -> dict[int, float]:
     """Optimize the schedule using virtual energy tracking (BATT-15).
 
     Processes peaks chronologically, tracking a virtual battery energy
@@ -848,12 +928,20 @@ def _optimize_schedule(
     BATT-16); energy is reserved for future, more expensive peaks net of
     their own upcoming recharge (BATT-15b); a cheapest-first charge deficit
     (with buffer, capped at the usable energy range) is scheduled from
-    peak-relative charge candidates; then discharge is marked
-    most-expensive-first while energy remains for each slot's own
-    house-consumption need. Charge slots inside any solar window are
-    finally relabeled "solar_charge" (cosmetic only).
+    peak-relative charge candidates -- every slot from the previous peak's
+    end through this peak that sits below a later slot of it (BATT-19);
+    then discharge is marked most-expensive-first for each slot whose
+    house-consumption need the battery holds at that time, recharging
+    mid-peak where that clears the charge threshold (BATT-20). Charge slots
+    inside any solar window are finally relabeled "solar_charge" (cosmetic
+    only).
 
     Mutates slots in place, changing actions as needed.
+
+    Returns:
+        The solar recharge credited ahead of each peak (BATT-15a), keyed by
+        ``id()`` of the peak's first future slot, so the export pass can walk
+        the plan with exactly the solar it was built on.
     """
     min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
     max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
@@ -874,7 +962,7 @@ def _optimize_schedule(
 
     if not peaks:
         # No discharge opportunities -- nothing to charge for either.
-        return
+        return {}
 
     max_charge_power_kw = max_charge_power_w / 1000.0
     charge_power_kw = min(estimated_charge_power_kw, max_charge_power_kw)
@@ -918,9 +1006,10 @@ def _optimize_schedule(
         )
 
     virtual_energy = current_energy_kwh
+    slack = _ENERGY_EPSILON_KWH
 
     for idx, peak in enumerate(peaks):
-        window_start, window_end = window_bounds[idx]
+        window_start, _ = window_bounds[idx]
 
         # BATT-15a: add this peak's expected solar recharge before drawing
         # down for it, capped at the battery's usable ceiling.
@@ -950,22 +1039,50 @@ def _optimize_schedule(
         room_in_battery = max(0.0, max_energy_kwh - virtual_energy)
         charge_target = min(energy_deficit, room_in_battery)
 
-        # Peak-relative charge candidates (BATT-15): idle, not-yet-assigned
-        # slots in the pre-peak window priced enough below this peak's max.
-        charge_candidates = [
-            s
-            for s in slots
-            if s.action == "idle"
-            and s.end > now
-            and window_start <= s.start < window_end
-            and (peak_max_price[idx] - s.price) > charge_threshold
-        ]
-        charge_candidates.sort(key=lambda s: s.price)
+        # Peak-relative charge candidates (BATT-15 / BATT-19): every future
+        # slot from the previous peak's end up to (not including) this peak's
+        # last slot that sits more than charge_threshold below a LATER slot of
+        # this peak. Walking backwards, later_max is the running max of this
+        # peak's slots -- the whole-peak max for the gap before the peak, the
+        # suffix max inside it -- so idle stretches within the peak and the
+        # peak's own cheaper dips qualify too (a horizon bridged into one peak
+        # by a low discharge threshold has no future pre-window at all). The
+        # window is disjoint from earlier peaks' windows, so nothing in it is
+        # already charging; an unselected dip keeps its discharge role.
+        later_max = float("-inf")
+        window: list[_SlotInfo] = []  # this peak's future slots
+        charge_candidates: list[_SlotInfo] = []
+        for s in reversed(slots):
+            if s.start >= peak[-1].end:
+                continue
+            if s.start < window_start:
+                break
+            if s.end > now:
+                window.append(s)
+                if later_max - s.price > charge_threshold:
+                    charge_candidates.append(s)
+            if s.action == "discharge":
+                later_max = max(later_max, s.price)
+        window.reverse()  # chronological
+        charge_candidates.sort(key=lambda s: (s.price, s.start))
 
         charged_energy = 0.0
         for cslot in charge_candidates:
-            if charged_energy >= charge_target:
+            need = effective_need
+            if cslot.action == "discharge":
+                # One of the peak's own slots is grid-fed while it charges,
+                # so it drops out of the need being sized for, and it is
+                # only taken while the peak is still short without it.
+                need -= mean_consumption_kw * cslot.duration_hours
+                charge_target = min(
+                    max(0.0, need - adjusted_available)
+                    * (1 + charge_buffer_pct / 100.0),
+                    max_usable_energy_kwh,
+                    room_in_battery,
+                )
+            if charged_energy >= charge_target - slack:
                 break
+            effective_need = need
             slot_energy = charge_power_kw * cslot.duration_hours
             remaining_room = max_energy_kwh - (virtual_energy + charged_energy)
             actual = min(slot_energy, max(0.0, remaining_room))
@@ -974,23 +1091,98 @@ def _optimize_schedule(
             cslot.action = "charge"
             charged_energy += actual
 
-        virtual_energy = min(virtual_energy + charged_energy, max_energy_kwh)
+        # Discharge marking (BATT-20): most-expensive-first, but a slot only
+        # spends energy the battery holds AT THAT TIME. Each tentative plan
+        # is walked chronologically over the window. A slot that would take
+        # the battery below its floor is rescued by the cheapest slot before
+        # the shortfall whose energy still fits under the ceiling on the way
+        # there -- an idle slot or one of the peak's own cheaper slots --
+        # provided it sits more than charge_threshold below it. So a spike ahead
+        # of a dip may drain the battery because the dip refills it for the
+        # spike after, and a slot ahead of all charging gets nothing it does
+        # not already have. With no charging inside the peak this is the
+        # former pooled check.
+        # ponytail: a rescue buys a whole slot for what may be one slot's
+        # need and skips the charge buffer, like the deficit sizing rounds
+        # up; trim the rescue slot if stranded energy ever matters.
+        roles = [_CHARGE if s.action == "charge" else _HOLD for s in window]
+        position = {id(s): i for i, s in enumerate(window)}
+        need_kwh = [mean_consumption_kw * s.duration_hours for s in window]
+        sim = (
+            [charge_power_kw * s.duration_hours for s in window],
+            need_kwh,
+            virtual_energy,
+            min_energy_kwh,
+            max_energy_kwh,
+        )
+        planned = _walk_window(roles, *sim)[1]  # levels of the accepted plan
+        served_kwh = 0.0
 
-        # Discharge marking: most-expensive-first while energy remains for
-        # that slot's own house-consumption need.
-        sorted_peak = sorted(peak, key=lambda s: s.price, reverse=True)
-        remaining_energy = max(0.0, virtual_energy - min_energy_kwh)
-        discharged = 0.0
-
-        for dslot in sorted_peak:
-            slot_need = mean_consumption_kw * dslot.duration_hours
-            if remaining_energy >= slot_need:
-                remaining_energy -= slot_need
-                discharged += slot_need
+        for dslot in sorted(peak, key=lambda s: s.price, reverse=True):
+            d = position[id(dslot)]
+            if roles[d] == _CHARGE:
+                continue  # already charging for a pricier slot
+            roles[d] = _DISCHARGE
+            # Rescue never pushes served demand past the need the deficit was
+            # sized for: that need is net of intra-peak solar (BATT-18), so
+            # slots the sun covers stay idle instead of triggering grid
+            # charging.
+            may_rescue = served_kwh + need_kwh[d] <= effective_need + slack
+            rescued: list[int] = []
+            while True:
+                short, levels = _walk_window(roles, *sim)
+                if short < 0 or not may_rescue:
+                    break
+                # Walking back from the shortfall, headroom is what a slot
+                # can still add before the ceiling clips it on the way.
+                best, headroom = -1, float("inf")
+                for j in range(short - 1, -1, -1):
+                    headroom = min(headroom, max_energy_kwh - levels[j])
+                    if headroom <= slack:
+                        break
+                    if (
+                        roles[j] == _HOLD
+                        and dslot.price - window[j].price > charge_threshold
+                        and (best < 0 or window[j].price <= window[best].price)
+                    ):
+                        best = j
+                if best < 0:
+                    break
+                roles[best] = _CHARGE
+                rescued.append(best)
+            # Draining ahead of a charge slot the ceiling had clipped makes
+            # it take in more -- that is buying there to serve this slot. The
+            # slot is refused when such re-buying at too thin a spread would
+            # cover its whole need: the charge spread for a rescue slot, the
+            # discharge spread (one extra cycle) for a deficit-sized slot,
+            # which was bought for the whole peak anyway. Only deficit-sized
+            # slots carry the "charge" action yet; rescues get it below.
+            thin_kwh = 0.0
+            if short < 0:
+                for i, role in enumerate(roles):
+                    if role != _CHARGE:
+                        continue
+                    grown = _charged_in(levels, i, virtual_energy) - _charged_in(
+                        planned, i, virtual_energy
+                    )
+                    sized = window[i].action == "charge"
+                    spread = discharge_threshold if sized else charge_threshold
+                    if grown > slack and dslot.price - window[i].price <= spread:
+                        thin_kwh += grown
+            if short < 0 and thin_kwh < need_kwh[d] - slack:
+                planned = levels
+                served_kwh += need_kwh[d]
             else:
-                dslot.action = "idle"
+                roles[d] = _HOLD
+                for j in rescued:
+                    roles[j] = _HOLD
 
-        virtual_energy -= discharged
+        for s, role in zip(window, roles):
+            if role == _CHARGE:
+                s.action = "charge"
+            elif role == _HOLD and s.action == "discharge":
+                s.action = "idle"
+        virtual_energy = planned[-1]
 
     # Charge slots that fall within any solar window are relabeled
     # solar_charge -- cosmetic only (EMS maps both to command_charging);
@@ -1004,6 +1196,8 @@ def _optimize_schedule(
                 for window, _rate_kw in solar_windows
             ):
                 s.action = "solar_charge"
+
+    return {id(peak[0]): peak_recharge[idx] for idx, peak in enumerate(peaks)}
 
 
 def _mark_export_slots(
@@ -1020,6 +1214,9 @@ def _mark_export_slots(
     battery_capacity_kwh: float,
     current_soc_pct: float,
     min_soc_pct: float,
+    max_soc_pct: float,
+    charge_power_kw: float,
+    solar_credit: dict[int, float],
 ) -> None:
     """Mark qualifying spike slots as "export" (BATT-17 post-pass).
 
@@ -1043,6 +1240,14 @@ def _mark_export_slots(
     in the horizon never qualifies (SEM rule: cannot prove profitable ->
     hold). Only "discharge"/"idle" slots are eligible; charge/
     solar_charge slots are never converted. Mutates slots in place.
+
+    The budget pools energy across the horizon. Since BATT-20 plans drain
+    and recharge inside a peak, each export is also walked chronologically
+    with the plan: it must leave the battery at or above the export reserve
+    at its own slot, a shortfall it causes is repaired by demoting less
+    valuable slots that feed it, or the export is refused. Slots the budget
+    demoted on the far side of a recharge are restored when the walk still
+    serves them, so there a recharge, not the budget, funds them.
     """
     fees = grid_transfer_fee + electricity_company_fee
     # Spread baseline over FUTURE slots only (Greptile PR #8): an elapsed
@@ -1078,8 +1283,9 @@ def _mark_export_slots(
     if not candidates:
         return
 
-    # Energy budget (conservative -- ignores scheduled charging on
-    # purpose, never over-exports).
+    # Energy budget: the charge-blind admission test. It ignores scheduled
+    # charging on purpose; the chronological walk below then decides what
+    # the plan can really carry.
     min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
     export_floor_kwh = max(
         min_energy_kwh, (export_reserve_soc_pct / 100.0) * battery_capacity_kwh
@@ -1093,6 +1299,64 @@ def _mark_export_slots(
         if s.action == "discharge" and s.end > now
     )
     budget = max(0.0, usable_kwh - scheduled_discharge_kwh)
+
+    # BATT-20: the budget above pools energy across the horizon, but a
+    # recharge between two slots breaks that -- what a demoted slot leaves in
+    # the battery may just make the recharge take in less. So every export
+    # is also walked chronologically, like the plan it is added to.
+    future = [s for s in slots if s.end > now]
+    charge_kwh = [charge_power_kw * s.duration_hours for s in future]
+    # Forecast solar enters where the plan put it: the lump it credited ahead
+    # of each peak (BATT-15a), at that peak's first slot. Solar inside a peak
+    # is spent there on house load -- it is why slots idle (BATT-18) -- and
+    # adds nothing to the battery.
+    solar_kwh = [solar_credit.get(id(s), 0.0) for s in future]
+    max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
+
+    def walk_plan() -> tuple[int, list[float]]:
+        """First slot of ``future`` the plan cannot serve (-1: none), and levels."""
+        roles = [
+            _CHARGE
+            if s.action in ("charge", "solar_charge")
+            else _DISCHARGE
+            if s.action in ("discharge", "export")
+            else _HOLD
+            for s in future
+        ]
+        needs = [
+            (mean_consumption_kw + (export_power_kw if s.action == "export" else 0.0))
+            * s.duration_hours
+            for s in future
+        ]
+        short, levels = _walk_window(
+            roles,
+            charge_kwh,
+            needs,
+            (current_soc_pct / 100.0) * battery_capacity_kwh,
+            min_energy_kwh,
+            max_energy_kwh,
+            solar_kwh,
+        )
+        # Ordinary discharge may run down to the minimum SOC; an export may
+        # not take the battery below the export reserve.
+        for i, level in enumerate(levels):
+            if (
+                future[i].action == "export"
+                and level < export_floor_kwh - _ENERGY_EPSILON_KWH
+            ):
+                return i, levels[:i]
+        return short, levels
+
+    # Should the plan fail this walk even before any export, the walk has
+    # nothing to say about exports: the pooled budget alone decides then.
+    walkable = walk_plan()[0] < 0
+    # Number of recharge slots up to each future slot: two slots share a
+    # charge-free stretch exactly when their counts match.
+    recharges: dict[int, int] = {}
+    count = 0
+    for s in future:
+        count += s.action in ("charge", "solar_charge")
+        recharges[id(s)] = count
 
     # Mark most-valuable-first.
     candidates.sort(key=lambda s: s.price, reverse=True)
@@ -1123,14 +1387,57 @@ def _mark_export_slots(
             # Infeasible even after every merit-order demotion: leave the
             # schedule untouched (no partial demotions, no budget change).
             continue
-        budget += own_release
+        was, freed = c.action, own_release
+        demoted: list[_SlotInfo] = []
         for d in demotable:
-            if budget >= need:
+            if budget + freed >= need:
                 break
             d.action = "idle"
-            budget += mean_consumption_kw * d.duration_hours
+            demoted.append(d)
+            freed += mean_consumption_kw * d.duration_hours
         c.action = "export"
-        budget -= need
+
+        # Chronological check: where the walk still falls short, demote the
+        # cheapest less-valuable slot that feeds that shortfall -- one at or
+        # before it, back to the last point where the battery was full
+        # (nothing saved earlier gets past that). None left: no export.
+        short, levels = walk_plan() if walkable else (-1, [])
+        while short >= 0:
+            fix = None
+            for j in range(short, -1, -1):
+                d = future[j]
+                if j < short and levels[j] >= max_energy_kwh - _ENERGY_EPSILON_KWH:
+                    break
+                if (
+                    d.action == "discharge"
+                    and d.price + fees < c.price
+                    and (fix is None or d.price <= fix.price)
+                ):
+                    fix = d
+            if fix is None:
+                break
+            fix.action = "idle"
+            demoted.append(fix)
+            freed += mean_consumption_kw * fix.duration_hours
+            short, levels = walk_plan()
+        if short >= 0:
+            c.action = was
+            for d in demoted:
+                d.action = "discharge"
+            continue
+        if walkable:
+            # The pooled demotions were picked blind to recharges. Pooling
+            # only holds within a charge-free stretch, so a demoted slot on
+            # the far side of a recharge from the export gets its energy
+            # back whenever the walk still serves it, most valuable first.
+            # Its credit stays in the budget: the recharge pays for it, and
+            # the walk, not the budget, keeps later exports off the reserve.
+            for d in sorted(demoted, key=lambda d: d.price, reverse=True):
+                if recharges[id(d)] != recharges[id(c)]:
+                    d.action = "discharge"
+                    if walk_plan()[0] >= 0:
+                        d.action = "idle"
+        budget += freed - need
 
 
 def _find_current_action(schedule: list[ScheduleSlot], now: datetime) -> str:

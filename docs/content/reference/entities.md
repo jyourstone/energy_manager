@@ -44,7 +44,7 @@ Price-valued entities follow your Nordpool sensor's currency (SEK, NOK, DKK, EUR
 
 | Entity | Description |
 |--------|--------------|
-| Battery charge spread threshold | Spread per kWh: a slot is a charge candidate for a peak when that peak's max price minus the slot's price exceeds this value |
+| Battery charge spread threshold | Spread per kWh: a slot is a charge candidate for a peak when a later slot of that peak is priced more than this value above it — covers the idle gap before the peak, idle stretches inside it and the peak's own cheaper dips |
 | Battery discharge spread threshold | Spread per kWh: a slot discharges when its price minus the period's minimum price exceeds this value. Overridden by Battery Cycle Cost when that is set above 0 — the entity shows as unavailable while overridden |
 | Battery max charging power | Maximum battery charge power (kW) |
 | Battery max SoC target | SOC ceiling (default 100%) that PV-opportunistic battery charging stops at |

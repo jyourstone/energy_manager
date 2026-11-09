@@ -40,7 +40,7 @@ spot price > (cheapest future spot + grid transfer fee + electricity company fee
 
 (0.9 is the assumed round-trip efficiency of a charge/discharge cycle.) In other words, export only happens when the price you'd get for the energy now, minus the cost of re-buying and re-storing it later, still comes out ahead after fees and cycle wear.
 
-Export arbitrage never demotes a slot that's already more valuable as a scheduled self-consumption discharge — it only claims price spikes that wouldn't otherwise be used to cover your own house load.
+Export arbitrage never demotes a slot that's already more valuable as a scheduled self-consumption discharge — it only claims price spikes that wouldn't otherwise be used to cover your own house load. Every planned export is also checked in time order against the rest of the plan: if selling would leave a later scheduled discharge short of energy, cheaper slots around that shortfall give way, and if none can, the export is dropped.
 
 ## How it shows up
 
