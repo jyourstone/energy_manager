@@ -13,7 +13,12 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
        ``price - min_price > discharge_threshold``. Charge candidates are
        peak-relative (a slot is worth charging for a given peak when
        ``peak_max_price - price > charge_threshold``) and are therefore only
-       evaluated while processing that peak, not up front.
+       evaluated while processing that peak, not up front. Candidates are
+       every future slot from the end of the previous peak through this
+       peak's last slot that sits below a LATER slot of this peak by more
+       than the threshold: the idle gap before it, idle stretches inside it
+       and its own cheaper dips (BATT-19), so a horizon bridged into a
+       single peak can still charge in its cheap stretches.
     2. Group discharge candidates into peaks separated by configurable gaps.
     3. Energy needed to serve a peak is sized from house consumption
        (``len(peak_slots) * mean_consumption_kw * slot_duration``), not from
@@ -848,7 +853,9 @@ def _optimize_schedule(
     BATT-16); energy is reserved for future, more expensive peaks net of
     their own upcoming recharge (BATT-15b); a cheapest-first charge deficit
     (with buffer, capped at the usable energy range) is scheduled from
-    peak-relative charge candidates; then discharge is marked
+    peak-relative charge candidates -- every slot from the previous peak's
+    end through this peak that sits below a later slot of it (BATT-19);
+    then discharge is marked
     most-expensive-first while energy remains for each slot's own
     house-consumption need. Charge slots inside any solar window are
     finally relabeled "solar_charge" (cosmetic only).
@@ -920,7 +927,7 @@ def _optimize_schedule(
     virtual_energy = current_energy_kwh
 
     for idx, peak in enumerate(peaks):
-        window_start, window_end = window_bounds[idx]
+        window_start, _ = window_bounds[idx]
 
         # BATT-15a: add this peak's expected solar recharge before drawing
         # down for it, capped at the battery's usable ceiling.
@@ -950,17 +957,34 @@ def _optimize_schedule(
         room_in_battery = max(0.0, max_energy_kwh - virtual_energy)
         charge_target = min(energy_deficit, room_in_battery)
 
-        # Peak-relative charge candidates (BATT-15): idle, not-yet-assigned
-        # slots in the pre-peak window priced enough below this peak's max.
-        charge_candidates = [
-            s
-            for s in slots
-            if s.action == "idle"
-            and s.end > now
-            and window_start <= s.start < window_end
-            and (peak_max_price[idx] - s.price) > charge_threshold
-        ]
-        charge_candidates.sort(key=lambda s: s.price)
+        # Peak-relative charge candidates (BATT-15 / BATT-19): every future
+        # slot from the previous peak's end up to (not including) this peak's
+        # last slot that sits more than charge_threshold below a LATER slot of
+        # this peak. Walking backwards, later_max is the running max of this
+        # peak's slots -- the whole-peak max for the gap before the peak, the
+        # suffix max inside it -- so idle stretches within the peak and the
+        # peak's own cheaper dips qualify too (a horizon bridged into one peak
+        # by a low discharge threshold has no future pre-window at all). The
+        # window is disjoint from earlier peaks' windows, so nothing in it is
+        # already charging; an unselected dip keeps its discharge role.
+        # ponytail: energy from a dip is credited to the whole peak, including
+        # discharge slots that precede it in time. Such slots rarely win
+        # energy under most-expensive-first marking, and the battery's own
+        # SOC floor makes a mislabelled slot harmless at runtime; upgrade
+        # path is splitting the peak at the dip into two sub-peaks so the
+        # dip becomes the second one's ordinary pre-window.
+        later_max = peak[-1].price
+        charge_candidates: list[_SlotInfo] = []
+        for s in reversed(slots):
+            if s.start >= peak[-1].start:
+                continue
+            if s.start < window_start:
+                break
+            if s.end > now and later_max - s.price > charge_threshold:
+                charge_candidates.append(s)
+            if s.action == "discharge":
+                later_max = max(later_max, s.price)
+        charge_candidates.sort(key=lambda s: (s.price, s.start))
 
         charged_energy = 0.0
         for cslot in charge_candidates:
@@ -976,9 +1000,14 @@ def _optimize_schedule(
 
         virtual_energy = min(virtual_energy + charged_energy, max_energy_kwh)
 
-        # Discharge marking: most-expensive-first while energy remains for
-        # that slot's own house-consumption need.
-        sorted_peak = sorted(peak, key=lambda s: s.price, reverse=True)
+        # Discharge marking: most-expensive-first over the slots still marked
+        # discharge (BATT-19 dips taken for charging drop out) while energy
+        # remains for that slot's own house-consumption need.
+        sorted_peak = sorted(
+            (s for s in peak if s.action == "discharge"),
+            key=lambda s: s.price,
+            reverse=True,
+        )
         remaining_energy = max(0.0, virtual_energy - min_energy_kwh)
         discharged = 0.0
 

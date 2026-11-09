@@ -2114,3 +2114,74 @@ class TestExportResultDefault:
             target_ems_mode="max_self_consumption",
         )
         assert result.export_slot_count == 0
+
+
+# ---------------------------------------------------------------------------
+# BATT-19: in-peak dips are charge candidates
+# ---------------------------------------------------------------------------
+
+
+class TestInPeakDipCharging:
+    """BATT-19: a peak's own cheap stretches can charge for its pricier slots."""
+
+    def test_bridged_horizon_charges_in_its_cheapest_dip(self):
+        """h0 is the past pre-window; h1-23 all clear the 0.2 threshold and
+        form one peak. The 1.8 slots inside it sit 3.2 below the 5.0 block
+        but only 0.2 below the peak's LAST slots, so only the suffix max (not
+        the last slot's price) qualifies them; cheapest first, in order."""
+        prices = [0.5] + [1.8] * 5 + [2.0] * 6 + [5.0] * 6 + [2.0] * 6
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 2, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+        )
+
+        charge_hours = [s.start.hour for s in _charge_slots(result)]
+        # 4.5 kWh of room at 3 kW/h -> two slots, the earliest of the 1.8 ties
+        assert charge_hours == [2, 3]
+        assert set(range(12, 18)) <= {s.start.hour for s in _discharge_slots(result)}
+
+    def test_dip_keeps_discharge_role_when_pre_window_covers_deficit(self):
+        """The dip at h10 is both a discharge candidate (1.0 over the floor)
+        and cheap enough to charge for the 5.0 block, but the idle 0.5 slots
+        before the peak are cheaper and cover the deficit, so the dip stays a
+        discharge slot -- output identical to the pre-BATT-19 scheduler."""
+        prices = [0.5] * 6 + [3.0] * 4 + [1.5] + [5.0] * 4 + [0.5] * 9
+        result = _build(
+            _make_24h_slots(prices),
+            discharge_threshold=0.2,
+            current_soc_pct=90.0,
+            max_soc_pct=100.0,
+        )
+
+        charge_hours = {s.start.hour for s in _charge_slots(result)}
+        assert charge_hours and charge_hours <= {0, 1, 2, 3, 4, 5}
+        assert result.schedule[10].action == "discharge"
+
+    def test_cheap_slots_after_the_last_pricey_slot_never_charge(self):
+        """1.0 slots that FOLLOW the 5.0 block have nothing later in the peak
+        to charge for, so they are not candidates: zero charge slots."""
+        prices = [0.5] + [5.0] * 4 + [1.0] * 4 + [0.5] * 15
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+        )
+
+        assert _charge_slots(result) == []
+
+    def test_idle_gap_inside_the_peak_beats_pricier_slots_around_it(self):
+        """h5-6 at 0.6 sit within the 0.2 floor spread, so they are idle, and
+        the 2 h gap keeps h2-h11 one peak. They are the cheapest future slots
+        and must win over the 3.0 dips at h2-4 AND the 0.7 pre-window slot at
+        h1 -- one candidate list, cheapest first, wherever the slot lies."""
+        prices = [0.5, 0.7] + [3.0] * 3 + [0.6] * 2 + [5.0] * 5 + [0.5] * 12
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            current_soc_pct=40.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [5, 6]
+        assert {2, 3, 4} <= {s.start.hour for s in _discharge_slots(result)}

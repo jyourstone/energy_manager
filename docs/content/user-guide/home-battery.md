@@ -31,7 +31,7 @@ Four number entities (seeded from the wizard's answers on first setup) shape how
 
 Two number entities control how aggressively the battery charges and discharges:
 
-- **Battery charge spread threshold** — a slot becomes a charge candidate for a given peak when that peak's highest price minus the slot's price exceeds this value.
+- **Battery charge spread threshold** — a slot becomes a charge candidate for a given peak when a later slot of that peak is priced more than this value above it. Candidates are every slot from the end of the previous peak up to the peak's last slot: the idle gap before the peak, idle stretches inside it, and the peak's own cheaper dips — so on a high-spread day where a low discharge threshold bridges the whole horizon into one peak, the cheap night hours inside it can still be scheduled for grid charging. Cheapest slots are picked first, wherever they lie.
 - **Battery discharge spread threshold** — a slot discharges when its price minus the horizon's minimum price exceeds this value.
 
 The discharge threshold can be overridden automatically. When **Battery Cycle Cost** is set above 0, the effective discharge threshold becomes `max(0, battery_cycle_cost − grid_transfer_fee)` — the wear cost of one charge/discharge cycle, net of the grid transfer fee you'd otherwise pay to import that energy instead. While the formula is active, the manual **Battery discharge spread threshold** entity shows as **unavailable** in Home Assistant, since the scheduler is ignoring it in favor of the derived value. If the transfer fee exceeds the cycle cost, the formula clamps to 0, meaning any spread above the horizon minimum qualifies for discharge.
