@@ -2185,3 +2185,416 @@ class TestInPeakDipCharging:
 
         assert [s.start.hour for s in _charge_slots(result)] == [5, 6]
         assert {2, 3, 4} <= {s.start.hour for s in _discharge_slots(result)}
+
+
+# ---------------------------------------------------------------------------
+# BATT-20: time-aware accounting inside a peak
+# ---------------------------------------------------------------------------
+
+
+class TestTimeAwarePeakAccounting:
+    """BATT-20: a slot only spends energy the battery holds at that time."""
+
+    def test_spike_before_the_dip_is_served_and_refilled(self):
+        """Full battery, 7.0 spike, 2.4 dip, 7.5 spike, 3.0 tail -- one peak.
+        Ranking energy across the whole peak served two hours of the first
+        spike and planned no recharge. Chronologically the first spike can
+        drain the battery because one dip slot refills it for the second;
+        the 3.0 tail is not worth a 2.4 recharge at a 2.0 charge threshold."""
+        prices = [0.5] + [7.0] * 4 + [2.4] * 6 + [7.5] * 6 + [3.0] * 7
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            charge_threshold=2.0,
+            current_soc_pct=95.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [5]
+        assert {s.start.hour for s in _discharge_slots(result)} == {
+            *range(1, 5),
+            *range(11, 18),
+        }
+
+    def test_discharge_before_the_dip_needs_energy_already_in_the_battery(self):
+        """Battery at its floor: the 5.0 slot BEFORE the 1.0 dip has nothing
+        to spend, so it idles; the dip charges for the 5.0 slot after it."""
+        prices = [0.5, 5.0, 1.0, 5.0] + [0.5] * 20
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            current_soc_pct=10.0,
+        )
+
+        assert [s.action for s in result.schedule[1:4]] == [
+            "idle",
+            "charge",
+            "discharge",
+        ]
+
+    def test_no_dip_charging_when_the_battery_covers_the_pricey_slots(self):
+        """7.5 kWh on hand covers the seven 5.0 slots. The 1.0 dip is the one
+        slot left over; charging in it would buy energy nothing needs."""
+        prices = [0.5] + [5.0] * 3 + [1.0] + [5.0] * 4 + [0.5] * 15
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            current_soc_pct=85.0,
+        )
+
+        assert _charge_slots(result) == []
+        assert {s.start.hour for s in _discharge_slots(result)} == {1, 2, 3, 5, 6, 7, 8}
+        assert result.schedule[4].action == "idle"
+
+    def test_failed_rescue_is_undone(self):
+        """A full 9 kWh battery serves eight 6.0 slots down to its floor. The
+        ninth needs 1.0 kWh, but the only cheaper slot -- the 1.0 dip at h2
+        -- adds just 0.5 at this charge power. The ninth idles and the dip
+        must be put back, not left charging for nothing."""
+        prices = [0.5, 6.0, 1.0] + [6.0] * 9 + [0.5] * 12
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            current_soc_pct=90.0,
+            max_soc_pct=90.0,
+            estimated_charge_power_kw=0.5,
+        )
+
+        assert _charge_slots(result) == []
+        assert {s.start.hour for s in _discharge_slots(result)} == {1, *range(3, 10)}
+
+    def test_cheaper_slots_do_not_ride_on_a_rescue_charge(self):
+        """The ninth 7.0 slot is worth a recharge at 4.9. The 5.15 slots
+        ahead of that charge slot could then drain the battery and let it
+        take in more -- buying at 4.9 to serve 5.15, a 0.25 spread that
+        clears the 0.2 discharge threshold but not the 0.3 charge threshold
+        a rescue purchase needs. They stay idle."""
+        prices = [0.5] + [7.0] * 2 + [5.15] * 6 + [4.9] + [7.0] * 7 + [0.5] * 7
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            current_soc_pct=95.0,
+            estimated_charge_power_kw=6.0,
+            max_charge_power_w=6000.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [9]
+        assert {s.start.hour for s in _discharge_slots(result)} == {
+            1,
+            2,
+            *range(10, 17),
+        }
+
+    def test_rescue_does_not_buy_for_slots_the_sun_covers(self):
+        """First peak: 15 kWh of intra-peak solar covers what the full
+        battery cannot, so its leftover 2.5 slots idle (BATT-18). A later,
+        pricier peak inflates the first peak's deficit through the BATT-15b
+        reservation; that must not unlock grid charging at the 1.6 dip for
+        slots the sun already serves."""
+        prices = (
+            [0.5] * 6 + [3.0] * 3 + [2.5] * 3 + [1.6] * 2 + [2.5] * 2 + [4.0] * 5
+            + [0.5] * 9 + [6.0] * 7 + [0.5] * 11
+        )  # fmt: skip
+        slots = _make_24h_slots(prices[:24]) + _make_24h_slots(prices[24:], day=16)
+        result = _build(
+            slots,
+            now=datetime(2026, 2, 15, 6, 0, 0, tzinfo=UTC),
+            current_soc_pct=95.0,
+            dawn=datetime(2026, 2, 15, 7, 0, 0, tzinfo=UTC),
+            dusk=datetime(2026, 2, 15, 17, 0, 0, tzinfo=UTC),
+            solar_forecast_remaining_wh=15000.0,
+        )
+
+        first_peak_end = datetime(2026, 2, 15, 21, 0, 0, tzinfo=UTC)
+        assert all(s.start >= first_peak_end for s in _charge_slots(result))
+        assert [s.action for s in result.schedule[9:16]] == ["idle"] * 7
+
+    def test_rescue_skips_a_slot_the_full_battery_cannot_use(self):
+        """The 1.0 slot at h1 is the cheapest before the shortfall, but the
+        battery is still full there, so charging in it adds nothing. The
+        rescue must go to the 2.0 slot at h10, after eight hours of drain,
+        and h1 must not be left charging for nothing."""
+        prices = [0.5, 1.0] + [7.0] * 8 + [2.0] + [7.0] * 3 + [0.5] * 10
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            current_soc_pct=95.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [10]
+        assert {s.start.hour for s in _discharge_slots(result)} == {
+            *range(2, 10),
+            11,
+            12,
+            13,
+        }
+
+    def test_float_noise_in_the_carried_level_does_not_buy_a_slot(self):
+        """The first peak leaves exactly the 4.0 kWh the second one needs.
+        The walk's carried level differs from that in the last bit, which
+        must not read as a deficit and buy a whole 6 kWh slot at h11."""
+        prices = [1.8, 1.8, 7.5, 7.5, 7.0, 0.6, 0.6, 1.8, 1.8, 1.8, 7.5, 0.6]
+        prices += [0.6, 0.6, 7.5, 2.4, 2.4, 2.4, 2.4, 7.0, 7.0, 7.0, 0.6, 0.6]
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 2, 0, 0, tzinfo=UTC),
+            charge_threshold=1.0,
+            current_soc_pct=10.0,
+            battery_capacity_kwh=24.18,
+            mean_consumption_kw=0.5,
+            estimated_charge_power_kw=6.0,
+            max_charge_power_w=12000.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [5]
+
+    def test_slot_ahead_of_a_clipped_charge_may_spend_stock(self):
+        """h2 (7.0) charges for the 7.5 block and the ceiling clips it by
+        0.5 kWh. Serving h1 lets it take that 0.5 in, a thin 0.5 spread, but
+        the other half of h1's need is energy already in the battery, so h1
+        is served rather than leaving stock unused."""
+        prices = [0.5, 7.5, 7.0] + [7.5] * 6 + [0.5] * 15
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            current_soc_pct=70.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [2]
+        assert {s.start.hour for s in _discharge_slots(result)} == {1, *range(3, 9)}
+
+    def test_slot_ahead_of_a_clipped_charge_must_beat_the_refill_price(self):
+        """h1 and h3 (2.0) charge for the 7.0 block; the ceiling clips h3.
+        Serving h2 (2.3) from the battery would only make h3 take in more:
+        one extra cycle for a 0.3 spread, under the 0.5 discharge threshold.
+        h2 stays idle instead of flipping charge, discharge, charge."""
+        prices = [0.5, 2.0, 2.3, 2.0] + [7.0] * 8 + [0.5] * 12
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.5,
+            charge_threshold=1.0,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [1, 3]
+        assert result.schedule[2].action == "idle"
+        assert {s.start.hour for s in _discharge_slots(result)} == set(range(4, 12))
+
+
+class TestExportOnSolarBackedPlan:
+    """BATT-20: the export walk steps aside for plans that lean on forecast solar."""
+
+    def test_pooled_decision_stands_when_the_plan_relies_on_solar(self):
+        """2 kWh on hand, 6 kWh of sun forecast before the evening peak. The
+        walk knows nothing of solar, so it cannot serve even the plan without
+        an export; it must not veto the export the pooled budget grants."""
+        prices = [0.5] * 18 + [3.0, 9.0, 3.0, 3.0] + [0.5] * 2
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 8, 0, 0, tzinfo=UTC),
+            current_soc_pct=30.0,
+            dawn=datetime(2026, 2, 15, 7, 0, 0, tzinfo=UTC),
+            dusk=datetime(2026, 2, 15, 17, 0, 0, tzinfo=UTC),
+            solar_forecast_remaining_wh=6000.0,
+            export_spike_threshold=5.0,
+            export_power_kw=2.0,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [19]
+        assert [s.start.hour for s in _discharge_slots(result)] == [21]
+
+
+class TestExportAfterMidPeakRecharge:
+    """BATT-20: every export is walked chronologically with the plan."""
+
+    def test_export_may_demote_across_a_recharge_the_walk_confirms(self):
+        """Spike now, cheap hours right after. The pooled budget pays for
+        selling 5 kWh now by demoting the four 1.8 slots on the far side of
+        the h1 recharge. The walk confirms the export, and shows the recharge
+        still serves two of those slots, which get their energy back."""
+        prices = [7.0, 0.5, 0.5, 0.5] + [1.8] * 4 + [5.0] * 4 + [0.5] * 12
+        result = _build(
+            _make_24h_slots(prices),
+            discharge_threshold=0.2,
+            current_soc_pct=95.0,
+            export_spike_threshold=5.0,
+            export_power_kw=4.0,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [0]
+        assert [s.start.hour for s in _charge_slots(result)] == [1]
+        assert {s.start.hour for s in _discharge_slots(result)} == {4, 5, *range(8, 12)}
+
+    def test_export_is_repaired_where_the_walk_falls_short(self):
+        """The pooled budget funds the h11 export by demoting h17 and three
+        6.0 slots ahead of the h5 recharge -- but that recharge then just
+        takes in less, and the 7.0 block after the export falls 1.5 kWh
+        short. Two 7.0 slots give way instead, and two of the 6.0 slots,
+        which were never the problem, get their energy back."""
+        prices = [0.5] + [6.0] * 4 + [2.4] * 6 + [8.0] + [7.0] * 5 + [3.0] * 7
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            charge_threshold=2.0,
+            current_soc_pct=95.0,
+            export_spike_threshold=5.0,
+            export_power_kw=4.0,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [11]
+        assert [s.start.hour for s in _charge_slots(result)] == [5]
+        assert {s.start.hour for s in _discharge_slots(result)} == {1, 2, 4, 14, 15, 16}
+
+    def test_export_is_refused_when_no_slot_can_make_up_the_shortfall(self):
+        """Same day as the spike-dip-spike test, export enabled. Demoting the
+        7.0 slots AHEAD of the h5 recharge frees nothing for an export at
+        h11 -- the recharge would simply take in less -- and the 7.5 slots
+        after it are worth as much as the export, so nothing may give way.
+        The export is refused and the plan stays as it was."""
+        prices = [0.5] + [7.0] * 4 + [2.4] * 6 + [7.5] * 6 + [3.0] * 7
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            charge_threshold=2.0,
+            current_soc_pct=95.0,
+            export_spike_threshold=5.0,
+            export_power_kw=4.0,
+        )
+
+        assert _export_slots(result) == []
+        assert [s.start.hour for s in _charge_slots(result)] == [5]
+        assert {s.start.hour for s in _discharge_slots(result)} == {
+            *range(1, 5),
+            *range(11, 18),
+        }
+
+
+def _hourly_plan(first_hour: int, *slots: tuple[float, str]) -> list[ScheduleSlot]:
+    """Hourly schedule slots on 2026-02-15 from (price, action) pairs."""
+    return [
+        ScheduleSlot(
+            start=datetime(2026, 2, 15, first_hour + i, 0, 0, tzinfo=UTC),
+            end=datetime(2026, 2, 15, first_hour + i + 1, 0, 0, tzinfo=UTC),
+            price=price,
+            action=action,
+        )
+        for i, (price, action) in enumerate(slots)
+    ]
+
+
+class TestDischargeGateAroundRecharge:
+    """BATT-20: an idle slot next to planned charging does not cycle the battery."""
+
+    NOW = datetime(2026, 2, 15, 10, 30, 0, tzinfo=UTC)
+
+    def _gate(self, schedule, **overrides):
+        kwargs = {
+            "schedule": schedule,
+            "now": self.NOW,
+            "effective_discharge_threshold": 0.22,
+            "battery_soc_pct": 45.0,
+            "battery_capacity_kwh": 10.0,
+            "mean_consumption_kw": 1.0,
+            "charge_power_kw": 3.0,
+        }
+        kwargs.update(overrides)
+        return compute_discharge_gate(**kwargs)
+
+    def test_idle_gap_ahead_of_a_recharge_at_nearly_its_price_stays_closed(self):
+        """2.76 is far above the 0.5 period minimum, but what the house
+        drains now is bought back an hour later at 2.72: a 0.04 spread."""
+        schedule = _hourly_plan(
+            9, (0.5, "idle"), (2.76, "idle"), (2.72, "charge"), (2.70, "charge"),
+            (7.0, "discharge"),
+        )  # fmt: skip
+
+        gate = self._gate(schedule)
+
+        assert gate.allowed is False
+        assert gate.reason == "below_threshold"
+
+    def test_idle_slot_well_above_the_refill_price_opens(self):
+        """Same plan with the idle slot at 3.5: draining now and refilling at
+        2.72 clears the threshold, and the recharge covers the 7.0 slot."""
+        schedule = _hourly_plan(
+            9, (0.5, "idle"), (3.5, "idle"), (2.72, "charge"), (2.70, "charge"),
+            (7.0, "discharge"),
+        )  # fmt: skip
+
+        gate = self._gate(schedule)
+
+        assert gate.allowed is True
+        assert gate.reason == "spread_above_threshold"
+        assert gate.reserved_energy_kwh == 0.0
+
+    def test_refill_price_only_counts_before_the_next_discharge(self):
+        """The 7.0 slot uses the battery before the 2.72 recharge, so energy
+        drained now is not simply bought back there: the period minimum is
+        the yardstick again and the gate opens. That first slot's 1 kWh stays
+        reserved; the recharge more than covers the 7.0 slot after it."""
+        schedule = _hourly_plan(
+            9, (0.5, "idle"), (2.76, "idle"), (7.0, "discharge"), (2.72, "charge"),
+            (7.0, "discharge"),
+        )  # fmt: skip
+
+        gate = self._gate(schedule)
+
+        assert gate.allowed is True
+        assert abs(gate.reserved_energy_kwh - 1.0) < 1e-9
+
+    def test_small_recharge_does_not_reset_the_reservation(self):
+        """One 1.5 kWh charge slot stands between now and six 7.0 slots. It
+        covers 1.5 of their 6 kWh; the other 4.5 must still be in the battery,
+        which holds 4.8 usable -- too little to spare half an hour of load."""
+        schedule = _hourly_plan(
+            9, (0.5, "idle"), (3.5, "idle"), (2.0, "charge"), *[(7.0, "discharge")] * 6
+        )
+
+        gate = self._gate(schedule, battery_soc_pct=58.0, charge_power_kw=1.5)
+
+        assert gate.allowed is False
+        assert gate.reason == "reserved_for_peak"
+        assert abs(gate.reserved_energy_kwh - 4.5) < 1e-9
+
+    def test_gate_is_given_the_real_charge_power(self):
+        """End to end: at 0.5 kW the h2 charge slot adds 0.5 kWh towards the
+        five 7.0 slots the plan serves, so 4.5 of the 4.8 usable kWh stay
+        reserved and the idle h1 slot (3.5) may not drain the battery."""
+        prices = [0.5, 3.5, 2.0] + [7.0] * 6 + [0.5] * 15
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 10, 0, tzinfo=UTC),
+            discharge_threshold=0.2,
+            charge_threshold=4.0,
+            current_soc_pct=58.0,
+            estimated_charge_power_kw=0.5,
+        )
+
+        assert result.current_action == "idle"
+        assert result.discharge_allowed is False
+        assert result.discharge_gate_reason == "reserved_for_peak"
+        assert abs(result.reserved_energy_kwh - 4.5) < 1e-9
+
+    def test_planned_idle_slot_between_charge_slots_is_held(self):
+        """End to end: h2 (2.3) sits between charge slots at 2.0. The planner
+        leaves it idle and the gate must hold it too, or the battery would
+        discharge and re-buy the same energy an hour later."""
+        prices = [0.5, 2.0, 2.3, 2.0] + [7.0] * 8 + [0.5] * 12
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 2, 10, 0, tzinfo=UTC),
+            discharge_threshold=0.5,
+            charge_threshold=1.0,
+            current_soc_pct=80.0,
+        )
+
+        assert result.current_action == "idle"
+        assert result.discharge_allowed is False
+        assert result.discharge_gate_reason == "below_threshold"
