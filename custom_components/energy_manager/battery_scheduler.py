@@ -11,14 +11,15 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
     1. Classify discharge candidates by SPREAD against the period's minimum
        price: a slot is profitable discharge when
        ``price - min_price > discharge_threshold``. Charge candidates are
-       peak-relative (a slot is worth charging for a given peak when
-       ``peak_max_price - price > charge_threshold``) and are therefore only
-       evaluated while processing that peak, not up front. Candidates are
-       every future slot from the end of the previous peak through this
-       peak's last slot that sits below a LATER slot of this peak by more
-       than the threshold: the idle gap before it, idle stretches inside it
-       and its own cheaper dips (BATT-19), so a horizon bridged into a
-       single peak can still charge in its cheap stretches.
+       peak-relative (a slot is worth charging for a given peak when a
+       LATER slot of that peak is priced more than ``charge_threshold``
+       above it) and are therefore only evaluated while processing that
+       peak, not up front. Candidates are every future slot from the end
+       of the previous peak up to this peak's last slot: the idle gap
+       before it (every peak slot is later there, so the comparison is
+       against the peak's max), idle stretches inside it and its own
+       cheaper dips (BATT-19), so a horizon bridged into a single peak can
+       still charge in its cheap stretches.
     2. Group discharge candidates into peaks separated by configurable gaps.
     3. Energy needed to serve a peak is sized from house consumption
        (``len(peak_slots) * mean_consumption_kw * slot_duration``), not from
@@ -188,8 +189,8 @@ def build_battery_schedule(
         price_slots: List of dicts with "start" (datetime), "end" (datetime),
             "price" (float) keys.
         charge_threshold: Spread threshold in SEK/kWh -- a slot is a charge
-            candidate for a given peak when ``peak_max_price - price``
-            exceeds this value (BATT-15).
+            candidate for a given peak when a later slot of that peak is
+            priced more than this value above it (BATT-15 / BATT-19).
         discharge_threshold: Spread threshold in SEK/kWh -- a slot discharges
             when ``price - min_price`` exceeds this value (BATT-15). Callers
             implementing the BATT-14 economics derivation should pass the

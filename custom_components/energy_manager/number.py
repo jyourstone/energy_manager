@@ -197,8 +197,8 @@ async def async_setup_entry(
 class BatteryChargeThreshold(PriceUnitEntity, EnergyManagerEntity, RestoreNumber):
     """Number entity for the battery charge price threshold.
 
-    When the electricity price is at or below the peak's max price minus
-    this spread, the battery will charge from the grid. Value persists
+    A slot may be charged from the grid for a peak when a later slot of
+    that peak is priced more than this spread above it. Value persists
     across restarts.
     """
 
