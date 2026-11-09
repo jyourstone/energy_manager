@@ -296,7 +296,7 @@ def build_battery_schedule(
     )
 
     # Step 6: Virtual energy tracking -- optimize charge/discharge allocation
-    _optimize_schedule(
+    solar_credit = _optimize_schedule(
         slots=slots,
         peaks=peaks,
         now=now,
@@ -330,7 +330,7 @@ def build_battery_schedule(
             min_soc_pct=min_soc_pct,
             max_soc_pct=max_soc_pct,
             charge_power_kw=min(estimated_charge_power_kw, max_charge_power_w / 1000.0),
-            solar_windows=solar_windows,
+            solar_credit=solar_credit,
         )
 
     # Step 7: Build the final schedule
@@ -919,7 +919,7 @@ def _optimize_schedule(
     solar_windows: list[tuple[tuple[datetime, datetime], float]],
     min_soc_pct: float,
     max_soc_pct: float,
-) -> None:
+) -> dict[int, float]:
     """Optimize the schedule using virtual energy tracking (BATT-15).
 
     Processes peaks chronologically, tracking a virtual battery energy
@@ -937,6 +937,11 @@ def _optimize_schedule(
     only).
 
     Mutates slots in place, changing actions as needed.
+
+    Returns:
+        The solar recharge credited ahead of each peak (BATT-15a), keyed by
+        ``id()`` of the peak's first future slot, so the export pass can walk
+        the plan with exactly the solar it was built on.
     """
     min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
     max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
@@ -957,7 +962,7 @@ def _optimize_schedule(
 
     if not peaks:
         # No discharge opportunities -- nothing to charge for either.
-        return
+        return {}
 
     max_charge_power_kw = max_charge_power_w / 1000.0
     charge_power_kw = min(estimated_charge_power_kw, max_charge_power_kw)
@@ -1192,6 +1197,8 @@ def _optimize_schedule(
             ):
                 s.action = "solar_charge"
 
+    return {id(peak[0]): peak_recharge[idx] for idx, peak in enumerate(peaks)}
+
 
 def _mark_export_slots(
     slots: list[_SlotInfo],
@@ -1209,7 +1216,7 @@ def _mark_export_slots(
     min_soc_pct: float,
     max_soc_pct: float,
     charge_power_kw: float,
-    solar_windows: list[tuple[tuple[datetime, datetime], float]],
+    solar_credit: dict[int, float],
 ) -> None:
     """Mark qualifying spike slots as "export" (BATT-17 post-pass).
 
@@ -1235,9 +1242,12 @@ def _mark_export_slots(
     solar_charge slots are never converted. Mutates slots in place.
 
     The budget pools energy across the horizon. Since BATT-20 plans drain
-    and recharge inside a peak, each export is also walked chronologically:
-    a shortfall it causes is repaired by demoting less valuable slots that
-    feed it, or the export is refused.
+    and recharge inside a peak, each export is also walked chronologically
+    with the plan: it must leave the battery at or above the export reserve
+    at its own slot, a shortfall it causes is repaired by demoting less
+    valuable slots that feed it, or the export is refused. Slots the budget
+    demoted on the far side of a recharge are restored when the walk still
+    serves them, so there a recharge, not the budget, funds them.
     """
     fees = grid_transfer_fee + electricity_company_fee
     # Spread baseline over FUTURE slots only (Greptile PR #8): an elapsed
@@ -1273,8 +1283,9 @@ def _mark_export_slots(
     if not candidates:
         return
 
-    # Energy budget (conservative -- ignores scheduled charging on
-    # purpose, never over-exports).
+    # Energy budget: the charge-blind admission test. It ignores scheduled
+    # charging on purpose; the chronological walk below then decides what
+    # the plan can really carry.
     min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
     export_floor_kwh = max(
         min_energy_kwh, (export_reserve_soc_pct / 100.0) * battery_capacity_kwh
@@ -1295,13 +1306,11 @@ def _mark_export_slots(
     # is also walked chronologically, like the plan it is added to.
     future = [s for s in slots if s.end > now]
     charge_kwh = [charge_power_kw * s.duration_hours for s in future]
-    # Forecast solar arriving in each slot. The plan above credits solar
-    # more cautiously (a lump before each peak, and intra-peak solar only as
-    # reduced need), so this walk never holds less than the plan assumed;
-    # without it a solar-backed plan would fail before any export is added.
-    solar_kwh = [
-        _solar_energy_kwh(max(s.start, now), s.end, solar_windows) for s in future
-    ]
+    # Forecast solar enters where the plan put it: the lump it credited ahead
+    # of each peak (BATT-15a), at that peak's first slot. Solar inside a peak
+    # is spent there on house load -- it is why slots idle (BATT-18) -- and
+    # adds nothing to the battery.
+    solar_kwh = [solar_credit.get(id(s), 0.0) for s in future]
     max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
 
     def walk_plan() -> tuple[int, list[float]]:
@@ -1319,7 +1328,7 @@ def _mark_export_slots(
             * s.duration_hours
             for s in future
         ]
-        return _walk_window(
+        short, levels = _walk_window(
             roles,
             charge_kwh,
             needs,
@@ -1328,6 +1337,15 @@ def _mark_export_slots(
             max_energy_kwh,
             solar_kwh,
         )
+        # Ordinary discharge may run down to the minimum SOC; an export may
+        # not take the battery below the export reserve.
+        for i, level in enumerate(levels):
+            if (
+                future[i].action == "export"
+                and level < export_floor_kwh - _ENERGY_EPSILON_KWH
+            ):
+                return i, levels[:i]
+        return short, levels
 
     # Should the plan fail this walk even before any export, the walk has
     # nothing to say about exports: the pooled budget alone decides then.
@@ -1412,13 +1430,13 @@ def _mark_export_slots(
             # only holds within a charge-free stretch, so a demoted slot on
             # the far side of a recharge from the export gets its energy
             # back whenever the walk still serves it, most valuable first.
+            # Its credit stays in the budget: the recharge pays for it, and
+            # the walk, not the budget, keeps later exports off the reserve.
             for d in sorted(demoted, key=lambda d: d.price, reverse=True):
                 if recharges[id(d)] != recharges[id(c)]:
                     d.action = "discharge"
                     if walk_plan()[0] >= 0:
                         d.action = "idle"
-                    else:
-                        freed -= mean_consumption_kw * d.duration_hours
         budget += freed - need
 
 

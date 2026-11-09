@@ -2456,6 +2456,12 @@ class TestExportWalkAndSolar:
             *((16, h) for h in range(17, 22)),
         }
 
+    SUN: ClassVar[dict] = {
+        "dawn": datetime(2026, 2, 15, 7, 0, 0, tzinfo=UTC),
+        "dusk": datetime(2026, 2, 15, 17, 0, 0, tzinfo=UTC),
+        "solar_forecast_remaining_wh": 4000.0,
+    }
+
     def test_solar_beyond_the_ceiling_is_not_counted(self):
         """16 kWh of forecast sun on a 10 kWh battery: what arrives while it
         is full is lost. An export at h17 would need that lost energy to
@@ -2479,6 +2485,48 @@ class TestExportWalkAndSolar:
         assert [s.start.hour for s in _export_slots(result)] == [13]
         served = [s.start.hour for s in _discharge_slots(result) if s.start.hour >= 10]
         assert served == [17, 18, 19]
+
+    def test_solar_inside_a_peak_does_not_fund_an_export(self):
+        """The forecast sun falls inside the long peak that starts at h5,
+        where the plan already spends it on house load -- it is why slots
+        there may idle. Counted again as battery energy, it would fund a
+        second export at h9."""
+        prices = [2.4, 1.0, 1.0, 1.0, 1.0, 1.8, 1.8, 1.8, 7.0, 7.0, 7.0, 7.0]
+        prices += [7.0, 1.0, 1.0, 3.0, 3.0, 2.4, 0.6, 0.6, 7.0, 7.0, 7.0, 7.0]
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 1, 0, 0, tzinfo=UTC),
+            charge_threshold=1.0,
+            discharge_threshold=0.2,
+            estimated_charge_power_kw=1.5,
+            export_spike_threshold=5.0,
+            export_power_kw=2.0,
+            **self.SUN,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [8]
+        served = [s.start.hour for s in _discharge_slots(result) if s.start.hour >= 1]
+        assert served == [9, 10, 11, 12, 15, 16, 20, 21, 22, 23]
+
+    def test_solar_in_a_gap_between_price_slots_is_counted(self):
+        """The price feed lacks h12. The plan credits the sun of the whole
+        gap between the two peaks, 12:00 to 17:00; the export walk has to
+        hold that same energy, or it comes up short and leaves h20 demoted."""
+        prices = [1.8, 1.8, 7.0, 1.8, 0.6, 0.6, 0.6, 7.5, 5.0, 5.0, 5.0, 5.0]
+        prices += [5.0, 0.6, 0.6, 0.6, 0.5, 7.0, 1.8, 1.8, 1.8, 1.8, 1.8, 0.5]
+        slots = [s for s in _make_24h_slots(prices) if s["start"].hour != 12]
+        result = _build(
+            slots,
+            now=datetime(2026, 2, 15, 7, 0, 0, tzinfo=UTC),
+            current_soc_pct=75.0,
+            export_spike_threshold=5.0,
+            export_power_kw=4.0,
+            **self.SUN,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [7, 17]
+        served = [s.start.hour for s in _discharge_slots(result) if s.start.hour >= 7]
+        assert served == [11, 20, 21, 22]
 
     def test_pooled_decision_stands_for_a_plan_the_walk_cannot_serve(self):
         """Handed a plan that already overdraws the battery, the walk has no
@@ -2505,7 +2553,7 @@ class TestExportWalkAndSolar:
             min_soc_pct=10.0,
             max_soc_pct=95.0,
             charge_power_kw=3.0,
-            solar_windows=[],
+            solar_credit={},
         )
 
         assert [s.action for s in slots] == ["idle", "idle", "export", "discharge"]
@@ -2573,12 +2621,32 @@ class TestExportAfterMidPeakRecharge:
         assert [s.start.hour for s in _charge_slots(result)] == [2, 6]
         assert {s.start.hour for s in _discharge_slots(result)} == {4, 5, 7, 8}
 
-    def test_restored_slot_leaves_the_export_budget(self):
+    def test_export_may_not_draw_the_battery_below_the_export_reserve(self):
+        """7.5 kWh in the battery, reserve 2 kWh. With the 5.0 slots at h4, h8
+        and h9 served and 1.5 kWh recharged at h10, the 5 kWh export at h12
+        would end at 1 kWh: above the minimum, below the reserve. h4 gives
+        way and the export ends exactly on the reserve."""
+        prices = [5.0] * 10 + [1.0, 1.0, 7.0] + [1.8] * 6 + [1.0] * 5
+        result = _build(
+            _make_24h_slots(prices),
+            now=datetime(2026, 2, 15, 4, 0, 0, tzinfo=UTC),
+            current_soc_pct=75.0,
+            estimated_charge_power_kw=1.5,
+            export_spike_threshold=2.0,
+            export_power_kw=4.0,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [12]
+        assert [s.start.hour for s in _charge_slots(result)] == [10]
+        served = [s.start.hour for s in _discharge_slots(result) if s.start.hour >= 4]
+        assert served == [8, 9]
+
+    def test_second_export_does_not_demote_what_the_recharge_serves(self):
         """Two exports, h10 and h20. Slots the pooled budget demoted for the
-        first one lie beyond a recharge and get their energy back, so that
-        energy is no longer freed. The second export has to pay its own way:
-        h23 gives way too, rather than being served on credit already
-        returned, which would take the plan below the export reserve."""
+        first one lie beyond the h16 recharge and get their energy back. That
+        must not leave the budget in debt: the second export would then
+        demote h23 to repay it, although the recharged battery serves h23
+        and the walk already keeps each export above the reserve."""
         prices = [5.0, 0.6, 0.6, 0.6, 1.0, 0.6, 0.6, 0.6, 2.4, 2.4, 7.0, 7.0]
         prices += [7.0, 7.0, 0.6, 0.6, 0.5, 0.5, 1.8, 1.8, 7.0, 2.4, 2.4, 5.0]
         result = _build(
@@ -2594,7 +2662,7 @@ class TestExportAfterMidPeakRecharge:
 
         assert [s.start.hour for s in _export_slots(result)] == [10, 20]
         served = [s.start.hour for s in _discharge_slots(result) if s.start.hour >= 2]
-        assert served == [4, 11, 12, 13]
+        assert served == [4, 11, 12, 13, 23]
 
     def test_export_is_refused_when_no_slot_can_make_up_the_shortfall(self):
         """Same day as the spike-dip-spike test, export enabled. Demoting the
