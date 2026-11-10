@@ -42,10 +42,10 @@ Algorithm overview (BATT-15 -- SPREAD-based, house-consumption-sized):
        both the same way) communicating that the draw could be covered by PV.
     6. BATT-17 export arbitrage post-pass (opt-in, off by default): when an
        export spike threshold is configured, qualifying spike slots are
-       relabeled "export" after optimization -- funded by a reserve-floored
-       energy budget and a unified merit order that may demote cheaper
-       discharge slots to idle, and checked chronologically against the
-       plan like any other slot (BATT-20).
+       relabeled "export" after optimization -- each one walked
+       chronologically through the plan like any other slot (BATT-20), kept
+       above the export reserve, with a unified merit order that may demote
+       cheaper discharge slots to idle to make room for it.
     7. Derive current action and EMS mode from the slot containing 'now'.
 """
 
@@ -238,9 +238,9 @@ def build_battery_schedule(
             discharge threshold. None or <= 0 disables export arbitrage
             entirely -- output is bit-identical to a build without these
             kwargs.
-        export_reserve_soc_pct: SOC floor (0-100) below which export is
-            never scheduled -- the export energy budget only spends what
-            lies above this reserve.
+        export_reserve_soc_pct: SOC floor (0-100) an export slot may not
+            take the battery below. Discharge slots after it may still use
+            what lies between this reserve and min_soc_pct.
         export_power_kw: Estimated grid-injection power during an export
             slot in kW, fuse-capped, excluding house load; computed by the
             coordinator as (fuse - buffer) x 3 x 0.230.
@@ -1220,15 +1220,6 @@ def _mark_export_slots(
 ) -> None:
     """Mark qualifying spike slots as "export" (BATT-17 post-pass).
 
-    Unified merit order: a discharge slot's value per kWh is its spot
-    price plus fees (avoided import) while an export slot earns bare
-    spot, so export never demotes a discharge slot whose ``price + fees``
-    is >= the export candidate's bare spot price. The reserve-SOC floor
-    and the energy already scheduled for self-consumption discharge are
-    enforced via the energy budget: export only spends what remains above
-    both (a discharge slot's own house-need is released back when the
-    slot itself converts, and merit-order demotions release theirs).
-
     A slot qualifies when its SPREAD above the horizon's cheapest price
     is at or above the spike threshold AND selling now beats buying the
     same energy back at the cheapest future slot (replacement cost
@@ -1241,32 +1232,36 @@ def _mark_export_slots(
     hold). Only "discharge"/"idle" slots are eligible; charge/
     solar_charge slots are never converted. Mutates slots in place.
 
-    The budget pools energy across the horizon. Since BATT-20 plans drain
-    and recharge inside a peak, each export is also walked chronologically
-    with the plan: it must leave the battery at or above the export reserve
-    at its own slot, a shortfall it causes is repaired by demoting less
-    valuable slots that feed it, or the export is refused. Slots the budget
-    demoted on the far side of a recharge are restored when the walk still
-    serves them, so there a recharge, not the budget, funds them.
+    Whether a qualifying slot gets its energy is decided by walking the
+    plan chronologically with the export in it, the way the plan itself is
+    made (BATT-20): planned charging and forecast solar count when they
+    arrive, the export may not take the battery below the export reserve
+    at its own slot, and every discharge slot must still be served down to
+    the minimum SOC. The slot in progress counts for what is left of it,
+    so an export keeps running through replans within its slot, and one
+    too big for a whole slot may begin once the remainder fits. Where the
+    plan comes up short, less valuable discharge slots give way (unified
+    merit order: a discharge slot's value per kWh is its spot price plus
+    fees -- avoided import -- while an export earns bare spot, so a slot
+    whose ``price + fees`` is >= the export's price never does). If that
+    is not enough the export is refused and the plan left as it was.
+    Candidates are tried most valuable first.
     """
     fees = grid_transfer_fee + electricity_company_fee
     # Spread baseline over FUTURE slots only (Greptile PR #8): an elapsed
     # cheap morning would otherwise inflate every remaining slot's spread
     # and let ordinary later prices qualify as "spikes".
-    remaining_prices = [s.price for s in slots if s.end > now]
-    if not remaining_prices:
+    future = [s for s in slots if s.end > now]
+    if not future:
         return
-    horizon_min_price = min(remaining_prices)
+    horizon_min_price = min(s.price for s in future)
 
-    # Only slots that have not yet ended participate -- as candidates, as
-    # already-committed discharge energy, or as demotion fodder. A past
-    # spike must never consume the finite export budget or demote a real
-    # future discharge slot to fund energy that can no longer be sold
-    # (its energy is already reflected in current SOC).
+    # Only slots that have not yet ended participate -- as candidates or as
+    # demotion fodder. A past spike must never demote a real future
+    # discharge slot to fund energy that can no longer be sold (its energy
+    # is already reflected in current SOC).
     candidates: list[_SlotInfo] = []
-    for s in slots:
-        if s.end <= now:
-            continue
+    for s in future:
         if s.action not in ("discharge", "idle"):
             continue
         if s.price - horizon_min_price < export_spike_threshold:
@@ -1283,38 +1278,24 @@ def _mark_export_slots(
     if not candidates:
         return
 
-    # Energy budget: the charge-blind admission test. It ignores scheduled
-    # charging on purpose; the chronological walk below then decides what
-    # the plan can really carry.
     min_energy_kwh = (min_soc_pct / 100.0) * battery_capacity_kwh
+    max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
     export_floor_kwh = max(
         min_energy_kwh, (export_reserve_soc_pct / 100.0) * battery_capacity_kwh
     )
-    usable_kwh = max(
-        0.0, (current_soc_pct / 100.0) * battery_capacity_kwh - export_floor_kwh
-    )
-    scheduled_discharge_kwh = sum(
-        mean_consumption_kw * s.duration_hours
-        for s in slots
-        if s.action == "discharge" and s.end > now
-    )
-    budget = max(0.0, usable_kwh - scheduled_discharge_kwh)
 
-    # BATT-20: the budget above pools energy across the horizon, but a
-    # recharge between two slots breaks that -- what a demoted slot leaves in
-    # the battery may just make the recharge take in less. So every export
-    # is also walked chronologically, like the plan it is added to.
-    future = [s for s in slots if s.end > now]
-    charge_kwh = [charge_power_kw * s.duration_hours for s in future]
-    # Forecast solar enters where the plan put it: the lump it credited ahead
-    # of each peak (BATT-15a), at that peak's first slot. Solar inside a peak
-    # is spent there on house load -- it is why slots idle (BATT-18) -- and
-    # adds nothing to the battery.
+    # Forecast solar enters the walk where the plan put it: the lump credited
+    # ahead of each peak (BATT-15a), at that peak's first slot. The slot in
+    # progress counts for what is left of it -- the SOC already holds the rest.
+    hours = [_overlap_hours(s.start, s.end, now, s.end) for s in future]
+    charge_kwh = [charge_power_kw * h for h in hours]
     solar_kwh = [solar_credit.get(id(s), 0.0) for s in future]
-    max_energy_kwh = (max_soc_pct / 100.0) * battery_capacity_kwh
 
     def walk_plan() -> tuple[int, list[float]]:
         """First slot of ``future`` the plan cannot serve (-1: none), and levels."""
+        # ponytail: roles and needs are rebuilt on every walk; update them in
+        # place where an action changes (about a third off the build time) if
+        # this pass ever shows up in a profile.
         roles = [
             _CHARGE
             if s.action in ("charge", "solar_charge")
@@ -1325,8 +1306,8 @@ def _mark_export_slots(
         ]
         needs = [
             (mean_consumption_kw + (export_power_kw if s.action == "export" else 0.0))
-            * s.duration_hours
-            for s in future
+            * h
+            for s, h in zip(future, hours, strict=True)
         ]
         short, levels = _walk_window(
             roles,
@@ -1347,97 +1328,61 @@ def _mark_export_slots(
                 return i, levels[:i]
         return short, levels
 
-    # Should the plan fail this walk even before any export, the walk has
-    # nothing to say about exports: the pooled budget alone decides then.
-    walkable = walk_plan()[0] < 0
-    # Number of recharge slots up to each future slot: two slots share a
-    # charge-free stretch exactly when their counts match.
-    recharges: dict[int, int] = {}
-    count = 0
-    for s in future:
-        count += s.action in ("charge", "solar_charge")
-        recharges[id(s)] = count
+    def gives_way(d: _SlotInfo, c: _SlotInfo) -> bool:
+        """Whether discharge slot ``d`` is worth less per kWh than export slot ``c``."""
+        return d.action == "discharge" and d.price + fees < c.price
 
     # Mark most-valuable-first.
     candidates.sort(key=lambda s: s.price, reverse=True)
     for c in candidates:
-        # Battery output during an export slot serves house load AND grid
-        # injection.
-        need = (export_power_kw + mean_consumption_kw) * c.duration_hours
-        # A discharge candidate's own house-need was already counted in
-        # scheduled_discharge_kwh -- converting it releases that energy.
-        own_release = (
-            mean_consumption_kw * c.duration_hours if c.action == "discharge" else 0.0
-        )
-        # Merit-order demotion pool: discharge slots strictly less valuable
-        # per kWh than this export candidate, cheapest value first.
-        demotable = sorted(
-            (
-                d
-                for d in slots
-                if d.action == "discharge"
-                and d.end > now
-                and d is not c
-                and d.price + fees < c.price
-            ),
-            key=lambda d: d.price,
-        )
-        demotable_kwh = sum(mean_consumption_kw * d.duration_hours for d in demotable)
-        if budget + own_release + demotable_kwh < need:
-            # Infeasible even after every merit-order demotion: leave the
-            # schedule untouched (no partial demotions, no budget change).
-            continue
-        was, freed = c.action, own_release
-        demoted: list[_SlotInfo] = []
-        for d in demotable:
-            if budget + freed >= need:
-                break
-            d.action = "idle"
-            demoted.append(d)
-            freed += mean_consumption_kw * d.duration_hours
+        was = c.action
         c.action = "export"
-
-        # Chronological check: where the walk still falls short, demote the
-        # cheapest less-valuable slot that feeds that shortfall -- one at or
-        # before it, back to the last point where the battery was full
-        # (nothing saved earlier gets past that). None left: no export.
-        short, levels = walk_plan() if walkable else (-1, [])
+        # Idling a discharge slot can only raise the levels after it, so an
+        # export that does not fit with every less valuable slot out of the
+        # way does not fit at all. Most candidates end here.
+        cheaper = [d for d in future if gives_way(d, c)]
+        for d in cheaper:
+            d.action = "idle"
+        short, levels = walk_plan()
+        for d in cheaper:
+            d.action = "discharge"
+        if short >= 0:
+            c.action = was
+            continue
+        if cheaper:
+            short, levels = walk_plan()
+        # Where the plan falls short with those slots back, they give way one
+        # at a time: the cheapest at or before the shortfall, back to the last
+        # point where the battery was full (nothing saved earlier gets past
+        # that).
+        demoted: list[_SlotInfo] = []
         while short >= 0:
             fix = None
             for j in range(short, -1, -1):
                 d = future[j]
                 if j < short and levels[j] >= max_energy_kwh - _ENERGY_EPSILON_KWH:
                     break
-                if (
-                    d.action == "discharge"
-                    and d.price + fees < c.price
-                    and (fix is None or d.price <= fix.price)
-                ):
+                if gives_way(d, c) and (fix is None or d.price <= fix.price):
                     fix = d
             if fix is None:
                 break
             fix.action = "idle"
             demoted.append(fix)
-            freed += mean_consumption_kw * fix.duration_hours
             short, levels = walk_plan()
         if short >= 0:
+            # Float slack only: the plan fits with all of them idle.
             c.action = was
             for d in demoted:
                 d.action = "discharge"
             continue
-        if walkable:
-            # The pooled demotions were picked blind to recharges. Pooling
-            # only holds within a charge-free stretch, so a demoted slot on
-            # the far side of a recharge from the export gets its energy
-            # back whenever the walk still serves it, most valuable first.
-            # Its credit stays in the budget: the recharge pays for it, and
-            # the walk, not the budget, keeps later exports off the reserve.
-            for d in sorted(demoted, key=lambda d: d.price, reverse=True):
-                if recharges[id(d)] != recharges[id(c)]:
-                    d.action = "discharge"
-                    if walk_plan()[0] >= 0:
-                        d.action = "idle"
-        budget += freed - need
+        # A slot can give way without helping much: a charge slot on the way
+        # to the shortfall just takes in less. Hand back, most valuable
+        # first, every slot the plan serves after all -- never the last one
+        # to give way, which the plan was short without.
+        for d in sorted(demoted[:-1], key=lambda d: d.price, reverse=True):
+            d.action = "discharge"
+            if walk_plan()[0] >= 0:
+                d.action = "idle"
 
 
 def _find_current_action(schedule: list[ScheduleSlot], now: datetime) -> str:

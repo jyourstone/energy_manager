@@ -21,10 +21,8 @@ from custom_components.energy_manager.battery_scheduler import (
     BatteryScheduleResult,
     ScheduleSlot,
     _estimate_solar_rate_kw,
-    _mark_export_slots,
     _normalize_daylight_window,
     _overlap_hours,
-    _parse_price_slots,
     _resolve_solar_windows,
     build_battery_schedule,
     compute_discharge_gate,
@@ -1781,7 +1779,7 @@ class TestExportQualification:
         # The charge slot at h0 (price 0.5 >= threshold 0.4, replacement
         # floor 0.1 / 0.9 = 0.11) would qualify were it eligible.
         assert result.schedule[0].action == "charge"
-        # The spike slots do export (own house-need release funds them).
+        # The spike slots do export.
         assert result.schedule[2].action == "export"
         assert result.schedule[3].action == "export"
 
@@ -1790,7 +1788,7 @@ class TestExportBudget:
     """BATT-17: reserve floor, scheduled-discharge protection, merit order."""
 
     def test_soc_at_reserve_floor_zero_exports(self):
-        """SOC == reserve pct leaves zero export budget."""
+        """Already at the reserve: any export would end below it."""
         result = _build(_spike_slots(), current_soc_pct=20.0, **EXPORT_KWARGS)
 
         assert _export_slots(result) == []
@@ -1798,13 +1796,13 @@ class TestExportBudget:
         assert result.schedule[4].action == "discharge"
 
     def test_budget_covers_only_highest_priced_candidate(self):
-        """With budget for one slot, only the highest-priced candidate
+        """With energy for one export, only the highest-priced candidate
         exports; the next one stays a discharge slot.
 
-        SOC 60: usable above the 20% floor = 4.0 kWh, scheduled discharge
-        2.0 kWh -> budget 2.0 kWh. Each export needs (2.0 + 1.0) = 3.0 kWh,
-        releasing its own 1.0 kWh house-need. Fees are set to 1.2 so the
-        4.0 slot (4.0 + 1.2 = 5.2 >= 5.0) is not demotable by the 5.0 one.
+        SOC 60: 6.0 kWh. Each export draws (2.0 + 1.0) = 3.0 kWh: the first
+        ends at 3.0 kWh, a second would end at 0, below the 2.0 kWh reserve.
+        Fees are set to 1.2 so the 4.0 slot (4.0 + 1.2 = 5.2 >= 5.0) is not
+        demotable by the 5.0 one.
         """
         prices = [(h, 0.5) for h in range(4)] + [(4, 5.0), (5, 4.0), (6, 0.5), (7, 0.5)]
         result = _build(
@@ -1823,9 +1821,10 @@ class TestExportBudget:
         assert result.export_slot_count == 1
 
     def test_scheduled_discharge_protected_without_merit_demotion(self):
-        """Budget only covers the scheduled discharge needs and neither
-        discharge slot is demotable (price + fees >= export price):
-        nothing exports, self-consumption is never starved."""
+        """4 kWh in the battery: the h4 export would end at 1 kWh, below the
+        2 kWh reserve, and the other discharge slot is not demotable
+        (price + fees >= export price). Nothing exports, self-consumption
+        is never starved."""
         prices = [(h, 0.5) for h in range(4)] + [
             (4, 5.0),
             (5, 4.9),
@@ -1840,8 +1839,8 @@ class TestExportBudget:
 
     def test_merit_demotion_frees_budget_for_export(self):
         """A discharge slot with price + fees (2.0 + 0.85 = 2.85) below the
-        export candidate's bare spot (5.0) is demoted to idle to fund the
-        export when the budget alone is insufficient."""
+        export candidate's bare spot (5.0) is demoted to idle when the
+        export would otherwise end below the reserve."""
         prices = [
             (0, 0.5),
             (1, 0.5),
@@ -1861,8 +1860,7 @@ class TestExportBudget:
 
     def test_valuable_discharge_not_demoted_when_export_fires(self):
         """A discharge slot with price + fees (4.5 + 0.85 = 5.35) >= the
-        export price (5.0) is never demoted, even while the export fires
-        from free budget."""
+        export price (5.0) is never demoted; the export fits beside it."""
         prices = [
             (0, 0.5),
             (1, 0.5),
@@ -1880,8 +1878,8 @@ class TestExportBudget:
         assert result.export_slot_count == 1
 
     def test_infeasible_candidate_leaves_schedule_untouched(self):
-        """When budget + own release + all demotions still cannot fund the
-        export, the candidate is skipped entirely -- no partial demotion."""
+        """When even every demotion cannot make room for the export, the
+        candidate is skipped entirely -- no partial demotion."""
         prices = [
             (0, 0.5),
             (1, 0.5),
@@ -1892,8 +1890,8 @@ class TestExportBudget:
             (6, 0.5),
             (7, 0.5),
         ]
-        # export_power_kw 3.0 -> need 4.0 kWh; budget 1.0 + own 1.0 +
-        # demotable 1.0 = 3.0 < 4.0 -> infeasible.
+        # export_power_kw 3.0 -> the export draws 4.0 kWh; even with h2 idle
+        # it would end at 1.0 kWh, below the 2.0 kWh reserve.
         result = _build(
             _make_slots(prices),
             current_soc_pct=50.0,
@@ -1908,10 +1906,11 @@ class TestExportBudget:
 class TestExportPastSlots:
     """BATT-17: already-elapsed slots never participate in the export pass.
 
-    A past spike must not steal the finite export budget, must not demote
-    future scheduled discharge slots to fund unsellable energy, and past
-    discharge slots (already reflected in current SOC) must not deflate
-    the budget. Regression tests for the adversarial-review scenarios.
+    A past spike must not take the energy a future export needs, must not
+    demote future scheduled discharge slots to fund unsellable energy, and
+    past discharge slots (already reflected in current SOC) must not be
+    drawn from the battery again. Regression tests for the
+    adversarial-review scenarios.
     """
 
     _NOW_1400 = datetime(2026, 2, 15, 14, 0, 0, tzinfo=UTC)
@@ -1954,7 +1953,7 @@ class TestExportPastSlots:
 
     def test_past_discharge_slots_do_not_deflate_budget(self):
         """Past discharge energy is already reflected in current SOC --
-        counting it again would under-budget a real future export."""
+        drawing it again would leave too little for a real future export."""
         prices = [(h, 0.5) for h in range(24)]
         prices[8] = (8, 2.5)
         prices[9] = (9, 2.5)
@@ -2413,8 +2412,8 @@ class TestExportWalkAndSolar:
 
     def test_solar_backed_plan_still_gets_its_export(self):
         """2 kWh on hand, 6 kWh of sun forecast before the evening peak. With
-        that solar the walk serves the plan, and the export the pooled budget
-        grants at h19 passes it too."""
+        that solar the battery is full by h18: the h19 export fits, and so do
+        all three house slots around it."""
         prices = [0.5] * 18 + [3.0, 9.0, 3.0, 3.0] + [0.5] * 2
         result = _build(
             _make_24h_slots(prices),
@@ -2428,7 +2427,7 @@ class TestExportWalkAndSolar:
         )
 
         assert [s.start.hour for s in _export_slots(result)] == [19]
-        assert [s.start.hour for s in _discharge_slots(result)] == [21]
+        assert [s.start.hour for s in _discharge_slots(result)] == [18, 20, 21]
 
     def test_solar_backed_tomorrow_does_not_switch_off_todays_check(self):
         """Today is the spike-dip-spike day whose h11 export must be refused;
@@ -2528,45 +2527,15 @@ class TestExportWalkAndSolar:
         served = [s.start.hour for s in _discharge_slots(result) if s.start.hour >= 7]
         assert served == [11, 20, 21, 22]
 
-    def test_pooled_decision_stands_for_a_plan_the_walk_cannot_serve(self):
-        """Handed a plan that already overdraws the battery, the walk has no
-        say: the pooled budget grants the h2 export as it always did, instead
-        of the walk demoting slots for a shortfall the export did not cause."""
-        slots = _parse_price_slots(
-            _make_slots([(0, 0.5), (1, 3.0), (2, 9.0), (3, 3.0)])
-        )
-        for slot in slots[1:]:
-            slot.action = "discharge"
-
-        _mark_export_slots(
-            slots,
-            now=datetime(2026, 2, 15, 0, 0, 0, tzinfo=UTC),
-            export_spike_threshold=5.0,
-            export_reserve_soc_pct=20.0,
-            export_power_kw=1.0,
-            grid_transfer_fee=0.0,
-            electricity_company_fee=0.0,
-            battery_cycle_cost=0.0,
-            mean_consumption_kw=1.0,
-            battery_capacity_kwh=10.0,
-            current_soc_pct=25.0,
-            min_soc_pct=10.0,
-            max_soc_pct=95.0,
-            charge_power_kw=3.0,
-            solar_credit={},
-        )
-
-        assert [s.action for s in slots] == ["idle", "idle", "export", "discharge"]
-
-
 class TestExportAfterMidPeakRecharge:
     """BATT-20: every export is walked chronologically with the plan."""
 
-    def test_export_may_demote_across_a_recharge_the_walk_confirms(self):
-        """Spike now, cheap hours right after. The pooled budget pays for
-        selling 5 kWh now by demoting the four 1.8 slots on the far side of
-        the h1 recharge. The walk confirms the export, and shows the recharge
-        still serves two of those slots, which get their energy back."""
+    def test_export_ahead_of_a_recharge_costs_only_what_the_recharge_cannot_refill(
+        self,
+    ):
+        """Spike now, cheap hours right after. Selling 5 kWh at h0 leaves the
+        h1 recharge 2 kWh short of refilling the battery, so two of the four
+        1.8 slots beyond it give way and the other two stay."""
         prices = [7.0, 0.5, 0.5, 0.5] + [1.8] * 4 + [5.0] * 4 + [0.5] * 12
         result = _build(
             _make_24h_slots(prices),
@@ -2578,14 +2547,13 @@ class TestExportAfterMidPeakRecharge:
 
         assert [s.start.hour for s in _export_slots(result)] == [0]
         assert [s.start.hour for s in _charge_slots(result)] == [1]
-        assert {s.start.hour for s in _discharge_slots(result)} == {4, 5, *range(8, 12)}
+        assert {s.start.hour for s in _discharge_slots(result)} == set(range(6, 12))
 
     def test_export_is_repaired_where_the_walk_falls_short(self):
-        """The pooled budget funds the h11 export by demoting h17 and three
-        6.0 slots ahead of the h5 recharge -- but that recharge then just
-        takes in less, and the 7.0 block after the export falls 1.5 kWh
-        short. Two 7.0 slots give way instead, and two of the 6.0 slots,
-        which were never the problem, get their energy back."""
+        """Selling 5 kWh at h11 leaves the 7.0 block after it short. Idling
+        the 6.0 slots ahead of the h5 recharge only helps until that
+        recharge fills the battery -- one slot's worth. So one 6.0 slot gives
+        way, then two 7.0 slots and h17, and the other 6.0 slots stay."""
         prices = [0.5] + [6.0] * 4 + [2.4] * 6 + [8.0] + [7.0] * 5 + [3.0] * 7
         result = _build(
             _make_24h_slots(prices),
@@ -2599,14 +2567,14 @@ class TestExportAfterMidPeakRecharge:
 
         assert [s.start.hour for s in _export_slots(result)] == [11]
         assert [s.start.hour for s in _charge_slots(result)] == [5]
-        assert {s.start.hour for s in _discharge_slots(result)} == {1, 2, 4, 14, 15, 16}
+        assert {s.start.hour for s in _discharge_slots(result)} == {2, 3, 4, 14, 15, 16}
 
     def test_export_repair_reaches_past_a_recharge_that_does_not_fill_up(self):
         """Selling 3 kWh at h3 leaves the 9.0 slots after it 0.5 kWh short.
         They are worth as much as the export, so none of them may give way.
         The 4.0 slot at h1 can: the 1.5 kWh recharge at h2 does not fill the
-        battery, so what h1 saves gets through. The 2.0 slots the pooled
-        budget demoted sit beyond the h6 recharge and are restored."""
+        battery, so what h1 saves gets through. The 2.0 slots sit beyond the
+        h6 recharge, which serves them: they are left alone."""
         prices = [0.5, 4.0, 1.0, 9.0, 9.0, 9.0, 1.0, 2.0, 2.0] + [0.5] * 15
         result = _build(
             _make_24h_slots(prices),
@@ -2642,11 +2610,9 @@ class TestExportAfterMidPeakRecharge:
         assert served == [8, 9]
 
     def test_second_export_does_not_demote_what_the_recharge_serves(self):
-        """Two exports, h10 and h20. Slots the pooled budget demoted for the
-        first one lie beyond the h16 recharge and get their energy back. That
-        must not leave the budget in debt: the second export would then
-        demote h23 to repay it, although the recharged battery serves h23
-        and the walk already keeps each export above the reserve."""
+        """Two exports, h10 and h20, with a recharge at h16 between them.
+        The recharged battery serves both the second export and h23 above
+        the reserve, so h23 does not give way to it."""
         prices = [5.0, 0.6, 0.6, 0.6, 1.0, 0.6, 0.6, 0.6, 2.4, 2.4, 7.0, 7.0]
         prices += [7.0, 7.0, 0.6, 0.6, 0.5, 0.5, 1.8, 1.8, 7.0, 2.4, 2.4, 5.0]
         result = _build(
@@ -2687,6 +2653,131 @@ class TestExportAfterMidPeakRecharge:
             *range(1, 5),
             *range(11, 18),
         }
+
+
+class TestExportWalkDecides:
+    """What an export may use is whatever the chronological walk can serve."""
+
+    # A 5.0 spike at h4 followed by house slots worth more than the export.
+    SPIKE_THEN_HOUSE = (0.5, 0.5, 0.5, 0.5, 5.0, 4.9, 0.5, 0.5)
+    CHARGE_SPIKE_THEN_HOUSE = (0.5, 0.5, 0.5, 0.5, 5.0, 4.9, 4.9, 4.9, 0.5, 0.5)
+
+    def test_export_counts_the_charge_planned_before_it(self):
+        """At the reserve now, with a 5 kWh charge planned at h0. That charge
+        puts the battery at 7 kWh by h4: enough to sell 2 kWh there, cover the
+        house through h7 and end on the minimum."""
+        result = _build(
+            _make_slots(list(enumerate(self.CHARGE_SPIKE_THEN_HOUSE))),
+            current_soc_pct=20.0,
+            estimated_charge_power_kw=5.0,
+            **EXPORT_KWARGS,
+        )
+
+        assert [s.start.hour for s in _charge_slots(result)] == [0]
+        assert [s.start.hour for s in _export_slots(result)] == [4]
+        assert [s.start.hour for s in _discharge_slots(result)] == [5, 6, 7]
+
+    def test_export_is_funded_by_the_recharge_planned_after_it(self):
+        """A full battery, all of it needed for the 6.0 evening -- but the h5
+        recharge is planned anyway and has room for the 3 kWh the h4 slot
+        takes when it also sells. No house slot gives way."""
+        prices = [0.5] * 4 + [3.6] + [0.5] * 3 + [6.0] * 8 + [0.5] * 2
+        result = _build(
+            _make_slots(list(enumerate(prices))),
+            current_soc_pct=95.0,
+            estimated_charge_power_kw=5.0,
+            **EXPORT_KWARGS,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [4]
+        assert [s.start.hour for s in _charge_slots(result)] == [5]
+        assert [s.start.hour for s in _discharge_slots(result)] == list(range(8, 16))
+
+    def test_discharge_after_an_export_may_use_the_reserve(self):
+        """5 kWh in the battery, reserve 2 kWh, minimum 1 kWh. The h4 export
+        ends exactly on the reserve; the h5 house slot after it, worth more
+        than the export, takes the battery on down to the minimum. With
+        1 kWh less the export would end below the reserve and is refused
+        (test_scheduled_discharge_protected_without_merit_demotion)."""
+        result = _build(
+            _make_slots(list(enumerate(self.SPIKE_THEN_HOUSE))),
+            current_soc_pct=50.0,
+            **EXPORT_KWARGS,
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [4]
+        assert [s.start.hour for s in _discharge_slots(result)] == [5]
+
+    def test_slot_that_gave_way_without_helping_is_handed_back(self):
+        """The h6 export leaves the plan short. The cheapest slots before it
+        are h1 and h4, both 3.6. h1 goes first, but the h2 recharge then just
+        takes in less: half of what h1 saved is lost at the full battery. h4
+        has to give way as well -- and with h4 idle the plan no longer needs
+        h1, which gets its energy back."""
+        prices = [5.0, 3.6, 0.5, 5.0, 3.6, 4.5, 6.0, 0.5, 2.0, 6.0, 3.6]
+        result = _build(
+            _make_slots(list(enumerate(prices))),
+            current_soc_pct=60.0,
+            estimated_charge_power_kw=5.0,
+            **{**EXPORT_KWARGS, "export_spike_threshold": 1.5, "export_power_kw": 4.0},
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [6]
+        assert [s.start.hour for s in _charge_slots(result)] == [2]
+        assert [s.start.hour for s in _discharge_slots(result)] == [0, 1, 3, 5, 9]
+
+    def test_most_valuable_slot_is_handed_back_first(self):
+        """The h4 export leaves the plan 1.7 kWh short. h0 (3.0) and h1 (3.4)
+        give way, but the h2 recharge has room for only 1.2 kWh of what they
+        save, so h3 goes as well. That leaves 0.5 kWh to spare: enough to
+        hand back h0 or h1, not both -- and h1 is worth more."""
+        prices = [3.0, 3.4, 0.5, 3.8, 6.0, 5.5, 5.5, 5.5, 0.5, 0.5]
+        result = _build(
+            _make_slots(list(enumerate(prices))),
+            current_soc_pct=53.0,
+            estimated_charge_power_kw=5.0,
+            **{**EXPORT_KWARGS, "export_spike_threshold": 5.2, "export_power_kw": 4.0},
+        )
+
+        assert [s.start.hour for s in _export_slots(result)] == [4]
+        assert [s.start.hour for s in _charge_slots(result)] == [2]
+        assert [s.start.hour for s in _discharge_slots(result)] == [1, 5, 6, 7]
+
+    def test_export_slot_in_progress_counts_for_what_is_left_of_it(self):
+        """Half past four, 3.5 kWh in the battery: the second half of the h4
+        export takes 1.5 kWh and ends on the 2 kWh reserve, h5 on the minimum.
+        An export that began at four with 5 kWh keeps running -- charged for
+        the whole hour again, it would be dropped half-way."""
+        result = _build(
+            _make_slots(list(enumerate(self.SPIKE_THEN_HOUSE))),
+            now=datetime(2026, 2, 15, 4, 30, 0, tzinfo=UTC),
+            current_soc_pct=35.0,
+            **EXPORT_KWARGS,
+        )
+
+        assert result.current_action == "export"
+        assert [s.start.hour for s in _discharge_slots(result)] == [5]
+
+    def test_charge_slot_in_progress_adds_only_what_is_left_of_it(self):
+        """Half past midnight in the h0 charge slot. With nothing charged yet
+        (20 %), the half hour left adds 2.5 kWh: too little for the h4 export
+        on top of the house slots. With the first half delivered (45 %) the
+        export fits."""
+        exports = {
+            soc: _export_slots(
+                _build(
+                    _make_slots(list(enumerate(self.CHARGE_SPIKE_THEN_HOUSE))),
+                    now=datetime(2026, 2, 15, 0, 30, 0, tzinfo=UTC),
+                    current_soc_pct=soc,
+                    estimated_charge_power_kw=5.0,
+                    **EXPORT_KWARGS,
+                )
+            )
+            for soc in (20.0, 45.0)
+        }
+
+        assert exports[20.0] == []
+        assert [s.start.hour for s in exports[45.0]] == [4]
 
 
 def _hourly_plan(first_hour: int, *slots: tuple[float, str]) -> list[ScheduleSlot]:
