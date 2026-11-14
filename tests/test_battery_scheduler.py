@@ -816,7 +816,7 @@ class TestScheduleAttributeFiltering:
             action = "discharge" if 36 <= i <= 42 else "idle"
             slots.append({"start": start, "end": end, "action": action, "price": 0.5})
 
-        filtered = [s for s in slots if s["end"] > now][:48]
+        filtered = [s for s in slots if s["end"] > now]
 
         assert filtered[0]["start"] == datetime(2026, 2, 16, 14, 0, tzinfo=timezone.utc)
 

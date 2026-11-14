@@ -940,6 +940,14 @@ class TestCarScheduleRecorderChurn:
             sensor_class, "sensor.py"
         )
 
+    @pytest.mark.parametrize("sensor_class", ["CarScheduleSensor", "BatteryStatusSensor"])
+    def test_schedule_attribute_is_not_capped(self, sensor_class: str) -> None:
+        """The slot counts cover the whole plan, so the list must not be sliced.
+
+        A 48-slot cap hid every planned slot more than 12 h ahead.
+        """
+        assert not re.search(r"\[:[^\]]+\]", _class_source(sensor_class, "sensor.py"))
+
 
 class TestThroughputSamplingSkipsBlindTicks:
     """A tick EM cannot attribute for a STRUCTURAL reason must not be fed in.

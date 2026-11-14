@@ -212,7 +212,7 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
     a closed gate shows self_consumption, with the reason in
     discharge_gate_reason.
 
-    Attributes merge both layers: the full schedule (max 48 slots), slot
+    Attributes merge both layers: the full schedule, slot
     counts and calculation metadata from the plan, plus the EMS mode,
     charge limit, fuse headroom, override reason, verification and
     observe-only (dry-run) state (CORE-14).
@@ -224,7 +224,7 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
     _attr_translation_key = "battery_status"
     _attr_icon = "mdi:home-battery"
     # Live attribute only: the 30 s EMS re-render would otherwise store the
-    # 48-slot schedule in the recorder on every EMS attribute change.
+    # schedule in the recorder on every EMS attribute change.
     _unrecorded_attributes = frozenset({"schedule"})
 
     def __init__(
@@ -306,7 +306,7 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return merged plan + live EMS attributes.
 
-        Plan: full schedule (max 48 slots), slot counts, target EMS mode,
+        Plan: full schedule, slot counts, target EMS mode,
         and calculation metadata. Live: EMS mode, charge limit, fuse
         headroom, override reason, verification, and observe-only (dry-run)
         state. Full price arrays stay on the PriceCoordinator.
@@ -315,11 +315,10 @@ class BatteryStatusSensor(EnergyManagerEntity, SensorEntity):
         if data is None:
             return {}
 
-        # Filter out past slots, then cap at 48 for compact state.
-        # This ensures the visible window starts from now, so charge/discharge
-        # slots later in the schedule are not cut off by early idle slots.
+        # Filter out past slots so the list starts from now. No cap: the slot
+        # counts cover the whole plan, so the list must too.
         now = dt_util.utcnow()
-        filtered = [s for s in data.schedule if s.end > now][:48]
+        filtered = [s for s in data.schedule if s.end > now]
 
         schedule_list = []
         for slot in filtered:
@@ -1104,13 +1103,13 @@ class CarScheduleSensor(CarEntity, SensorEntity):
     """Sensor showing current car charging schedule.
 
     State is the current charging action: charge, idle, or solar_charge.
-    Attributes expose the full schedule (max 48 future slots), slot counts,
-    energy needed, hours needed, SOC info, and calculation metadata.
+    Attributes expose the schedule (every future slot up to departure), slot
+    counts, energy needed, hours needed, SOC info, and calculation metadata.
     """
 
     _attr_translation_key = "car_schedule"
     _attr_icon = "mdi:car-electric"
-    # Live attribute only: keeps the 48-slot schedule out of the recorder.
+    # Live attribute only: keeps the schedule out of the recorder.
     _unrecorded_attributes = frozenset({"schedule"})
 
     def __init__(
@@ -1141,16 +1140,17 @@ class CarScheduleSensor(CarEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return car schedule attributes.
 
-        Includes the schedule (max 48 future slots), slot counts, energy
-        needed, hours needed, SOC info, and calculation metadata.
+        Includes the schedule (every future slot up to departure), slot counts,
+        energy needed, hours needed, SOC info, and calculation metadata.
         """
         data: CarChargingData | None = self.coordinator.data
         if data is None:
             return {}
 
-        # Filter out past slots, then cap at 48 for compact state.
+        # Filter out past slots. No cap: every slot charging_slots counts must
+        # be listed, and the plan ends at the next departure (about a day).
         now = dt_util.utcnow()
-        filtered = [s for s in data.schedule if s.end > now][:48]
+        filtered = [s for s in data.schedule if s.end > now]
 
         schedule_list = []
         for slot in filtered:
